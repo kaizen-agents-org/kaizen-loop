@@ -60,15 +60,17 @@ export async function initProject(options: InitOptions): Promise<{ slug: string;
 
 async function chooseAgent(preferred: 'claude' | 'codex' | undefined, runCommand: CommandRunner): Promise<'claude' | 'codex'> {
   if (preferred === 'codex') {
-    const codex = new CodexAdapter();
+    const codex = new CodexAdapter(runCommand);
     if (await codex.isAvailable()) return 'codex';
-    throw new ConfigError('CodexAdapter is not implemented in Phase 1. Use --agent claude.');
+    throw new ConfigError('codex CLI is not available or authenticated.');
   }
 
   const claude = new ClaudeCodeAdapter(runCommand);
   if (await claude.isAvailable()) return 'claude';
   if (preferred === 'claude') throw new ConfigError('claude CLI is not available or authenticated.');
-  throw new ConfigError('No supported Phase 1 agent is available. Install and authenticate claude CLI.');
+  const codex = new CodexAdapter(runCommand);
+  if (await codex.isAvailable()) return 'codex';
+  throw new ConfigError('No supported agent is available. Install and authenticate claude or codex CLI.');
 }
 
 async function writeFileOnce(filePath: string, content: string, overwrite: boolean): Promise<void> {

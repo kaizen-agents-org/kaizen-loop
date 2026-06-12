@@ -21,6 +21,11 @@ export class GitClient {
     return result.stdout.trim();
   }
 
+  async revParse(ref: string): Promise<string> {
+    const result = await this.git(['rev-parse', ref]);
+    return result.stdout.trim();
+  }
+
   async clone(remote: string, target: string): Promise<void> {
     await this.run('git', ['clone', remote, target], { cwd: this.cwd });
   }
@@ -35,6 +40,14 @@ export class GitClient {
 
   async resetHard(ref: string): Promise<void> {
     await this.git(['reset', '--hard', ref]);
+  }
+
+  async rebase(ref: string): Promise<void> {
+    await this.git(['rebase', ref]);
+  }
+
+  async mergeFfOnly(ref: string): Promise<void> {
+    await this.git(['merge', '--ff-only', ref]);
   }
 
   async clean(): Promise<void> {

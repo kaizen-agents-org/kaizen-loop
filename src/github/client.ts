@@ -75,6 +75,28 @@ export class GitHubClient {
     await this.gh(['issue', 'comment', String(issue), '--body', body]);
   }
 
+  async createIssue(options: { title: string; body: string; labels: string[] }): Promise<GitHubIssue> {
+    const result = await this.gh([
+      'issue',
+      'create',
+      '--title',
+      options.title,
+      '--body',
+      options.body,
+      '--label',
+      options.labels.join(',')
+    ]);
+    const number = Number(result.stdout.match(/\/issues\/(\d+)/)?.[1]);
+    if (!number) throw new Error(`Could not parse created issue URL: ${result.stdout.trim()}`);
+    return this.getIssue(number);
+  }
+
+  async closeIssue(issue: number, comment?: string): Promise<void> {
+    const args = ['issue', 'close', String(issue)];
+    if (comment) args.push('--comment', comment);
+    await this.gh(args);
+  }
+
   async createPullRequest(options: {
     base: string;
     head: string;

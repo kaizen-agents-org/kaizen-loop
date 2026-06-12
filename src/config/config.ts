@@ -49,7 +49,7 @@ export function defaultConfigYaml(options: {
       verifyTimeoutMinutes: 15
     },
     policy: {
-      mode: 'pr-only',
+      mode: 'hybrid',
       directCommit: {
         maxChangedLines: 150,
         maxChangedFiles: 5

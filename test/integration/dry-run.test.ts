@@ -79,7 +79,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }).replace('mode: hybrid', 'mode: pr-only')
     );
     await saveRegistry({
       version: 1,

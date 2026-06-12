@@ -5,7 +5,7 @@ import { CodexAdapter } from '../agents/codex.js';
 import type { AgentAdapter, AgentResult } from '../agents/types.js';
 import { buildFixPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
-import { resolveProject } from '../config/registry.js';
+import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
 import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import type { GitHubIssue } from '../github/types.js';
@@ -17,6 +17,7 @@ import { WorkspaceManager, type DiffStats } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
 import { RunLock } from './lock.js';
+import { decideReflection, type ReflectionDecision } from './reflection.js';
 import type { RunIssueSummary, RunSummary } from './summary.js';
 
 export interface RunOptions {
@@ -34,6 +35,19 @@ export interface RunOptions {
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
+  if (options.scheduled && new Date().getHours() > config.run.latestStartHour) {
+    const now = new Date().toISOString();
+    return {
+      version: 1,
+      project: resolved.slug,
+      startedAt: now,
+      finishedAt: now,
+      trigger: 'scheduled',
+      result: 'success',
+      issues: [],
+      skipped: [{ number: 0, reason: `latestStartHour(${config.run.latestStartHour}) passed` }]
+    };
+  }
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const maxIssues = options.maxIssues ?? config.run.maxIssuesPerNight;
   const issues = options.issue ? [await github.getIssue(options.issue)] : await github.listIssues(config.issues.label);
@@ -80,6 +94,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     summary.finishedAt = new Date().toISOString();
     summary.result = resultFor(summary.issues);
     await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+    await updateLastRun(resolved.slug, summary);
     await lock.release();
   }
 
@@ -100,7 +115,7 @@ async function processIssue(options: {
   const issueDir = path.join(options.runDir, `issue-${options.issue.number}`);
   await fs.mkdir(issueDir, { recursive: true });
   const attempts = countAttempts(options.issue.comments ?? []) + 1;
-  const agent = selectAgent(options.config, options.issue, options.requestedAgent, options.runCommand);
+  const agent = await selectAgent(options.config, options.issue, options.requestedAgent, options.runCommand);
   const remoteUrl = await new GitClient(options.runCommand, options.project.localPath).remoteUrl('origin');
   const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath, remoteUrl);
 
@@ -109,30 +124,62 @@ async function processIssue(options: {
     await workspace.ensure();
     await workspace.sync(options.config.git.defaultBranch);
     await workspace.runSetup(options.config);
+    const baselineVerify = await workspace.runVerify(options.config);
+    const failedBaseline = baselineVerify.find((item) => !item.ok);
+    if (failedBaseline) {
+      return await finishFailed(options, agent, attempts, `Baseline verification failed: ${failedBaseline.command}`, started, baselineVerify);
+    }
+    await workspace.sync(options.config.git.defaultBranch);
     const branch = await workspace.createIssueBranch(options.config, options.issue);
 
-    const prompt = buildFixPrompt({
-      repo: options.project.repo,
-      issue: options.issue,
-      config: options.config,
-      attempt: attempts
-    });
-    if (!(await agent.isAvailable())) {
-      return await finishFailed(options, agent, attempts, `${agent.name} agent is not available.`, started);
-    }
-    const agentResult = await agent.run({
-      workspaceDir: options.project.workspacePath,
-      prompt,
-      timeoutMs: options.config.run.issueTimeoutMinutes * 60_000,
-      model: modelFor(options.config, agent.name)
-    });
-    await fs.writeFile(path.join(issueDir, 'agent.log'), agentResult.raw);
+    let agentResult: AgentResult | undefined;
+    let verifyResults: Array<{ command: string; ok: boolean; output: string }> = [];
+    let previousFailure: string | undefined;
 
-    if (agentResult.status === 'blocked') {
-      return await finishBlocked(options, agent, attempts, agentResult, started);
+    for (let retry = 0; retry <= options.config.run.maxVerifyRetries; retry += 1) {
+      const prompt = buildFixPrompt({
+        repo: options.project.repo,
+        issue: options.issue,
+        config: options.config,
+        attempt: attempts,
+        previousFailure
+      });
+      agentResult = await agent.run({
+        workspaceDir: options.project.workspacePath,
+        prompt,
+        timeoutMs: options.config.run.issueTimeoutMinutes * 60_000,
+        model: modelFor(options.config, agent.name)
+      });
+      await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
+
+      if (agentResult.status === 'blocked') {
+        return await finishBlocked(options, agent, attempts, agentResult, started);
+      }
+      if (agentResult.status === 'error' || agentResult.status === 'timeout') {
+        return await finishFailed(options, agent, attempts, agentResult.summary, started);
+      }
+
+      await commitLeftovers(workspace, options.issue, agentResult);
+      const diff = await workspace.collectDiffStats(options.config);
+      if (diff.changedFiles === 0) {
+        return await finishFailed(options, agent, attempts, 'Agent produced no changes.', started);
+      }
+      if (diff.forbiddenFiles.length > 0) {
+        return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started);
+      }
+
+      verifyResults = await workspace.runVerify(options.config);
+      await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
+      const failedVerify = verifyResults.find((item) => !item.ok);
+      if (!failedVerify) break;
+      if (retry >= options.config.run.maxVerifyRetries) {
+        return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
+      }
+      previousFailure = `Verification failed: ${failedVerify.command}\n\n${tail(failedVerify.output, 200)}`;
     }
-    if (agentResult.status === 'error' || agentResult.status === 'timeout') {
-      return await finishFailed(options, agent, attempts, agentResult.summary, started);
+
+    if (!agentResult) {
+      return await finishFailed(options, agent, attempts, 'Agent did not produce a result.', started);
     }
 
     await commitLeftovers(workspace, options.issue, agentResult);
@@ -143,26 +190,109 @@ async function processIssue(options: {
     if (diff.forbiddenFiles.length > 0) {
       return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started);
     }
-
-    const verifyResults = await workspace.runVerify(options.config);
-    await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
-    const failedVerify = verifyResults.find((item) => !item.ok);
-    if (failedVerify) {
-      return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
-    }
     await commitLeftovers(workspace, options.issue, agentResult);
     const finalDiff = await workspace.collectDiffStats(options.config);
     if (finalDiff.forbiddenFiles.length > 0) {
       return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${finalDiff.forbiddenFiles.join(', ')}`, started, verifyResults);
     }
 
-    await workspace.git().push(branch, { forceWithLease: true });
-    const pr = await options.github.createPullRequest({
-      base: options.config.git.defaultBranch,
-      head: branch,
-      title: `kaizen: ${shortSummary(agentResult.summary)} (#${options.issue.number})`,
-      body: buildPullRequestBody(options.issue, agentResult, verifyResults, finalDiff)
+    const decision = decideReflection({
+      config: options.config,
+      labels: labelNames(options.issue),
+      diff: finalDiff,
+      verifyConfigured: options.config.commands.verify.length > 0
     });
+    if (decision.action === 'direct') {
+      const direct = await reflectDirect({
+        workspace,
+        branch,
+        issue: options.issue,
+        config: options.config,
+        agentResult,
+        verifyResults,
+        diff: finalDiff,
+        decision
+      }).catch(async (error) => {
+        return reflectPullRequest({
+          workspace,
+          branch,
+          issue: options.issue,
+          config: options.config,
+          agentResult,
+          verifyResults,
+          diff: finalDiff,
+          github: options.github,
+          reason: `Direct commit fallback to PR: ${String(error)}`
+        });
+      });
+      if ('commit' in direct) {
+        await options.github.comment(
+          options.issue.number,
+          buildResultComment({
+            runId: options.runId,
+            issue: options.issue.number,
+            attempt: attempts,
+            outcome: 'direct-commit',
+            agent: agent.name,
+            summary: agentSummary(agentResult),
+            verifyResults,
+            commit: direct.commit,
+            reason: decision.reason,
+            maxAttempts: options.config.run.maxAttemptsPerIssue
+          })
+        );
+        await options.github.closeIssue(options.issue.number);
+        await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+        return {
+          number: options.issue.number,
+          title: options.issue.title,
+          priority: priorityLabel(options.issue, options.config),
+          agent: agent.name,
+          attempt: attempts,
+          outcome: 'direct-commit',
+          commit: direct.commit,
+          reason: decision.reason,
+          changedFiles: finalDiff.changedFiles,
+          changedLines: finalDiff.changedLines,
+          verifyRetries: Math.max(0, verifyResults.filter((result) => !result.ok).length),
+          durationMs: Date.now() - started
+        };
+      }
+      return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, direct, started);
+    }
+
+    const pr = await reflectPullRequest({
+      workspace,
+      branch,
+      issue: options.issue,
+      config: options.config,
+      agentResult,
+      verifyResults,
+      diff: finalDiff,
+      github: options.github,
+      reason: decision.reason
+    });
+    return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
+  } catch (error) {
+    return await finishFailed(options, agent, attempts, String(error), started);
+  }
+}
+
+async function finishPr(
+  options: {
+    issue: GitHubIssue;
+    config: KaizenConfig;
+    runId: string;
+    github: GitHubClient;
+  },
+  agent: AgentAdapter,
+  attempts: number,
+  agentResult: AgentResult,
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>,
+  finalDiff: DiffStats,
+  pr: { url: string; number?: number; reason: string },
+  started: number
+): Promise<RunIssueSummary> {
     await options.github.comment(
       options.issue.number,
       buildResultComment({
@@ -174,7 +304,7 @@ async function processIssue(options: {
         summary: agentSummary(agentResult),
         verifyResults,
         prUrl: pr.url,
-        reason: 'Phase 1 MVP always creates a pull request.',
+        reason: pr.reason,
         maxAttempts: options.config.run.maxAttemptsPerIssue
       })
     );
@@ -189,26 +319,32 @@ async function processIssue(options: {
       outcome: 'pr-created',
       pr: pr.number,
       prUrl: pr.url,
-      reason: 'phase1-pr-only',
+      reason: pr.reason,
       changedFiles: finalDiff.changedFiles,
       changedLines: finalDiff.changedLines,
       verifyRetries: 0,
       durationMs: Date.now() - started
     };
-  } catch (error) {
-    return await finishFailed(options, agent, attempts, String(error), started);
-  }
 }
 
-function selectAgent(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined, runCommand: CommandRunner): AgentAdapter {
+async function selectAgent(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined, runCommand: CommandRunner): Promise<AgentAdapter> {
   const labels = labelNames(issue);
   const selected = labels.includes('kaizen:agent:codex')
     ? 'codex'
     : labels.includes('kaizen:agent:claude')
       ? 'claude'
       : requested ?? config.agent.default;
-  if (selected === 'codex') return new CodexAdapter();
-  return new ClaudeCodeAdapter(runCommand);
+  const primary = makeAgent(selected, runCommand);
+  if (await primary.isAvailable()) return primary;
+  if (config.agent.fallback) {
+    const fallback = makeAgent(selected === 'codex' ? 'claude' : 'codex', runCommand);
+    if (await fallback.isAvailable()) return fallback;
+  }
+  return primary;
+}
+
+function makeAgent(agent: 'claude' | 'codex', runCommand: CommandRunner): AgentAdapter {
+  return agent === 'codex' ? new CodexAdapter(runCommand) : new ClaudeCodeAdapter(runCommand);
 }
 
 async function commitLeftovers(workspace: WorkspaceManager, issue: GitHubIssue, agentResult: AgentResult): Promise<void> {
@@ -303,7 +439,8 @@ function buildPullRequestBody(
   issue: GitHubIssue,
   agentResult: AgentResult,
   verifyResults: Array<{ command: string; ok: boolean }>,
-  diff: DiffStats
+  diff: DiffStats,
+  riskReason: string
 ): string {
   const verify = verifyResults.length
     ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
@@ -317,11 +454,58 @@ ${agentResult.summary}
 ${verify}
 
 ## Kaizen risk policy
-Phase 1 MVP always creates a pull request.
+${riskReason}
 
 Changed files: ${diff.changedFiles}
 Changed lines: ${diff.changedLines}
 `;
+}
+
+async function reflectDirect(options: {
+  workspace: WorkspaceManager;
+  branch: string;
+  issue: GitHubIssue;
+  config: KaizenConfig;
+  agentResult: AgentResult;
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>;
+  diff: DiffStats;
+  decision: ReflectionDecision;
+}): Promise<{ commit: string }> {
+  const git = options.workspace.git();
+  await git.fetch();
+  await git.checkout(options.branch);
+  await git.rebase(`origin/${options.config.git.defaultBranch}`);
+  const verifyResults = await options.workspace.runVerify(options.config);
+  const failedVerify = verifyResults.find((result) => !result.ok);
+  if (failedVerify) throw new Error(`post-rebase verification failed: ${failedVerify.command}`);
+  await commitLeftovers(options.workspace, options.issue, options.agentResult);
+  await git.checkout(options.config.git.defaultBranch);
+  await git.resetHard(`origin/${options.config.git.defaultBranch}`);
+  await git.mergeFfOnly(options.branch);
+  const commit = await git.revParse('HEAD');
+  await git.push(options.config.git.defaultBranch);
+  return { commit };
+}
+
+async function reflectPullRequest(options: {
+  workspace: WorkspaceManager;
+  branch: string;
+  issue: GitHubIssue;
+  config: KaizenConfig;
+  agentResult: AgentResult;
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>;
+  diff: DiffStats;
+  github: GitHubClient;
+  reason: string;
+}): Promise<{ url: string; number?: number; reason: string }> {
+  await options.workspace.git().push(options.branch, { forceWithLease: true });
+  const pr = await options.github.createPullRequest({
+    base: options.config.git.defaultBranch,
+    head: options.branch,
+    title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
+    body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason)
+  });
+  return { ...pr, reason: options.reason };
 }
 
 function modelFor(config: KaizenConfig, agent: 'claude' | 'codex'): string | null | undefined {
@@ -334,13 +518,33 @@ function shortSummary(summary: string): string {
 
 function resultFor(issues: RunIssueSummary[]): RunSummary['result'] {
   if (issues.length === 0) return 'success';
-  if (issues.every((issue) => issue.outcome === 'pr-created')) return 'success';
-  if (issues.some((issue) => issue.outcome === 'pr-created')) return 'partial';
+  if (issues.every((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit')) return 'success';
+  if (issues.some((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit')) return 'partial';
   return 'failed';
 }
 
 function toRunId(date: Date): string {
   return date.toISOString().replace(/:/g, '-').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function tail(output: string, lines: number): string {
+  return output.split('\n').slice(-lines).join('\n');
+}
+
+async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
+  const registry = await loadRegistry();
+  const project = registry.projects[slug];
+  if (!project) return;
+  project.lastRun = {
+    startedAt: summary.startedAt,
+    finishedAt: summary.finishedAt,
+    result: summary.result,
+    processed: summary.issues.length,
+    fixed: summary.issues.filter((issue) => issue.outcome === 'direct-commit' || issue.outcome === 'pr-created').length,
+    prCreated: summary.issues.filter((issue) => issue.outcome === 'pr-created').length,
+    failed: summary.issues.filter((issue) => issue.outcome === 'failed').length
+  };
+  await saveRegistry(registry);
 }
 
 async function ensureNotPaused(stateDir: string): Promise<void> {
