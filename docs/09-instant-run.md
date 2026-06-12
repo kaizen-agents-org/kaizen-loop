@@ -14,7 +14,7 @@
 
 ## 2. 設計原則
 
-1. **パイプラインは夜間と共通**: Issue 選択以外の全工程(ワークスペース同期 → エージェント実行 → 検証 → リスク判定 → 反映 → 結果コメント)は [04-nightly-pipeline.md](./04-nightly-pipeline.md) §3〜§8 をそのまま使う。安全装置([07-safety.md](./07-safety.md))もすべて同一
+1. **パイプラインは夜間と共通**: Issue 選択以外の全工程(ワークスペース同期 → setup → ベースライン検証 → エージェント実行 → 検証 → リスク判定 → 反映 → 結果コメント)は [04-nightly-pipeline.md](./04-nightly-pipeline.md) §3〜§8 をそのまま使う。安全装置([07-safety.md](./07-safety.md))もすべて同一
 2. **Issue が常に記録に残る**: 即時実行でも必ず GitHub Issue を経由する(`kaizen fix "<説明>"` は内部で起票してから処理)。「Issue = 改善の台帳」という原則を崩さない
 3. **人間が見ている前提を活かす**: 夜間と違い実行者が端末の前にいるため、**反映前の確認プロンプト**という夜間にはない安全装置を使える
 4. **デイタイム特有のリスクに対応**: 日中の main 直接 push は、開発者のローカル作業と競合しうる。確認プロンプトと設定でコントロールする(→ §5)
@@ -69,7 +69,7 @@ kaizen report "<タイトル>" --now [--json] [--yes] [既存オプション]
 echo "$BODY" | kaizen report "config 再読込で古い値が残る" --body-file - --now --json
 ```
 
-- 非 TTY(AI からの実行)では確認プロンプトが出せないため、**直接コミット判定でも自動的に PR に切り替わる**(§5 のルール)。AI に main を直接動かさせたい場合のみ明示的に `--yes` を付ける
+- 非 TTY(AI からの実行)では確認プロンプトが出せないため、直接コミット判定時は `instant.unattendedMode` に従う(§5)。デフォルトは PR への切り替え。AI に main を直接動かさせたい場合は `--yes` または `instant.unattendedMode: direct` を明示する
 
 ### 3.3 `kaizen watch` — ラベル駆動の常駐モード(Phase 4)
 
@@ -77,7 +77,7 @@ echo "$BODY" | kaizen report "config 再読込で古い値が残る" --body-file
 kaizen watch [--project <slug>] [--interval 5m]
 ```
 
-- `kaizen:now` ラベル付き Issue を定期ポーリングし、見つけ次第 `kaizen fix <番号> --yes` 相当を実行 → 処理後 `kaizen:now` を剥がす
+- `kaizen:now` ラベル付き Issue を定期ポーリングし、見つけ次第 `kaizen fix <番号>` の無人実行相当で処理 → 処理後 `kaizen:now` を剥がす
 - 別マシンのメンバーや GitHub Web UI からも「即時実行」をトリガーできるようになる
 - 常駐プロセスのため、夜間スケジュールとのロック共有・`PAUSE` ファイル尊重は必須
 - 無人実行になるため確認プロンプトはなく、`instant.unattendedMode`(→ §5)に従う
@@ -111,7 +111,7 @@ main に直接 push しますか? [Y=push / p=PRにする / n=破棄]
 
 ### 非 TTY / 無人時のルール
 
-確認できない文脈(`--json`、パイプ実行、`kaizen watch`)では、設定 `instant.unattendedMode` に従う:
+確認できない文脈(`--json`、パイプ実行、`kaizen watch`)では、[04-nightly-pipeline.md](./04-nightly-pipeline.md) §6 の安全ゲートを通過した直接コミット判定に限り、設定 `instant.unattendedMode` に従う:
 
 ```yaml
 # .kaizen/config.yml への追加(03-config-spec.md に統合)
@@ -119,6 +119,14 @@ instant:
   # 非 TTY・無人の即時実行で直接コミット判定が出たときの挙動
   unattendedMode: pr        # pr(PR に切替・デフォルト) | direct(夜間と同じ) | reject(中止)
 ```
+
+`unattendedMode` の意味:
+
+| 値 | 挙動 |
+|---|---|
+| `pr` | PR 作成に切り替える(デフォルト) |
+| `direct` | 夜間と同じく直接コミットへ進む |
+| `reject` | 反映せず失敗コメントを残す |
 
 > デフォルトを `pr` にする理由: 即時実行の無人トリガー(AI・watch)は日中に発火するため、開発者が気づかないうちに main が動くことを避ける。夜間バッチは「翌朝 pull する」という契約があるが、日中にはその契約がない。
 

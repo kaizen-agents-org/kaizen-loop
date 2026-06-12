@@ -9,8 +9,11 @@ flowchart TB
     A["1. プリフライト"] --> B["2. Issue 取得・選択"]
     B --> C{処理対象あり?}
     C -->|なし| Z["9. レポート出力・終了"]
-    C -->|あり| D["3. ワークスペース同期<br/>+ 作業ブランチ作成"]
-    D --> E["4. エージェント実行<br/>(修正)"]
+    C -->|あり| D["3. ワークスペース同期<br/>+ setup + ベースライン検証<br/>+ 作業ブランチ作成"]
+    D -->|ベースライン成功| E["4. エージェント実行<br/>(修正)"]
+    D -->|setup 失敗| X["実行全体を中断<br/>(環境問題)"]
+    D -->|ベースライン失敗| H
+    X --> Z
     E --> F["5. 検証<br/>(test / lint / build)"]
     F -->|失敗| G{リトライ<br/>≤ maxVerifyRetries?}
     G -->|はい| E2["エラーを添えて<br/>エージェントに再修正依頼"] --> F
@@ -57,23 +60,34 @@ gh issue list --label kaizen --state open \
 1. `priorityOrder` のラベル順(P0 → P1 → P2 → ラベルなし)
 2. 同優先度内では作成日時の古い順
 
-上位から `maxIssuesPerNight` 件を選択。選択結果と除外理由は `run.log` に全件記録する(`--dry-run` はここまでを表示して終了)。
+上位から `maxIssuesPerNight` 件を選択。選択結果と除外理由は `run.log` に全件記録する。
 
-## 3. ワークスペース同期 + 作業ブランチ作成
+`--dry-run` はここまでを表示して終了する。修正前には diff が存在しないため、リスク判定は行わない。
+
+## 3. ワークスペース同期 + setup + ベースライン検証 + 作業ブランチ作成
 
 Issue ごとに毎回:
 
 ```sh
+gh issue edit <N> --add-label kaizen:in-progress
 git fetch origin
 git checkout <defaultBranch>
 git reset --hard origin/<defaultBranch>
 git clean -fdx
 <commands.setup>            # 例: npm ci
+<commands.verify>           # ベースライン検証。verify 未設定ならスキップ
+git checkout <defaultBranch>
+git reset --hard origin/<defaultBranch>
+git clean -fdx
+<commands.setup>
 git switch -c kaizen/issue-<N>-<title-slug>
 ```
 
-- Issue に `kaizen:in-progress` ラベルを付与(他実行との排他)
+- Issue に `kaizen:in-progress` ラベルを付与してからワークスペースを触る(他実行との排他)
 - `commands.setup` が失敗した場合は**この夜の実行全体を中断**(環境問題であり、Issue 個別の問題ではないため)
+- ベースライン検証が失敗した場合、エージェントは起動しない。Issue に失敗コメントを残して `kaizen:in-progress` を剥がし、次の Issue へ進む
+- ベースライン検証後に再度 reset + setup する。ベースライン検証の副作用を作業ブランチへ持ち込まないため
+- `commands.verify` が未設定の場合、ベースライン検証も修正後検証もスキップする。この場合、直接コミットは禁止される
 
 ## 4. エージェント実行
 
@@ -90,7 +104,8 @@ git switch -c kaizen/issue-<N>-<title-slug>
 1. `git status --porcelain` で未コミット変更が残っていれば追加コミット(`kaizen: leftover changes (#N)`)
 2. `git diff <defaultBranch>...HEAD --numstat` で変更ファイル一覧を取得
 3. `forbiddenPaths` に該当する変更があれば → **即失敗**(reset して破棄)
-4. 変更が 0 件(diff なし)→ エージェントの結果が `blocked`(情報不足)なら §6 の blocked 処理、それ以外は失敗処理
+4. `protectedPaths` に該当する変更は失敗ではないが、後続のリスク判定で必ず PR になる
+5. 変更が 0 件(diff なし)→ エージェントの結果が `blocked`(情報不足)なら §6 の blocked 処理、それ以外は失敗処理
 
 ## 5. 検証
 
@@ -103,18 +118,28 @@ git switch -c kaizen/issue-<N>-<title-slug>
 
 ## 6. リスク判定(ハイブリッドの中核)
 
-`policy.mode` が `pr-only` / `direct-only` ならそれに従う。`hybrid` のときは以下を**上から順に**評価する:
+リスク判定は「安全ゲート」と「反映モード」の 2 段で評価する。`direct-only` は安全ゲートをバイパスしない。
+
+まず以下を**上から順に**評価する:
 
 | # | 条件 | 結果 |
 |---|---|---|
-| 1 | Issue に `kaizen:pr-only` ラベル | **PR** |
-| 2 | 変更が `protectedPaths` に触れている | **PR**(理由を記録) |
-| 3 | Issue に `kaizen:direct` ラベル(かつ検証パス済み) | **直接コミット** |
-| 4 | 変更行数 ≤ `maxChangedLines` かつ 変更ファイル数 ≤ `maxChangedFiles` | **直接コミット** |
-| 5 | 上記以外 | **PR** |
+| G1 | `commands.verify` が未設定 | **PR**(検証なしの直接コミットは禁止) |
+| G2 | Issue に `kaizen:pr-only` ラベル | **PR** |
+| G3 | 変更が `protectedPaths` に触れている | **PR**(理由を記録) |
+| G4 | `policy.mode: pr-only` | **PR** |
+
+上記に該当せず、`policy.mode: direct-only` なら **直接コミット** とする。`hybrid` のときだけ以下を**上から順に**評価する:
+
+| # | 条件 | 結果 |
+|---|---|---|
+| H1 | Issue に `kaizen:direct` ラベル(かつ検証パス済み) | **直接コミット** |
+| H2 | 変更行数 ≤ `maxChangedLines` かつ 変更ファイル数 ≤ `maxChangedFiles` | **直接コミット** |
+| H3 | 上記以外 | **PR** |
 
 - 判定理由(どのルールに該当したか)は `summary.json` の `reason` と Issue コメントに必ず残す(翌朝、人間が「なぜ直接コミットされた/されなかったのか」を確認できる)
 - ラベルはあくまで Issue 登録者の意思表示であり、`kaizen:direct` でも検証パスは免除されない
+- `forbiddenPaths` はリスク判定に到達する前に失敗する
 
 ### blocked(情報不足)の扱い
 
@@ -134,7 +159,7 @@ git merge --ff-only kaizen/issue-<N>-<slug>   # ff できない場合は ↓ の
 git push origin <defaultBranch>
 ```
 
-- **push 直前に必ず `git fetch` + リベース**: 夜間に人間が push していた場合、作業ブランチを `origin/<defaultBranch>` に rebase → **検証を再実行** → push。rebase 競合または再検証失敗なら**PR にフォールバック**(無理に押し込まない)
+- **push 直前に必ず `git fetch` + リベース**: 夜間に人間が push していた場合、作業ブランチを `origin/<defaultBranch>` に rebase → **検証を再実行** → push。rebase 競合または再検証失敗なら rebase を abort し、作業ブランチへ戻して **PR にフォールバック**(無理に押し込まない)
 - push 成功後: Issue に結果コメント(§8)→ Issue をクローズ(コミットメッセージの `(#N)` とは別に明示的に `gh issue close`)
 
 ### 7b. PR 作成
