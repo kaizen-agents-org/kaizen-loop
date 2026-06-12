@@ -49,4 +49,22 @@ describe('workspace branch handling', () => {
       'kaizen/issue-12-retry-branch'
     ]);
   });
+
+  it('can abort a failed rebase before falling back to PR creation', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const git = new GitClient(runner, '/workspace');
+
+    await git.abortRebase();
+
+    expect(runner.mock.calls[0][1]).toEqual(['rebase', '--abort']);
+    expect(runner.mock.calls[0][2]?.rejectOnNonZero).toBe(false);
+  });
 });

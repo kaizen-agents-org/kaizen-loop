@@ -4,11 +4,12 @@ export interface ResultCommentOptions {
   runId: string;
   issue: number;
   attempt: number;
-  outcome: 'pr-created' | 'failed' | 'blocked' | 'skipped';
+  outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped';
   agent: string;
   summary: string;
   verifyResults?: Array<{ command: string; ok: boolean }>;
   prUrl?: string;
+  commit?: string;
   reason?: string;
   maxAttempts: number;
 }
@@ -22,6 +23,7 @@ export function buildResultComment(options: ResultCommentOptions): string {
     issue: options.issue,
     attempt: options.attempt,
     outcome: options.outcome,
+    commit: options.commit,
     pr: options.prUrl
   };
 
@@ -51,6 +53,7 @@ export function agentSummary(result: AgentResult): string {
 
 function formatOutcome(options: ResultCommentOptions): string {
   if (options.outcome === 'pr-created') return `PR created${options.prUrl ? ` (${options.prUrl})` : ''}`;
+  if (options.outcome === 'direct-commit') return `Direct commit${options.commit ? ` (${options.commit})` : ''}`;
   if (options.outcome === 'blocked') return 'Blocked; needs human input';
   if (options.outcome === 'skipped') return 'Skipped';
   return 'Failed';

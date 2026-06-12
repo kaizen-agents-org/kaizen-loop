@@ -2,14 +2,20 @@
 
 Kaizen Loop is a local TypeScript CLI that processes GitHub Issues labeled `kaizen` with an AI maintenance agent.
 
-The Phase 1 MVP implements:
+The CLI currently implements:
 
 - `kaizen init`
 - `kaizen run`
 - `kaizen run --dry-run`
 - `kaizen list`
+- `kaizen report`
+- `kaizen fix <issue>`
+- `kaizen status`
+- `kaizen enable` / `kaizen disable`
+- `kaizen logs`
+- `kaizen doctor`
 
-Phase 1 always creates pull requests. Scheduler registration, direct commits, Codex execution, retry loops, instant fixes, and status/log/doctor commands are planned for later phases.
+The Phase 2 implementation supports hybrid reflection, direct commits when policy allows, verification retries, Claude/Codex agent selection, scheduler registration, and basic operational commands. `kaizen watch` remains a later-phase feature.
 
 See [docs/README.md](./docs/README.md) for the full specification.
 

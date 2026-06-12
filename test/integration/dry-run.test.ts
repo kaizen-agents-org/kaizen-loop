@@ -79,7 +79,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] }).replace('mode: hybrid', 'mode: pr-only')
     );
     await saveRegistry({
       version: 1,
@@ -124,6 +124,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') {
         return result(command, args, workspace, '1\t0\tsrc/file.ts\n1\t0\tgenerated.txt\n');
       }
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') return result(command, args, workspace, 'installed');
       if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
       return result(command, args, options?.cwd, '');
     });
@@ -139,6 +140,8 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
+    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
     expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
   });

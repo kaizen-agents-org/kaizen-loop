@@ -4,7 +4,8 @@ export interface RunIssueSummary {
   priority?: string;
   agent?: string;
   attempt?: number;
-  outcome: 'pr-created' | 'failed' | 'blocked' | 'skipped';
+  outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped';
+  commit?: string;
   pr?: number;
   prUrl?: string;
   reason?: string;
