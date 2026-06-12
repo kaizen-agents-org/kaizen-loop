@@ -130,6 +130,7 @@ async function processIssue(options: {
       return await finishFailed(options, agent, attempts, `Baseline verification failed: ${failedBaseline.command}`, started, baselineVerify);
     }
     await workspace.sync(options.config.git.defaultBranch);
+    await workspace.runSetup(options.config);
     const branch = await workspace.createIssueBranch(options.config, options.issue);
 
     let agentResult: AgentResult | undefined;
@@ -213,6 +214,7 @@ async function processIssue(options: {
         diff: finalDiff,
         decision
       }).catch(async (error) => {
+        await preparePrFallback(workspace, branch);
         return reflectPullRequest({
           workspace,
           branch,
@@ -459,6 +461,12 @@ ${riskReason}
 Changed files: ${diff.changedFiles}
 Changed lines: ${diff.changedLines}
 `;
+}
+
+async function preparePrFallback(workspace: WorkspaceManager, branch: string): Promise<void> {
+  const git = workspace.git();
+  await git.abortRebase();
+  await git.checkout(branch);
 }
 
 async function reflectDirect(options: {

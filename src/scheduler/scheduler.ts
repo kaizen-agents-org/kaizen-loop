@@ -10,8 +10,9 @@ export async function enableScheduler(options: {
   project: RegistryProject;
   schedule: string;
   runCommand: CommandRunner;
+  platform?: NodeJS.Platform;
 }): Promise<{ type: 'launchd' | 'cron'; path?: string }> {
-  if (process.platform === 'darwin') {
+  if ((options.platform ?? process.platform) === 'darwin') {
     const plistPath = launchdPlistPath(options.slug);
     await fs.mkdir(path.dirname(plistPath), { recursive: true });
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
@@ -22,6 +23,7 @@ export async function enableScheduler(options: {
     return { type: 'launchd', path: plistPath };
   }
 
+  await fs.mkdir(projectStateDir(options.slug), { recursive: true });
   const current = await options.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
   const marker = cronMarker(options.slug);
   const lines = current.stdout
@@ -37,10 +39,11 @@ export async function disableScheduler(options: {
   slug: string;
   runCommand: CommandRunner;
   terminateRunning?: boolean;
+  platform?: NodeJS.Platform;
 }): Promise<{ type: 'launchd' | 'cron'; path?: string }> {
   if (options.terminateRunning) await terminateLockPid(options.slug);
 
-  if (process.platform === 'darwin') {
+  if ((options.platform ?? process.platform) === 'darwin') {
     const plistPath = launchdPlistPath(options.slug);
     await options.runCommand('launchctl', ['bootout', `gui/${process.getuid?.() ?? ''}`, plistPath], {
       rejectOnNonZero: false

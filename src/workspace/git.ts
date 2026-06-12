@@ -46,6 +46,10 @@ export class GitClient {
     await this.git(['rebase', ref]);
   }
 
+  async abortRebase(): Promise<void> {
+    await this.git(['rebase', '--abort'], { rejectOnNonZero: false });
+  }
+
   async mergeFfOnly(ref: string): Promise<void> {
     await this.git(['merge', '--ff-only', ref]);
   }
