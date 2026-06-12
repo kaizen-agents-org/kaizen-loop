@@ -1,0 +1,40 @@
+export function issueTemplateYaml(): string {
+  return `name: "Kaizen improvement"
+description: Request a fix or improvement for the nightly maintenance agent
+labels: ["kaizen"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / improvement
+      description: What happened or what is inconvenient. Paste exact errors when available.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Run \`kaizen status --json\`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Related area
+      description: Optional files, commands, logs, or functions that may help.
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options: ["P2", "P1", "P0"]
+      default: 0
+`;
+}
