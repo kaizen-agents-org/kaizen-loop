@@ -45,6 +45,10 @@ export class GitClient {
     await this.git(['switch', '-c', branch]);
   }
 
+  async deleteLocalBranch(branch: string): Promise<void> {
+    await this.git(['branch', '-D', branch], { rejectOnNonZero: false });
+  }
+
   async addAll(): Promise<void> {
     await this.git(['add', '-A']);
   }
@@ -82,8 +86,8 @@ export class GitClient {
       });
   }
 
-  async push(ref: string): Promise<void> {
-    await this.git(['push', '-u', 'origin', ref]);
+  async push(ref: string, options: { forceWithLease?: boolean } = {}): Promise<void> {
+    await this.git(['push', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref]);
   }
 
   private git(args: string[], options?: { rejectOnNonZero?: boolean }) {

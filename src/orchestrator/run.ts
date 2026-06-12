@@ -150,13 +150,18 @@ async function processIssue(options: {
     if (failedVerify) {
       return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
     }
+    await commitLeftovers(workspace, options.issue, agentResult);
+    const finalDiff = await workspace.collectDiffStats(options.config);
+    if (finalDiff.forbiddenFiles.length > 0) {
+      return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${finalDiff.forbiddenFiles.join(', ')}`, started, verifyResults);
+    }
 
-    await workspace.git().push(branch);
+    await workspace.git().push(branch, { forceWithLease: true });
     const pr = await options.github.createPullRequest({
       base: options.config.git.defaultBranch,
       head: branch,
       title: `kaizen: ${shortSummary(agentResult.summary)} (#${options.issue.number})`,
-      body: buildPullRequestBody(options.issue, agentResult, verifyResults, diff)
+      body: buildPullRequestBody(options.issue, agentResult, verifyResults, finalDiff)
     });
     await options.github.comment(
       options.issue.number,
@@ -185,8 +190,8 @@ async function processIssue(options: {
       pr: pr.number,
       prUrl: pr.url,
       reason: 'phase1-pr-only',
-      changedFiles: diff.changedFiles,
-      changedLines: diff.changedLines,
+      changedFiles: finalDiff.changedFiles,
+      changedLines: finalDiff.changedLines,
       verifyRetries: 0,
       durationMs: Date.now() - started
     };

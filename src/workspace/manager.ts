@@ -65,7 +65,9 @@ export class WorkspaceManager {
 
   async createIssueBranch(config: KaizenConfig, issue: { number: number; title: string }): Promise<string> {
     const branch = `${config.git.branchPrefix}issue-${issue.number}-${slugify(issue.title)}`;
-    await this.git().switchNew(branch);
+    const git = this.git();
+    await git.deleteLocalBranch(branch);
+    await git.switchNew(branch);
     return branch;
   }
 
