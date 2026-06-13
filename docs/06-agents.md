@@ -38,9 +38,11 @@ cd <workspaceDir> && builder-agent < prompt
 cd <workspaceDir> && verifier < prompt
 ```
 
-- verifier は `verifier.resultPath` へ `{ "status": "approved" | "pr_only" | "rejected", ... }` を書く。stdout の最後の JSON もフォールバックとして読む
-- `approved` / `pr_only` は PR 作成へ進む。verifier 有効時は直接コミット判定へ進まない
-- `rejected` は理由を次の builder-agent プロンプトへ渡し、`run.maxVerifyRetries` の範囲で再修正させる
+- verifier は `verifier.resultPath` へ `{ "status": "open_pr" | "open_pr_with_warning" | "block_pr" | "needs_context", ... }` を書く。stdout の最後の JSON もフォールバックとして読む
+- verifier は PR 作成可否を判断する保守的なゲート。マージ承認ではない(マージは人間が判断)
+- `open_pr` / `open_pr_with_warning` は PR 作成へ進む(常に ready-for-review。`--draft` は付けない)。verifier 有効時は直接コミット判定へ進まない
+- `block_pr` / `needs_context` は理由を次の builder-agent プロンプトへ渡し、`run.maxVerifyRetries` の範囲で再修正させる
+- 互換性のため、旧 `approved` → `open_pr`、`pr_only` → `open_pr_with_warning`、`rejected` → `block_pr` も当面受け付ける
 - `error` / 結果ファイルなしは当該 Issue の失敗扱い
 
 ### 2.3 共通の実行制御

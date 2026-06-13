@@ -3,8 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BuilderAgentAdapter } from '../src/agents/builder.js';
+import { VerifierAgentAdapter } from '../src/agents/verifier.js';
 import { parseAgentResult } from '../src/agents/claude.js';
-import { buildFixPrompt } from '../src/agents/prompt.js';
+import { buildFixPrompt, buildVerifierPrompt } from '../src/agents/prompt.js';
 import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
@@ -46,6 +47,73 @@ describe('BuilderAgentAdapter', () => {
     expect(result.status).toBe('fixed');
     expect(result.summary).toBe('直した');
     await expect(fs.access(path.join(workspace, '.kaizen', 'builder', 'build-result.json'))).rejects.toThrow();
+  });
+});
+
+describe('VerifierAgentAdapter', () => {
+  async function runVerifier(payload: Record<string, unknown>) {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-'));
+    const runner: CommandRunner = async (command, args, options) => {
+      if (typeof options?.env?.KAIZEN_VERIFIER_RESULT_PATH !== 'string') throw new Error('missing result path');
+      await fs.writeFile(options.env.KAIZEN_VERIFIER_RESULT_PATH, JSON.stringify(payload));
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 1 };
+    };
+    const adapter = new VerifierAgentAdapter(runner, {
+      command: 'verifier',
+      resultPath: '.kaizen/verifier/verify-result.json',
+      timeoutMinutes: 1
+    });
+    return adapter.run({ workspaceDir: workspace, prompt: 'review' });
+  }
+
+  it.each([
+    ['open_pr', 'open_pr'],
+    ['open_pr_with_warning', 'open_pr_with_warning'],
+    ['block_pr', 'block_pr'],
+    ['needs_context', 'needs_context']
+  ])('passes through gate status %s', async (status, expected) => {
+    const result = await runVerifier({ status, summary: 's', notes: '' });
+    expect(result.status).toBe(expected);
+  });
+
+  it.each([
+    ['approved', 'open_pr'],
+    ['pr_only', 'open_pr_with_warning'],
+    ['rejected', 'block_pr']
+  ])('maps legacy status %s to %s', async (legacy, expected) => {
+    const result = await runVerifier({ status: legacy, summary: 's', notes: '' });
+    expect(result.status).toBe(expected);
+  });
+
+  it('treats unknown status as an error', async () => {
+    const result = await runVerifier({ status: 'nonsense', summary: 's', notes: '' });
+    expect(result.status).toBe('error');
+  });
+});
+
+describe('buildVerifierPrompt', () => {
+  it('uses the conservative PR-creation gate vocabulary', () => {
+    const prompt = buildVerifierPrompt({
+      repo: 'o/r',
+      issue: {
+        number: 7,
+        title: 'Fix bug',
+        body: 'body',
+        labels: [{ name: 'kaizen' }],
+        createdAt: '2026-06-13T00:00:00Z',
+        comments: []
+      },
+      agentResult: { status: 'fixed', summary: '直した', notes: '', raw: '', durationMs: 1 },
+      verifyResults: [{ command: 'npm test', ok: true, output: '' }],
+      diff: { changedFiles: 1, changedLines: 1, files: ['src/file.ts'], forbiddenFiles: [], protectedFiles: [] }
+    });
+
+    expect(prompt).toContain('"open_pr"');
+    expect(prompt).toContain('open_pr_with_warning');
+    expect(prompt).toContain('block_pr');
+    expect(prompt).toContain('needs_context');
+    expect(prompt).not.toContain('"approved"');
+    expect(prompt).toContain('NOT approving the change for merge');
   });
 });
 
