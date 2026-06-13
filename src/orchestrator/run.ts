@@ -24,12 +24,24 @@ export interface RunOptions {
   cwd: string;
   project?: string;
   scheduled: boolean;
+  trigger?: 'manual' | 'scheduled' | 'instant' | 'watch';
   issue?: number;
   dryRun: boolean;
   maxIssues?: number;
   agent?: 'claude' | 'codex';
   json: boolean;
+  assumeYes?: boolean;
+  confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
   runCommand: CommandRunner;
+}
+
+export type DirectCommitChoice = 'direct' | 'pr' | 'reject';
+
+export interface DirectCommitConfirmation {
+  issue: GitHubIssue;
+  decision: ReflectionDecision;
+  diff: DiffStats;
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>;
 }
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
@@ -65,12 +77,13 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const runDir = path.join(stateDir, 'runs', runId);
   await fs.mkdir(runDir, { recursive: true });
 
+  const trigger = options.trigger ?? (options.scheduled ? 'scheduled' : 'manual');
   const summary: RunSummary = {
     version: 1,
     project: resolved.slug,
     startedAt: startedAt.toISOString(),
     finishedAt: startedAt.toISOString(),
-    trigger: options.scheduled ? 'scheduled' : 'manual',
+    trigger,
     result: 'success',
     issues: [],
     skipped: selection.skipped,
@@ -86,6 +99,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         project: resolved.project,
         github,
         requestedAgent: options.agent,
+        trigger,
+        assumeYes: Boolean(options.assumeYes),
+        confirmDirectCommit: options.confirmDirectCommit,
         runCommand: options.runCommand
       });
       summary.issues.push(issueSummary);
@@ -109,6 +125,9 @@ async function processIssue(options: {
   project: { repo: string; localPath: string; workspacePath: string };
   github: GitHubClient;
   requestedAgent?: 'claude' | 'codex';
+  trigger: RunSummary['trigger'];
+  assumeYes: boolean;
+  confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
   runCommand: CommandRunner;
 }): Promise<RunIssueSummary> {
   const started = Date.now();
@@ -204,6 +223,33 @@ async function processIssue(options: {
       verifyConfigured: options.config.commands.verify.length > 0
     });
     if (decision.action === 'direct') {
+      const directChoice = await resolveDirectCommitChoice({
+        issue: options.issue,
+        config: options.config,
+        trigger: options.trigger,
+        assumeYes: options.assumeYes,
+        confirmDirectCommit: options.confirmDirectCommit,
+        decision,
+        diff: finalDiff,
+        verifyResults
+      });
+      if (directChoice === 'reject') {
+        return await finishFailed(options, agent, attempts, `Direct commit rejected: ${decision.reason}`, started, verifyResults);
+      }
+      if (directChoice === 'pr') {
+        const pr = await reflectPullRequest({
+          workspace,
+          branch,
+          issue: options.issue,
+          config: options.config,
+          agentResult,
+          verifyResults,
+          diff: finalDiff,
+          github: options.github,
+          reason: `Instant direct commit switched to PR: ${decision.reason}`
+        });
+        return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
+      }
       const direct = await reflectDirect({
         workspace,
         branch,
@@ -240,6 +286,7 @@ async function processIssue(options: {
             verifyResults,
             commit: direct.commit,
             reason: decision.reason,
+            trigger: options.trigger,
             maxAttempts: options.config.run.maxAttemptsPerIssue
           })
         );
@@ -286,6 +333,7 @@ async function finishPr(
     config: KaizenConfig;
     runId: string;
     github: GitHubClient;
+    trigger: RunSummary['trigger'];
   },
   agent: AgentAdapter,
   attempts: number,
@@ -307,6 +355,7 @@ async function finishPr(
         verifyResults,
         prUrl: pr.url,
         reason: pr.reason,
+        trigger: options.trigger,
         maxAttempts: options.config.run.maxAttemptsPerIssue
       })
     );
@@ -363,6 +412,7 @@ async function finishBlocked(
     config: KaizenConfig;
     runId: string;
     github: GitHubClient;
+    trigger: RunSummary['trigger'];
   },
   agent: AgentAdapter,
   attempt: number,
@@ -379,6 +429,7 @@ async function finishBlocked(
       agent: agent.name,
       summary: agentSummary(agentResult),
       reason: agentResult.blockedReason ?? agentResult.summary,
+      trigger: options.trigger,
       maxAttempts: options.config.run.maxAttemptsPerIssue
     })
   );
@@ -401,6 +452,7 @@ async function finishFailed(
     config: KaizenConfig;
     runId: string;
     github: GitHubClient;
+    trigger: RunSummary['trigger'];
   },
   agent: AgentAdapter,
   attempt: number,
@@ -419,6 +471,7 @@ async function finishFailed(
       summary: reason,
       verifyResults,
       reason,
+      trigger: options.trigger,
       maxAttempts: options.config.run.maxAttemptsPerIssue
     })
   );
@@ -435,6 +488,29 @@ async function finishFailed(
     reason,
     durationMs: Date.now() - started
   };
+}
+
+async function resolveDirectCommitChoice(options: {
+  issue: GitHubIssue;
+  config: KaizenConfig;
+  trigger: RunSummary['trigger'];
+  assumeYes: boolean;
+  confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
+  decision: ReflectionDecision;
+  diff: DiffStats;
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>;
+}): Promise<DirectCommitChoice> {
+  if (options.trigger !== 'instant' && options.trigger !== 'watch') return 'direct';
+  if (options.assumeYes) return 'direct';
+  if (options.confirmDirectCommit) {
+    return options.confirmDirectCommit({
+      issue: options.issue,
+      decision: options.decision,
+      diff: options.diff,
+      verifyResults: options.verifyResults
+    });
+  }
+  return options.config.instant.unattendedMode === 'direct' ? 'direct' : options.config.instant.unattendedMode;
 }
 
 function buildPullRequestBody(

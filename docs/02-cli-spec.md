@@ -91,6 +91,8 @@ kaizen fix "<タイトル>" [--body <本文>]          # 起票 + 即時処理
 - 非 TTY 時は `instant.unattendedMode`(デフォルト: PR に切替)に従う
 - 夜間実行と同一ロックを共有。実行中なら中止(`--wait` で完了待ち)
 
+Phase 2 で実装する範囲は `kaizen fix <Issue番号>`、`--agent`、`--yes`、`--json`。タイトル指定による起票 + 即時処理と `--wait` は Phase 3 で実装する。
+
 ---
 
 ## `kaizen report`

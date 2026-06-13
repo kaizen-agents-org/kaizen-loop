@@ -34,7 +34,9 @@ kaizen fix "<タイトル>" [--body <本文>]          # 起票 + 即時処理
 |---|---|
 | `--yes` | 反映前の確認プロンプトをスキップ(夜間と同じ全自動挙動) |
 | `--wait` | 夜間実行などが進行中(ロック取得失敗)のとき、終了を待って実行(デフォルトはメッセージを出して中止) |
-| `--json` | 進捗を NDJSON でストリーム出力し、最終結果を JSON で返す(AI・スクリプト用) |
+| `--json` | 最終結果を JSON で返す(AI・スクリプト用)。進捗の NDJSON ストリーム出力は Phase 3 |
+
+Phase 2 では `kaizen fix <Issue番号>`、`--agent`、`--yes`、`--json` のみ実装する。`kaizen fix "<タイトル>"` と `--wait` は Phase 3 で実装する。
 
 #### 実行フロー(夜間との差分のみ)
 
@@ -69,7 +71,7 @@ kaizen report "<タイトル>" --now [--json] [--yes] [既存オプション]
 echo "$BODY" | kaizen report "config 再読込で古い値が残る" --body-file - --now --json
 ```
 
-- 非 TTY(AI からの実行)では確認プロンプトが出せないため、**直接コミット判定でも自動的に PR に切り替わる**(§5 のルール)。AI に main を直接動かさせたい場合のみ明示的に `--yes` を付ける
+- 非 TTY(AI からの実行)では確認プロンプトが出せないため、直接コミット判定時は `instant.unattendedMode` に従う(§5)。デフォルトは PR への切り替え。AI に main を直接動かさせたい場合は `--yes` または `instant.unattendedMode: direct` を明示する
 
 ### 3.3 `kaizen watch` — ラベル駆動の常駐モード(Phase 4)
 
@@ -77,7 +79,7 @@ echo "$BODY" | kaizen report "config 再読込で古い値が残る" --body-file
 kaizen watch [--project <slug>] [--interval 5m]
 ```
 
-- `kaizen:now` ラベル付き Issue を定期ポーリングし、見つけ次第 `kaizen fix <番号> --yes` 相当を実行 → 処理後 `kaizen:now` を剥がす
+- `kaizen:now` ラベル付き Issue を定期ポーリングし、見つけ次第 `kaizen fix <番号>` の無人実行相当で処理 → 処理後 `kaizen:now` を剥がす
 - 別マシンのメンバーや GitHub Web UI からも「即時実行」をトリガーできるようになる
 - 常駐プロセスのため、夜間スケジュールとのロック共有・`PAUSE` ファイル尊重は必須
 - 無人実行になるため確認プロンプトはなく、`instant.unattendedMode`(→ §5)に従う
@@ -111,7 +113,7 @@ main に直接 push しますか? [Y=push / p=PRにする / n=破棄]
 
 ### 非 TTY / 無人時のルール
 
-確認できない文脈(`--json`、パイプ実行、`kaizen watch`)では、設定 `instant.unattendedMode` に従う:
+確認できない文脈(`--json`、パイプ実行、`kaizen watch`)では、[04-nightly-pipeline.md](./04-nightly-pipeline.md) §6 の安全ゲートを通過した直接コミット判定に限り、設定 `instant.unattendedMode` に従う:
 
 ```yaml
 # .kaizen/config.yml への追加(03-config-spec.md に統合)
@@ -119,6 +121,14 @@ instant:
   # 非 TTY・無人の即時実行で直接コミット判定が出たときの挙動
   unattendedMode: pr        # pr(PR に切替・デフォルト) | direct(夜間と同じ) | reject(中止)
 ```
+
+`unattendedMode` の意味:
+
+| 値 | 挙動 |
+|---|---|
+| `pr` | PR 作成に切り替える(デフォルト) |
+| `direct` | 夜間と同じく直接コミットへ進む |
+| `reject` | 反映せず失敗コメントを残す |
 
 > デフォルトを `pr` にする理由: 即時実行の無人トリガー(AI・watch)は日中に発火するため、開発者が気づかないうちに main が動くことを避ける。夜間バッチは「翌朝 pull する」という契約があるが、日中にはその契約がない。
 
