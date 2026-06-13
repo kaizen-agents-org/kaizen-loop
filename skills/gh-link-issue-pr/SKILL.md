@@ -64,7 +64,7 @@ Use one line per issue when closing multiple issues.
 Closes #<issue-number>
 ```
 
-For Kaizen Agents generated PRs, include the normal workflow context as well:
+For Kaizen Agents-generated PRs, include the normal workflow context as well:
 
 - original issue
 - builder summary

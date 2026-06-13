@@ -24,17 +24,17 @@ Use `kaizen-loop` as the fallback when symptoms span multiple projects or the av
 2. Reproduce or narrow the failure when practical. Keep the investigation focused on ownership; do not implement the fix in this workflow unless the user asks.
 3. Check for an existing issue before creating a new one:
 
-```sh
-gh issue list --repo kaizen-agents-org/<repo> --search "<short error or behavior>"
-```
+   ```sh
+   gh issue list --repo kaizen-agents-org/<repo> --search "<short error or behavior>"
+   ```
 
 4. Choose the target repository using the routing rules above. If uncertain, choose `kaizen-agents-org/kaizen-loop` and say why ownership is unclear.
 5. Create the issue with a clear title, evidence, and routing rationale. Prefer labels that exist in the target repository:
 
-```sh
-gh label list --repo kaizen-agents-org/<repo> --limit 200
-gh issue create --repo kaizen-agents-org/<repo> --title "<title>" --body-file <body-file> --label kaizen
-```
+   ```sh
+   gh label list --repo kaizen-agents-org/<repo> --limit 200
+   gh issue create --repo kaizen-agents-org/<repo> --title "<title>" --body-file <body-file> --label kaizen
+   ```
 
 Only pass `--label` values that exist. Prefer `kaizen` so the issue can enter the Issue-to-PR MVP; also add `bug` if that label exists. If no useful labels exist, create the issue without labels rather than blocking.
 
