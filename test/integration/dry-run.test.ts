@@ -157,7 +157,11 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return result(command, args, repo, '');
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: '直した',
+          notes: 'Protected path changed: .github/workflows/ci.yml'
+        });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
@@ -190,8 +194,12 @@ describe('runKaizen PR flow', () => {
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
     expect(gitCommands).not.toContain('push origin main');
+    const prCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr create'));
+    expect(String(prCreate?.[1].at(-1))).toContain('## Builder notes');
+    expect(String(prCreate?.[1].at(-1))).toContain('Protected path changed');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('"trigger":"instant"');
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('### Notes');
   });
 
   it('rejects instant direct commits when unattended mode is reject', async () => {
