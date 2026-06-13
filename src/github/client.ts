@@ -97,12 +97,14 @@ export class GitHubClient {
   async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {
     let labels = options.labels;
     let result;
-    try {
-      result = await this.gh(createIssueArgs(options, labels));
-    } catch (error) {
-      if (labels.length === 0 || !isMissingLabelError(error)) throw error;
-      labels = [];
-      result = await this.gh(createIssueArgs(options, labels));
+    while (!result) {
+      try {
+        result = await this.gh(createIssueArgs(options, labels), { noRetry: true });
+      } catch (error) {
+        const nextLabels = labelsAfterMissingLabelError(labels, error);
+        if (nextLabels.length === labels.length) throw error;
+        labels = nextLabels;
+      }
     }
     const number = Number(result.stdout.match(/\/issues\/(\d+)/)?.[1]);
     if (!number) throw new Error(`Could not parse created issue URL: ${result.stdout.trim()}`);
@@ -149,9 +151,10 @@ export class GitHubClient {
     return { url, number: number ? Number(number) : undefined };
   }
 
-  private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean } = {}) {
+  private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
     let lastError: unknown;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const attempts = options.noRetry ? 1 : 3;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
         return await this.run('gh', args, { cwd: this.cwd });
       } catch (error) {
@@ -176,6 +179,15 @@ function createIssueArgs(options: { title: string; body: string; repo?: string }
 function isMissingLabelError(error: unknown): boolean {
   const message = String(error);
   return /label/i.test(message) && /not found|does not exist|could not resolve|missing/i.test(message);
+}
+
+function labelsAfterMissingLabelError(labels: string[], error: unknown): string[] {
+  if (labels.length === 0 || !isMissingLabelError(error)) return labels;
+  const message = String(error).toLowerCase();
+  const missingOptional = labels.find((label) => label !== 'kaizen' && message.includes(label.toLowerCase()));
+  if (missingOptional) return labels.filter((label) => label !== missingOptional);
+  if (labels.includes('kaizen') && labels.length > 1) return ['kaizen'];
+  return [];
 }
 
 function emptyResult(args: string[], cwd: string) {

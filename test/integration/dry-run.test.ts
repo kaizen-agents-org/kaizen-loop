@@ -288,7 +288,7 @@ describe('runKaizen PR flow', () => {
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Kaizen discovered follow-up issue'))).toBe(true);
   });
 
-  it('retries builder-discovered issue creation without labels when target labels are missing', async () => {
+  it('retries builder-discovered issue creation with the base label when the priority label is missing', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -314,7 +314,8 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
-        if (args.includes('--label')) throw new Error("could not add label: 'kaizen' not found");
+        const labelValue = String(args.at(args.indexOf('--label') + 1));
+        if (labelValue.includes('kaizen:P2')) throw new Error("could not add label: 'kaizen:P2' not found");
         return result(command, args, repo, 'https://github.com/external/project/issues/12\n');
       }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
@@ -363,8 +364,9 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
-    expect(issueCreates.length).toBe(4);
-    expect(issueCreates.at(-1)?.[1]).not.toContain('--label');
+    expect(issueCreates.length).toBe(2);
+    expect(issueCreates.at(-1)?.[1]).toContain('--label');
+    expect(issueCreates.at(-1)?.[1]).toContain('kaizen');
     expect(issueCreates.at(-1)?.[1]).toContain('external/project');
   });
 

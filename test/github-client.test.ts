@@ -25,9 +25,10 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[0][1]).not.toContain('--draft');
   });
 
-  it('retries issue creation without labels when target repo labels are missing', async () => {
+  it('preserves the base label when an optional target repo label is missing', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
-      if (args.includes('--label')) {
+      const labelValue = String(args.at(args.indexOf('--label') + 1));
+      if (labelValue.includes('kaizen:P2')) {
         throw new Error('GraphQL: Could not resolve to a Label with the name kaizen:P2');
       }
       return {
@@ -49,12 +50,13 @@ describe('GitHubClient', () => {
     });
 
     expect(issue.url).toBe('https://github.com/kaizen-agents-org/verifier/issues/77');
-    expect(issue.labels).toEqual([]);
-    expect(runner).toHaveBeenCalledTimes(4);
+    expect(issue.labels).toEqual([{ name: 'kaizen' }]);
+    expect(runner).toHaveBeenCalledTimes(2);
     expect(runner.mock.calls[0][1]).toContain('--label');
-    expect(runner.mock.calls[3][1]).not.toContain('--label');
-    expect(runner.mock.calls[3][1]).toContain('--repo');
-    expect(runner.mock.calls[3][1]).toContain('kaizen-agents-org/verifier');
+    expect(runner.mock.calls[1][1]).toContain('--label');
+    expect(runner.mock.calls[1][1]).toContain('kaizen');
+    expect(runner.mock.calls[1][1]).toContain('--repo');
+    expect(runner.mock.calls[1][1]).toContain('kaizen-agents-org/verifier');
   });
 
   it('searches a broad candidate set before exact-title duplicate matching', async () => {
