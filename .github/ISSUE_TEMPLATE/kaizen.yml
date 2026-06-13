@@ -29,9 +29,3 @@ body:
     attributes:
       label: Related area
       description: Optional files, commands, logs, or functions that may help.
-  - type: dropdown
-    id: priority
-    attributes:
-      label: Priority
-      options: ["P2", "P1", "P0"]
-      default: 0

@@ -64,7 +64,4 @@ report:
 
 issues:
   label: "kaizen"
-  priorityOrder:
-    - "kaizen:P0"
-    - "kaizen:P1"
-    - "kaizen:P2"
+  priorityOrder: []
