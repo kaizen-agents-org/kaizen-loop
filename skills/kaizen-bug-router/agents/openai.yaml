@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kaizen Bug Router"
+  short_description: "Route Kaizen bug reports to the right repo."
+  default_prompt: "Use $kaizen-bug-router to investigate this Kaizen Agents bug and file it in the correct repository."
