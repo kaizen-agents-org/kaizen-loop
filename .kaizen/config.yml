@@ -24,11 +24,15 @@ commands:
   verifyTimeoutMinutes: 15
 
 builder:
+  # The runner must expose this command on PATH before scheduled runs are enabled.
+  # `kaizen doctor` checks this command and fails if it is unavailable.
   command: "builder-agent"
   resultPath: ".kaizen/builder/build-result.json"
 
 verifier:
   enabled: true
+  # The runner must expose this command on PATH before scheduled runs are enabled.
+  # `kaizen doctor` checks this command and fails if it is unavailable.
   command: "verifier"
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
