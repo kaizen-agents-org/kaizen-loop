@@ -86,7 +86,7 @@ export class GitHubClient {
       '--json',
       'number,title,body,labels,createdAt,comments,url',
       '--limit',
-      '20'
+      '100'
     ];
     if (options.repo) args.push('--repo', options.repo);
     const result = await this.gh(args);

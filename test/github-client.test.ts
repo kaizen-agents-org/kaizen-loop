@@ -56,4 +56,21 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[3][1]).toContain('--repo');
     expect(runner.mock.calls[3][1]).toContain('kaizen-agents-org/verifier');
   });
+
+  it('searches a broad candidate set before exact-title duplicate matching', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: '[]',
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    await client.findOpenIssueByTitle({ repo: 'kaizen-agents-org/verifier', title: 'follow-up' });
+
+    const args = runner.mock.calls[0][1];
+    expect(args.at(args.indexOf('--limit') + 1)).toBe('100');
+  });
 });

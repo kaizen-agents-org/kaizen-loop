@@ -720,12 +720,12 @@ async function fileDiscoveredIssues(options: {
     const repo = resolveDiscoveredIssueRepo(issue.repo, options.projectRepo);
     const key = `${repo}\n${issue.title.trim().toLowerCase()}`;
     if (options.filedKeys.has(key)) continue;
-    options.filedKeys.add(key);
 
     try {
       const existing = await options.github.findOpenIssueByTitle({ repo, title: issue.title });
       if (existing) {
         filed.push({ title: issue.title, repo, url: existing.url, duplicate: true });
+        options.filedKeys.add(key);
         continue;
       }
       const created = await options.github.createIssue({
@@ -741,6 +741,7 @@ async function fileDiscoveredIssues(options: {
         labels: labelsForDiscoveredIssue(issue)
       });
       filed.push({ title: issue.title, repo, url: created.url });
+      options.filedKeys.add(key);
     } catch (error) {
       await fs.appendFile(
         path.join(options.issueDir, 'discovered-issues.log'),
