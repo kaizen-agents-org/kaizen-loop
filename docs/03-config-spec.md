@@ -31,9 +31,10 @@ run:
   runTimeoutMinutes: 240     # 実行全体のタイムアウト(超過時は残 Issue をスキップして終了処理)
   maxVerifyRetries: 2        # 検証失敗時、エラーを添えてエージェントに再修正させる回数
   maxAttemptsPerIssue: 3     # 夜をまたいだ累計試行回数。超えたら kaizen:needs-human へ
+  latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
 commands:
-  # ワークスペース reset 後に毎回実行(依存インストール等)。null なら自動検出
+  # ワークスペース reset 後、ベースライン検証前と作業ブランチ作成前に実行(依存インストール等)。null ならスキップ
   setup: "npm ci"
   # 検証コマンド。上から順に実行し、すべて成功で「検証パス」
   verify:
@@ -44,12 +45,13 @@ commands:
 
 policy:
   # 反映方法: hybrid | pr-only | direct-only
+  # direct-only でも verify / protectedPaths / forbiddenPaths / pr-only ラベルの安全ゲートはバイパスしない
   mode: hybrid
-  # hybrid 時の直接コミット許可条件(すべて満たす必要がある。→ 04-nightly-pipeline.md §5)
+  # hybrid 時の直接コミット許可条件(すべて満たす必要がある。→ 04-nightly-pipeline.md §6)
   directCommit:
     maxChangedLines: 150     # 追加+削除の合計
     maxChangedFiles: 5
-  # 触れたら必ず PR にするパス(glob)。エージェントへの指示にも含める
+  # 触れてよいが、触れたら必ず PR にするパス(glob)
   protectedPaths:
     - ".github/**"
     - "**/.env*"
@@ -65,8 +67,6 @@ git:
   defaultBranch: main
   branchPrefix: "kaizen/"    # 作業ブランチ: kaizen/issue-<N>-<slug>
   commitMessageFormat: "kaizen: {summary} (#{issue})"
-  # 直接コミット時の push 先保護: false なら main へ直 push を許可
-  # (ブランチ保護ルールがある場合は pr-only にすること)
 
 instant:
   # 即時実行(kaizen fix / report --now / watch。→ 09-instant-run.md)
@@ -87,7 +87,9 @@ issues:
 ### フィールド規約
 
 - 未知のキーはエラー(タイポによるサイレント無効化を防ぐ)
-- `commands.setup` / `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
+- `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
+- `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
+- `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 
 ## 2. ローカル登録簿 `~/.kaizen/registry.json`
 
@@ -159,7 +161,7 @@ issues:
 }
 ```
 
-`outcome` の取りうる値: `direct-commit` | `pr-created` | `failed` | `needs-human` | `blocked`(情報不足)| `skipped`。
+`outcome` の取りうる値: `direct-commit` | `pr-created` | `failed` | `blocked`(情報不足)| `skipped`。`kaizen:needs-human` は outcome ではなく、`failed` / `blocked` の結果として Issue に付与される状態ラベル。
 
 ## 4. スケジューラ定義(生成物)
 
@@ -182,6 +184,8 @@ issues:
   </array>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string></dict>
   <key>StandardOutPath</key>
   <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/launchd.out.log</string>
   <key>StandardErrorPath</key>
@@ -194,6 +198,7 @@ issues:
 
 - `node` / `kaizen` は**絶対パス**で埋め込む(launchd の PATH は最小限のため)
 - `gh` / `claude` / `codex` / `git` が見つかるよう、`EnvironmentVariables` に PATH を明示的に設定する
+- plist に埋め込む文字列は XML escape する
 - launchd はスリープ復帰時に取りこぼした `StartCalendarInterval` を実行するため、夜間スリープしていても朝の起床時にループが回る(→ [07-safety.md](./07-safety.md) §6 で朝実行時の挙動を規定)
 
 ### Linux — crontab エントリ
@@ -204,3 +209,10 @@ issues:
 ```
 
 マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。
+
+注意点(実装時の要件):
+
+- `node` / `kaizen` / ログパスは絶対パスを使う
+- パスや slug を crontab 行へ埋め込むときは POSIX shell として quote する
+- `~/.kaizen/projects/<slug>/` は crontab 登録前に作成する
+- cron は login shell ではないため、必要な PATH はコマンド行または wrapper 側で明示する

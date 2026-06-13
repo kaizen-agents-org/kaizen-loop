@@ -89,26 +89,40 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     skipped: selection.skipped,
   };
 
+  let abortReason: string | undefined;
   try {
-    for (const issue of selection.selected) {
-      const issueSummary = await processIssue({
-        issue,
-        config,
-        runId,
-        runDir,
-        project: resolved.project,
-        github,
-        requestedAgent: options.agent,
-        trigger,
-        assumeYes: Boolean(options.assumeYes),
-        confirmDirectCommit: options.confirmDirectCommit,
-        runCommand: options.runCommand
-      });
-      summary.issues.push(issueSummary);
+    for (let index = 0; index < selection.selected.length; index += 1) {
+      const issue = selection.selected[index];
+      try {
+        const issueSummary = await processIssue({
+          issue,
+          config,
+          runId,
+          runDir,
+          project: resolved.project,
+          github,
+          requestedAgent: options.agent,
+          trigger,
+          assumeYes: Boolean(options.assumeYes),
+          confirmDirectCommit: options.confirmDirectCommit,
+          runCommand: options.runCommand
+        });
+        summary.issues.push(issueSummary);
+      } catch (error) {
+        if (!(error instanceof RunAbortError)) throw error;
+        abortReason = error.message;
+        summary.skipped.push(
+          ...selection.selected.slice(index).map((skippedIssue) => ({
+            number: skippedIssue.number,
+            reason: `run aborted: ${abortReason}`
+          }))
+        );
+        break;
+      }
     }
   } finally {
     summary.finishedAt = new Date().toISOString();
-    summary.result = resultFor(summary.issues);
+    summary.result = abortReason ? 'failed' : resultFor(summary.issues);
     await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     await updateLastRun(resolved.slug, summary);
     await lock.release();
@@ -146,7 +160,11 @@ async function processIssue(options: {
     const baselineVerify = await workspace.runVerify(options.config);
     const failedBaseline = baselineVerify.find((item) => !item.ok);
     if (failedBaseline) {
-      return await finishFailed(options, agent, attempts, `Baseline verification failed: ${failedBaseline.command}`, started, baselineVerify);
+      const reason = `Baseline verification failed: ${failedBaseline.command}`;
+      await fs.writeFile(path.join(issueDir, 'verify.log'), baselineVerify.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
+      await options.github.comment(options.issue.number, buildRunAbortComment(options.runId, reason, baselineVerify));
+      await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+      throw new RunAbortError(reason);
     }
     await workspace.sync(options.config.git.defaultBranch);
     await workspace.runSetup(options.config);
@@ -323,7 +341,15 @@ async function processIssue(options: {
     });
     return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
   } catch (error) {
+    if (error instanceof RunAbortError) throw error;
     return await finishFailed(options, agent, attempts, String(error), started);
+  }
+}
+
+class RunAbortError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunAbortError';
   }
 }
 
@@ -537,6 +563,29 @@ ${riskReason}
 Changed files: ${diff.changedFiles}
 Changed lines: ${diff.changedLines}
 `;
+}
+
+function buildRunAbortComment(
+  runId: string,
+  reason: string,
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>
+): string {
+  const verify = verifyResults.length
+    ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
+    : '- Verification commands are not configured';
+
+  return `## Kaizen Loop run aborted
+
+The run stopped before agent execution because the baseline verification failed on the clean default branch.
+This is treated as an environment or existing-repository failure, not as an Issue attempt.
+
+| | |
+|---|---|
+| Run | ${runId} |
+| Reason | ${reason} |
+
+## Baseline verification
+${verify}`;
 }
 
 async function preparePrFallback(workspace: WorkspaceManager, branch: string): Promise<void> {

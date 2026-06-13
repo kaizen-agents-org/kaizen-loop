@@ -70,6 +70,65 @@ describe('runKaizen dry-run', () => {
 });
 
 describe('runKaizen PR flow', () => {
+  it('aborts the run when baseline verification fails', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1), issue(2)]));
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'claude' && args[0] === '-p' && args[1] === 'ok') return result(command, args, workspace, 'ok');
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') {
+        return { ...result(command, args, workspace, 'not ok'), exitCode: 1, stderr: 'failed' };
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.result).toBe('failed');
+    expect('issues' in summary && summary.issues).toHaveLength(0);
+    expect('issues' in summary && summary.skipped.map((item) => item.number)).toEqual([1, 2]);
+    const issueComments = runner.mock.calls.filter(
+      ([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment')
+    );
+    expect(issueComments).toHaveLength(1);
+    expect(String(issueComments[0][1].at(-1))).not.toContain('kaizen-loop:result');
+    const claudeRuns = runner.mock.calls.filter(([command, args]) => command === 'claude' && args[0] !== '-p');
+    expect(claudeRuns).toHaveLength(0);
+  });
+
   it('switches instant direct commits to PR by default when unattended', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
@@ -265,9 +324,9 @@ describe('runKaizen PR flow', () => {
   });
 });
 
-function issue() {
+function issue(number = 1) {
   return {
-    number: 1,
+    number,
     title: 'Fix bug',
     body: '',
     labels: [{ name: 'kaizen' }],
