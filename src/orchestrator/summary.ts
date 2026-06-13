@@ -20,7 +20,7 @@ export interface RunSummary {
   project: string;
   startedAt: string;
   finishedAt: string;
-  trigger: 'manual' | 'scheduled';
+  trigger: 'manual' | 'scheduled' | 'instant' | 'watch';
   result: 'success' | 'failed' | 'partial';
   issues: RunIssueSummary[];
   skipped: Array<{ number: number; reason: string }>;

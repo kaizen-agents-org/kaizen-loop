@@ -11,6 +11,7 @@ export interface ResultCommentOptions {
   prUrl?: string;
   commit?: string;
   reason?: string;
+  trigger?: 'manual' | 'scheduled' | 'instant' | 'watch';
   maxAttempts: number;
 }
 
@@ -23,6 +24,7 @@ export function buildResultComment(options: ResultCommentOptions): string {
     issue: options.issue,
     attempt: options.attempt,
     outcome: options.outcome,
+    trigger: options.trigger,
     commit: options.commit,
     pr: options.prUrl
   };

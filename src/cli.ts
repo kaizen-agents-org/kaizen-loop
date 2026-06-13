@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { createInterface } from 'node:readline/promises';
 import { initProject } from './init/init.js';
-import { runKaizen } from './orchestrator/run.js';
+import { type DirectCommitConfirmation, runKaizen } from './orchestrator/run.js';
 import { loadRegistry, resolveProject, saveRegistry } from './config/registry.js';
 import { runCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
@@ -115,19 +116,26 @@ program
   .argument('<issue>', 'issue number')
   .option('--project <slug>', 'target project slug')
   .option('--agent <agent>', 'agent override: claude or codex')
+  .option('--yes', 'skip direct commit confirmation', false)
   .option('--json', 'print machine-readable output')
   .action(async (issue, options) => {
     const globals = program.opts<{ project?: string; json?: boolean }>();
     const json = Boolean(options.json ?? globals.json);
+    const assumeYes = Boolean(options.yes);
     const result = await runKaizen({
       cwd: process.cwd(),
       project: options.project ?? globals.project,
       scheduled: false,
+      trigger: 'instant',
       issue: Number(issue),
       dryRun: false,
       maxIssues: 1,
       agent: parseAgent(options.agent),
       json,
+      assumeYes,
+      confirmDirectCommit: !assumeYes && !json && process.stdin.isTTY && process.stdout.isTTY
+        ? promptDirectCommit
+        : undefined,
       runCommand
     });
     print(result, json);
@@ -272,6 +280,24 @@ async function resolveBody(body: string, bodyFile: string | undefined): Promise<
   }
   const fs = await import('node:fs/promises');
   return fs.readFile(bodyFile, 'utf8');
+}
+
+async function promptDirectCommit(context: DirectCommitConfirmation): Promise<'direct' | 'pr' | 'reject'> {
+  const verify = context.verifyResults.length
+    ? context.verifyResults.map((result) => `${result.command}: ${result.ok ? 'passed' : 'failed'}`).join(', ')
+    : 'not configured';
+  console.error(`Verification: ${verify}`);
+  console.error(`Risk: ${context.decision.reason}`);
+  console.error(`Diff: ${context.diff.changedLines} changed lines / ${context.diff.changedFiles} files`);
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await rl.question(`Push direct commit for issue #${context.issue.number}? [Y=push / p=PR / n=reject] `)).trim().toLowerCase();
+    if (answer === 'y' || answer === 'yes') return 'direct';
+    if (answer === 'p' || answer === 'pr') return 'pr';
+    return 'reject';
+  } finally {
+    rl.close();
+  }
 }
 
 function print(value: unknown, json = false): void {
