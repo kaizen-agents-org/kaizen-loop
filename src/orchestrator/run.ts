@@ -346,6 +346,7 @@ async function processIssue(options: {
             outcome: 'direct-commit',
             agent: agent.name,
             summary: agentSummary(agentResult),
+            notes: agentResult.notes,
             verifyResults,
             commit: direct.commit,
             reason: decision.reason,
@@ -423,6 +424,7 @@ async function finishPr(
         outcome: 'pr-created',
         agent: agent.name,
         summary: agentSummary(agentResult),
+        notes: agentResult.notes,
         verifyResults,
         prUrl: pr.url,
         reason: pr.reason,
@@ -494,6 +496,7 @@ async function finishBlocked(
       outcome: 'blocked',
       agent: agent.name,
       summary: agentSummary(agentResult),
+      notes: agentResult.notes,
       reason: agentResult.blockedReason ?? agentResult.summary,
       trigger: options.trigger,
       maxAttempts: options.config.run.maxAttemptsPerIssue
@@ -589,10 +592,12 @@ function buildPullRequestBody(
   const verify = verifyResults.length
     ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
     : '- Verification commands are not configured';
+  const notes = agentResult.notes.trim() ? `\n## Builder notes\n${agentResult.notes.trim()}\n` : '';
   return `Closes #${issue.number}
 
 ## Summary
 ${agentResult.summary}
+${notes}
 
 ## Verification
 ${verify}

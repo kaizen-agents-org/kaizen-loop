@@ -1,0 +1,74 @@
+version: 1
+
+agent:
+  default: codex
+  fallback: true
+  model:
+    claude: null
+    codex: null
+
+run:
+  maxIssuesPerNight: 1
+  issueTimeoutMinutes: 30
+  runTimeoutMinutes: 180
+  maxVerifyRetries: 1
+  maxAttemptsPerIssue: 3
+  latestStartHour: 7
+
+commands:
+  setup: "npm ci"
+  verify:
+    - "npm test"
+    - "npm run typecheck"
+    - "npm run build"
+  verifyTimeoutMinutes: 15
+
+builder:
+  # The runner must expose this command on PATH before scheduled runs are enabled.
+  # `kaizen doctor` checks this command and fails if it is unavailable.
+  command: "builder-agent"
+  resultPath: ".kaizen/builder/build-result.json"
+
+verifier:
+  enabled: true
+  # The runner must expose this command on PATH before scheduled runs are enabled.
+  # `kaizen doctor` checks this command and fails if it is unavailable.
+  command: "verifier"
+  resultPath: ".kaizen/verifier/verify-result.json"
+  timeoutMinutes: 15
+
+policy:
+  mode: pr-only
+  directCommit:
+    maxChangedLines: 0
+    maxChangedFiles: 0
+  protectedPaths:
+    - ".github/**"
+    - "**/.env*"
+    - "**/secrets/**"
+    - "**/*migration*/**"
+    - ".kaizen/**"
+    - "src/config/**"
+    - "src/orchestrator/**"
+    - "src/github/**"
+  forbiddenPaths:
+    - "**/.git/**"
+
+git:
+  defaultBranch: main
+  branchPrefix: "kaizen/"
+  commitMessageFormat: "kaizen: {summary} (#{issue})"
+
+instant:
+  unattendedMode: pr
+
+report:
+  notification: true
+  issueComments: true
+
+issues:
+  label: "kaizen"
+  priorityOrder:
+    - "kaizen:P0"
+    - "kaizen:P1"
+    - "kaizen:P2"

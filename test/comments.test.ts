@@ -17,4 +17,20 @@ describe('result comments', () => {
     expect(body).toContain('<!-- kaizen-loop:result');
     expect(countAttempts([{ body }, { body: 'not a marker' }])).toBe(1);
   });
+
+  it('surfaces builder notes when present', () => {
+    const body = buildResultComment({
+      runId: '2026-06-12T02-00-00Z',
+      issue: 42,
+      attempt: 1,
+      outcome: 'pr-created',
+      agent: 'codex',
+      summary: 'summary',
+      notes: 'Protected path changed: .github/workflows/ci.yml',
+      maxAttempts: 3
+    });
+
+    expect(body).toContain('### Notes');
+    expect(body).toContain('Protected path changed');
+  });
 });

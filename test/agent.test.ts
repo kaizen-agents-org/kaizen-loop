@@ -4,6 +4,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BuilderAgentAdapter } from '../src/agents/builder.js';
 import { parseAgentResult } from '../src/agents/claude.js';
+import { buildFixPrompt } from '../src/agents/prompt.js';
+import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('parseAgentResult', () => {
@@ -44,5 +46,35 @@ describe('BuilderAgentAdapter', () => {
     expect(result.status).toBe('fixed');
     expect(result.summary).toBe('直した');
     await expect(fs.access(path.join(workspace, '.kaizen', 'builder', 'build-result.json'))).rejects.toThrow();
+  });
+});
+
+describe('buildFixPrompt', () => {
+  it('distinguishes protected paths from forbidden paths', () => {
+    const config = configSchema.parse({
+      version: 1,
+      policy: {
+        protectedPaths: ['.github/**', '.kaizen/**'],
+        forbiddenPaths: ['**/.git/**', '**/.env*']
+      }
+    });
+
+    const prompt = buildFixPrompt({
+      repo: 'o/r',
+      config,
+      attempt: 1,
+      issue: {
+        number: 42,
+        title: 'Update workflow',
+        body: 'Need a workflow update',
+        labels: [{ name: 'kaizen' }],
+        createdAt: '2026-06-13T00:00:00Z',
+        comments: []
+      }
+    });
+
+    expect(prompt).toContain('Do not modify forbidden paths: **/.git/**, **/.env*');
+    expect(prompt).toContain('Protected path changes will be reviewed by PR: .github/**, .kaizen/**');
+    expect(prompt).not.toContain('forbidden/protected path');
   });
 });

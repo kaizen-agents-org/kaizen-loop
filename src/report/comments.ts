@@ -7,6 +7,7 @@ export interface ResultCommentOptions {
   outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped';
   agent: string;
   summary: string;
+  notes?: string;
   verifyResults?: Array<{ command: string; ok: boolean }>;
   prUrl?: string;
   commit?: string;
@@ -40,6 +41,7 @@ export function buildResultComment(options: ResultCommentOptions): string {
 
 ### Summary
 ${options.summary || '(no summary)'}
+${formatNotes(options.notes)}
 
 <!-- kaizen-loop:result ${JSON.stringify(marker)} -->`;
 }
@@ -59,4 +61,9 @@ function formatOutcome(options: ResultCommentOptions): string {
   if (options.outcome === 'blocked') return 'Blocked; needs human input';
   if (options.outcome === 'skipped') return 'Skipped';
   return 'Failed';
+}
+
+function formatNotes(notes: string | undefined): string {
+  const trimmed = notes?.trim();
+  return trimmed ? `\n### Notes\n${trimmed}\n` : '';
 }
