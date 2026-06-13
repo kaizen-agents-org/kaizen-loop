@@ -155,9 +155,15 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
       if (command === 'gh') return result(command, args, repo, '');
-      if (command === 'claude' && args[0] === '-p' && args[1] === 'ok') return result(command, args, workspace, 'ok');
-      if (command === 'claude') {
-        return result(command, args, workspace, JSON.stringify({ result: '```json\n{"status":"fixed","summary":"直した","notes":""}\n```' }));
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
+        return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
@@ -180,7 +186,7 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary.trigger).toBe('instant');
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
-    expect('issues' in summary && summary.issues[0].reason).toContain('Instant direct commit switched to PR');
+    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier approved');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
     expect(gitCommands).not.toContain('push origin main');
@@ -197,7 +203,9 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }).replace('unattendedMode: pr', 'unattendedMode: reject')
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+        .replace('unattendedMode: pr', 'unattendedMode: reject')
+        .replace('verifier:\n  enabled: true', 'verifier:\n  enabled: false')
     );
     await saveRegistry({
       version: 1,
@@ -216,9 +224,10 @@ describe('runKaizen PR flow', () => {
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
       if (command === 'gh') return result(command, args, repo, '');
-      if (command === 'claude' && args[0] === '-p' && args[1] === 'ok') return result(command, args, workspace, 'ok');
-      if (command === 'claude') {
-        return result(command, args, workspace, JSON.stringify({ result: '```json\n{"status":"fixed","summary":"直した","notes":""}\n```' }));
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        return result(command, args, workspace, 'built');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
@@ -245,6 +254,83 @@ describe('runKaizen PR flow', () => {
     expect(ghCommands.some((command) => command.startsWith('pr create'))).toBe(false);
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('push'))).toBe(false);
+  });
+
+  it('returns rejected verifier results to the builder before creating a PR', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }).replace('maxVerifyRetries: 2', 'maxVerifyRetries: 1')
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let builderRuns = 0;
+    let verifierRuns = 0;
+    const builderPrompts: string[] = [];
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue()]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        builderRuns += 1;
+        builderPrompts.push(String(options?.input ?? ''));
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: `直した${builderRuns}`, notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier-agent') {
+        verifierRuns += 1;
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
+          status: verifierRuns === 1 ? 'rejected' : 'approved',
+          summary: verifierRuns === 1 ? '不足あり' : '確認した',
+          notes: verifierRuns === 1 ? 'テストを追加してください' : ''
+        });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect(builderRuns).toBe(2);
+    expect(verifierRuns).toBe(2);
+    expect(builderPrompts[1]).toContain('Verifier rejected');
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier approved');
   });
 
   it('commits verifier-generated changes before pushing the branch', async () => {
@@ -281,14 +367,20 @@ describe('runKaizen PR flow', () => {
         return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
       }
       if (command === 'gh') return result(command, args, repo, '');
-      if (command === 'claude' && args[0] === '-p' && args[1] === 'ok') return result(command, args, workspace, 'ok');
-      if (command === 'claude') {
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
         return result(
           command,
           args,
           workspace,
-          JSON.stringify({ result: '```json\n{"status":"fixed","summary":"直した","notes":""}\n```' })
+          'built'
         );
+      }
+      if (command === 'verifier-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
+        return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') {
@@ -345,4 +437,9 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
     stderr: '',
     durationMs: 1
   };
+}
+
+async function writeJsonResult(filePath: unknown, payload: unknown) {
+  if (typeof filePath !== 'string') throw new Error('missing result path');
+  await fs.writeFile(filePath, JSON.stringify(payload));
 }

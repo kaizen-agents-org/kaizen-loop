@@ -39,7 +39,7 @@ export function defaultConfigYaml(options: {
       maxIssuesPerNight: 3,
       issueTimeoutMinutes: 30,
       runTimeoutMinutes: 240,
-      maxVerifyRetries: 0,
+      maxVerifyRetries: 2,
       maxAttemptsPerIssue: 3,
       latestStartHour: 7
     },
@@ -47,6 +47,16 @@ export function defaultConfigYaml(options: {
       setup: options.setup,
       verify: options.verify,
       verifyTimeoutMinutes: 15
+    },
+    builder: {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json'
+    },
+    verifier: {
+      enabled: true,
+      command: 'verifier-agent',
+      resultPath: '.kaizen/verifier/verify-result.json',
+      timeoutMinutes: 15
     },
     policy: {
       mode: 'hybrid',

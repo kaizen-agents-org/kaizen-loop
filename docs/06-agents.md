@@ -1,6 +1,6 @@
 # 06. エージェントアダプタ仕様
 
-メンテナンスエージェントとして **Claude Code** と **Codex CLI** の両方をサポートする。オーケストレータからは共通インターフェース(`AgentAdapter`、→ [01-architecture.md](./01-architecture.md) §2.3)越しに扱い、CLI ごとの差異はアダプタ内に閉じ込める。
+メンテナンスエージェントは **builder-agent** 経由で呼び出す。Kaizen Loop は Claude Code / Codex CLI を直接起動せず、オーケストレータからは `BuilderAgentAdapter` だけを実行する。Claude / Codex の選択情報は builder-agent への希望バックエンドとして渡す。
 
 ## 1. 選択ロジック
 
@@ -9,47 +9,47 @@
 1. Issue ラベル `kaizen:agent:claude` / `kaizen:agent:codex`
 2. `kaizen run --agent` オプション
 3. 設定 `agent.default`
-4. `agent.fallback: true` のとき、上記が利用不可なら他方へフォールバック(その旨を Issue コメントと `summary.json` に記録)
 
-`isAvailable()` の判定: CLI バイナリが PATH に存在し、かつ認証済みであること(`claude` は `claude -p "ok" --max-turns 1` 相当の軽量疎通、`codex` は `codex login status` 相当。実装時に各 CLI の最新の確認手段に追従する)。
+この選択は `KAIZEN_PREFERRED_AGENT` として builder-agent に渡す。実際のフォールバック可否やモデル選択は builder-agent 側の責務。
+
+`isAvailable()` の判定: `builder.command` に指定されたコマンドが PATH に存在し、軽量疎通(`--version`)できること。
 
 ## 2. アダプタごとの実行仕様
 
 > **注意**: 各 CLI のフラグは変化が速い。以下は設計時点の想定であり、実装時には最新ドキュメントに追従する。フラグの組み立てはアダプタ内の 1 関数に集約し、変更に強くする。
 
-### 2.1 ClaudeCodeAdapter
+### 2.1 BuilderAgentAdapter
 
 ```sh
-cd <workspaceDir> && claude -p "<prompt>" \
-  --output-format json \
-  --permission-mode acceptEdits \
-  --allowedTools "Bash(git add:*) Bash(git commit:*) Bash(npm:*) Read Write Edit Glob Grep" \
-  [--model <agent.model.claude>]
+cd <workspaceDir> && builder-agent < prompt
 ```
 
-- `--output-format json` の `result` フィールドから最終応答を取得し、出力契約(§4)の JSON を抽出する
-- **push・PR 作成・gh 操作はツール許可に含めない**(反映はオーケストレータの責務。エージェントには物理的に不可能にする)
-- ワークスペースは隔離クローンなので `acceptEdits` で十分。`bypassPermissions` は使わない(Bash 全許可を避ける)
+- プロンプトは stdin で渡す
+- builder-agent は `.kaizen/builder/build-result.json`(設定 `builder.resultPath`)へ構造化結果を書く
+- Kaizen Loop は stdout の自己申告ではなく、`build-result.json` を読み取って `AgentResult` に変換する
+- `KAIZEN_BUILD_RESULT_PATH`、`KAIZEN_WORKSPACE_DIR`、`KAIZEN_PREFERRED_AGENT`、必要なら `KAIZEN_AGENT_MODEL` を環境変数として渡す
+- **push・PR 作成・gh 操作は builder-agent に任せない**。反映はオーケストレータの責務
 
-### 2.2 CodexAdapter
+### 2.2 VerifierAgentAdapter
+
+機械的検証(`commands.verify`)がすべて成功したあと、verifier-agent を呼び出す。
 
 ```sh
-cd <workspaceDir> && codex exec "<prompt>" \
-  --sandbox workspace-write \
-  --json \
-  [--model <agent.model.codex>]
+cd <workspaceDir> && verifier-agent < prompt
 ```
 
-- `--sandbox workspace-write` でワークスペース外への書き込みとネットワークを制限する
-- JSON イベントストリームから最終メッセージを取得し、出力契約の JSON を抽出する
-- Codex はデフォルトでコミットを行わない場合があるため、プロンプトでコミットまでを明示的に指示し、未コミットならオーケストレータが回収コミットする(→ [04-nightly-pipeline.md](./04-nightly-pipeline.md) §4)
+- verifier-agent は `verifier.resultPath` へ `{ "status": "approved" | "pr_only" | "rejected", ... }` を書く。stdout の最後の JSON もフォールバックとして読む
+- `approved` / `pr_only` は PR 作成へ進む。verifier 有効時は直接コミット判定へ進まない
+- `rejected` は理由を次の builder-agent プロンプトへ渡し、`run.maxVerifyRetries` の範囲で再修正させる
+- `error` / 結果ファイルなしは当該 Issue の失敗扱い
 
 ### 2.3 共通の実行制御
 
 - 作業ディレクトリ: 必ずワークスペース(隔離クローン)
 - タイムアウト: `issueTimeoutMinutes`。超過時はプロセスグループごと SIGTERM → 10 秒後 SIGKILL
 - 環境変数: 最小限に絞る(PATH、HOME、各 CLI の認証に必要なもののみ)。ターゲットプロジェクトの `.env` は**渡さない**
-- 生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/agent.log` に保存
+- builder-agent の生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/agent.log` に保存
+- verifier-agent の生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/verifier.log` に保存
 
 ## 3. プロンプト契約(修正依頼)
 
@@ -109,13 +109,21 @@ cd <workspaceDir> && codex exec "<prompt>" \
 
 ## 4. 出力契約のパース
 
-1. エージェントの最終応答から最後の JSON コードブロックを抽出してパース
-2. パース失敗 / `status` 欠落の場合: ワークスペースの実際の diff を確認し、
-   - diff があり検証が通る → `status: "fixed"`, `summary: "(エージェント報告のパースに失敗。diff から自動生成)"` として続行(**実際のコードの状態を正とする**)
-   - diff がない → `error` 扱い(失敗処理へ)
-3. `status` と実際の diff が矛盾する場合(`fixed` なのに diff なし等)も実際の状態を正とする
+builder-agent の結果は `.kaizen/builder/build-result.json` から読む。
 
-## 5. エージェント間の公平性と比較
+```json
+{
+  "status": "fixed",
+  "summary": "何をどう直したか。日本語で 3 行以内",
+  "notes": "",
+  "blockedReason": ""
+}
+```
 
-- どちらのアダプタにも同一のプロンプト契約・制約・検証を適用する
-- `summary.json` にエージェント名を記録するため、`kaizen status --metrics` でエージェント別の成功率・所要時間を比較できる(ドッグフーディングの一環として、どちらが自プロジェクトに向くかをデータで判断する)
+`status` は `fixed` / `partial` / `blocked`。結果ファイルがない、またはパースできない場合は `error` 扱いにする。
+
+## 5. バックエンド比較
+
+- Kaizen Loop 側のアダプタは builder-agent に固定する
+- Claude / Codex の比較は `KAIZEN_PREFERRED_AGENT` と builder-agent 側の実行記録で行う
+- `summary.json` の `agent` は `builder` を記録する

@@ -91,10 +91,11 @@ git switch -c kaizen/issue-<N>-<title-slug>
 
 ## 4. エージェント実行
 
-選択したアダプタ([06-agents.md](./06-agents.md))に修正を依頼する。
+builder-agent adapter([06-agents.md](./06-agents.md))に修正を依頼する。Kaizen Loop は Claude/Codex CLI を直接起動しない。
 
 - プロンプトには Issue 本文・コメント・制約(保護パス・禁止事項)・出力契約を含める(プロンプト全文仕様は 06 §3)
 - タイムアウト `issueTimeoutMinutes`(超過時はプロセスツリーごと SIGKILL → 失敗処理へ)
+- builder-agent は `.kaizen/builder/build-result.json` に結果を書く。Kaizen Loop はこのファイルを読んで結果を判定する
 - エージェントは**コミットまで行う**(コミットメッセージ規約はプロンプトで指示)。push は絶対にさせない(オーケストレータの責務)
 
 ### エージェント実行後の機械検査
@@ -111,10 +112,21 @@ git switch -c kaizen/issue-<N>-<title-slug>
 
 `commands.verify` を上から順に実行(各コマンド `verifyTimeoutMinutes` 上限)。
 
-- **全部成功** → リスク判定へ
+- **全部成功** → verifier step へ
 - **失敗** → 失敗したコマンドの stdout/stderr(末尾 200 行)をエージェントへのフィードバックプロンプトに添えて再修正を依頼。`maxVerifyRetries` 回まで。使い切ったら失敗処理へ
 
 > 検証コマンドが未設定のプロジェクトでは直接コミットは常に不許可(強制 PR)。→ [03-config-spec.md](./03-config-spec.md) §1
+
+### verifier step
+
+`verifier.enabled: true` のとき、機械的検証が通ったあとに verifier-agent を呼ぶ。
+
+- `approved` → PR 作成へ進む
+- `pr_only` → PR 作成へ進む
+- `rejected` → 理由を builder-agent へ返して再修正させる。`maxVerifyRetries` 回まで。使い切ったら失敗処理へ
+- verifier-agent の失敗、結果ファイルなし、パース失敗 → 当該 Issue を失敗処理へ
+
+verifier 有効時は直接コミット判定へ進まない。人間レビューのため常に PR を作成する。
 
 ## 6. リスク判定(ハイブリッドの中核)
 
@@ -192,7 +204,7 @@ gh pr create --base <defaultBranch> --head kaizen/issue-<N>-<slug> \
 |---|---|
 | 結果 | ✅ 修正 → main へ直接コミット (`a1b2c3d`) |
 | 判定理由 | 変更 38 行 / 2 ファイル ≤ 上限 (150 行 / 5 ファイル) |
-| エージェント | claude (試行 1/3) |
+| エージェント | builder (試行 1/3) |
 | 検証 | `npm test` ✅ / `npm run lint` ✅ |
 
 ### 修正サマリ

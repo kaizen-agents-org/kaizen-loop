@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { ClaudeCodeAdapter } from '../agents/claude.js';
-import { CodexAdapter } from '../agents/codex.js';
+import { BuilderAgentAdapter } from '../agents/builder.js';
+import { VerifierAgentAdapter, type VerifierResult } from '../agents/verifier.js';
 import type { AgentAdapter, AgentResult } from '../agents/types.js';
-import { buildFixPrompt } from '../agents/prompt.js';
+import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
 import type { KaizenConfig } from '../config/schema.js';
@@ -148,7 +148,9 @@ async function processIssue(options: {
   const issueDir = path.join(options.runDir, `issue-${options.issue.number}`);
   await fs.mkdir(issueDir, { recursive: true });
   const attempts = countAttempts(options.issue.comments ?? []) + 1;
-  const agent = await selectAgent(options.config, options.issue, options.requestedAgent, options.runCommand);
+  const preferredBackend = selectPreferredBackend(options.config, options.issue, options.requestedAgent);
+  const agent = await selectAgent(options.config, options.runCommand);
+  const verifier = options.config.verifier.enabled ? new VerifierAgentAdapter(options.runCommand, options.config.verifier) : undefined;
   const remoteUrl = await new GitClient(options.runCommand, options.project.localPath).remoteUrl('origin');
   const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath, remoteUrl);
 
@@ -171,6 +173,7 @@ async function processIssue(options: {
     const branch = await workspace.createIssueBranch(options.config, options.issue);
 
     let agentResult: AgentResult | undefined;
+    let verifierResult: VerifierResult | undefined;
     let verifyResults: Array<{ command: string; ok: boolean; output: string }> = [];
     let previousFailure: string | undefined;
 
@@ -186,7 +189,8 @@ async function processIssue(options: {
         workspaceDir: options.project.workspacePath,
         prompt,
         timeoutMs: options.config.run.issueTimeoutMinutes * 60_000,
-        model: modelFor(options.config, agent.name)
+        model: modelFor(options.config, preferredBackend),
+        preferredBackend
       });
       await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
 
@@ -209,11 +213,37 @@ async function processIssue(options: {
       verifyResults = await workspace.runVerify(options.config);
       await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
       const failedVerify = verifyResults.find((item) => !item.ok);
-      if (!failedVerify) break;
-      if (retry >= options.config.run.maxVerifyRetries) {
-        return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
+      if (failedVerify) {
+        if (retry >= options.config.run.maxVerifyRetries) {
+          return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
+        }
+        previousFailure = `Verification failed: ${failedVerify.command}\n\n${tail(failedVerify.output, 200)}`;
+        continue;
       }
-      previousFailure = `Verification failed: ${failedVerify.command}\n\n${tail(failedVerify.output, 200)}`;
+
+      if (!verifier) break;
+
+      const verifierDiff = await workspace.collectDiffStats(options.config);
+      verifierResult = await verifier.run({
+        workspaceDir: options.project.workspacePath,
+        prompt: buildVerifierPrompt({
+          repo: options.project.repo,
+          issue: options.issue,
+          agentResult,
+          verifyResults,
+          diff: verifierDiff
+        })
+      });
+      await fs.appendFile(path.join(issueDir, 'verifier.log'), `\n# Verifier attempt ${retry + 1}\n${verifierResult.raw}\n`);
+
+      if (verifierResult.status === 'approved' || verifierResult.status === 'pr_only') break;
+      if (verifierResult.status === 'error' || verifierResult.status === 'timeout') {
+        return await finishFailed(options, agent, attempts, `Verifier failed: ${verifierResult.summary}`, started, verifyResults);
+      }
+      if (retry >= options.config.run.maxVerifyRetries) {
+        return await finishFailed(options, agent, attempts, verifierRejectedReason(verifierResult), started, verifyResults);
+      }
+      previousFailure = `${verifierRejectedReason(verifierResult)}\n\n${verifierResult.notes || verifierResult.raw}`;
     }
 
     if (!agentResult) {
@@ -232,6 +262,21 @@ async function processIssue(options: {
     const finalDiff = await workspace.collectDiffStats(options.config);
     if (finalDiff.forbiddenFiles.length > 0) {
       return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${finalDiff.forbiddenFiles.join(', ')}`, started, verifyResults);
+    }
+
+    if (verifierResult?.status === 'approved' || verifierResult?.status === 'pr_only') {
+      const pr = await reflectPullRequest({
+        workspace,
+        branch,
+        issue: options.issue,
+        config: options.config,
+        agentResult,
+        verifyResults,
+        diff: finalDiff,
+        github: options.github,
+        reason: verifierPrReason(verifierResult)
+      });
+      return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
     }
 
     const decision = decideReflection({
@@ -404,24 +449,19 @@ async function finishPr(
     };
 }
 
-async function selectAgent(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined, runCommand: CommandRunner): Promise<AgentAdapter> {
+async function selectAgent(config: KaizenConfig, runCommand: CommandRunner): Promise<AgentAdapter> {
+  const agent = new BuilderAgentAdapter(runCommand, config.builder);
+  await agent.isAvailable();
+  return agent;
+}
+
+function selectPreferredBackend(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined): 'claude' | 'codex' {
   const labels = labelNames(issue);
-  const selected = labels.includes('kaizen:agent:codex')
+  return labels.includes('kaizen:agent:codex')
     ? 'codex'
     : labels.includes('kaizen:agent:claude')
       ? 'claude'
       : requested ?? config.agent.default;
-  const primary = makeAgent(selected, runCommand);
-  if (await primary.isAvailable()) return primary;
-  if (config.agent.fallback) {
-    const fallback = makeAgent(selected === 'codex' ? 'claude' : 'codex', runCommand);
-    if (await fallback.isAvailable()) return fallback;
-  }
-  return primary;
-}
-
-function makeAgent(agent: 'claude' | 'codex', runCommand: CommandRunner): AgentAdapter {
-  return agent === 'codex' ? new CodexAdapter(runCommand) : new ClaudeCodeAdapter(runCommand);
 }
 
 async function commitLeftovers(workspace: WorkspaceManager, issue: GitHubIssue, agentResult: AgentResult): Promise<void> {
@@ -639,6 +679,15 @@ async function reflectPullRequest(options: {
     body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason)
   });
   return { ...pr, reason: options.reason };
+}
+
+function verifierPrReason(result: VerifierResult): string {
+  const detail = result.reason || result.summary;
+  return result.status === 'pr_only' ? `Verifier requested PR-only: ${detail}` : `Verifier approved: ${detail}`;
+}
+
+function verifierRejectedReason(result: VerifierResult): string {
+  return `Verifier rejected: ${result.reason || result.summary}`;
 }
 
 function modelFor(config: KaizenConfig, agent: 'claude' | 'codex'): string | null | undefined {

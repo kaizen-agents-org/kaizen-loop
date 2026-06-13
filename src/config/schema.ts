@@ -45,6 +45,27 @@ export const configSchema = z
       })
       .strict()
       .default({ setup: null, verify: [], verifyTimeoutMinutes: 15 }),
+    builder: z
+      .object({
+        command: z.string().default('builder-agent'),
+        resultPath: z.string().default('.kaizen/builder/build-result.json')
+      })
+      .strict()
+      .default({ command: 'builder-agent', resultPath: '.kaizen/builder/build-result.json' }),
+    verifier: z
+      .object({
+        enabled: z.boolean().default(true),
+        command: z.string().default('verifier-agent'),
+        resultPath: z.string().default('.kaizen/verifier/verify-result.json'),
+        timeoutMinutes: z.number().int().positive().default(15)
+      })
+      .strict()
+      .default({
+        enabled: true,
+        command: 'verifier-agent',
+        resultPath: '.kaizen/verifier/verify-result.json',
+        timeoutMinutes: 15
+      }),
     policy: z
       .object({
         mode: z.enum(['hybrid', 'pr-only', 'direct-only']).default('hybrid'),

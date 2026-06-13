@@ -1,5 +1,7 @@
 import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubIssue } from '../github/types.js';
+import type { DiffStats } from '../workspace/manager.js';
+import type { AgentResult } from './types.js';
 
 export function buildFixPrompt(options: {
   repo: string;
@@ -47,4 +49,56 @@ After completing the work, make your final response only this JSON in a json cod
 \`\`\`
 
 Use status "blocked" if the issue lacks information or the requested change would require modifying a forbidden/protected path.`;
+}
+
+export function buildVerifierPrompt(options: {
+  repo: string;
+  issue: GitHubIssue;
+  agentResult: AgentResult;
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>;
+  diff: DiffStats;
+}): string {
+  const verify = options.verifyResults.length
+    ? options.verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} ${result.command}`).join('\n')
+    : '- Verification commands are not configured';
+  const files = options.diff.files.length ? options.diff.files.map((file) => `- ${file}`).join('\n') : '- (no files)';
+
+  return `You are the verifier for the kaizen-loop run in "${options.repo}". Review the current workspace after the builder agent and mechanical verification have passed.
+
+# Issue #${options.issue.number}: ${options.issue.title}
+
+${options.issue.body || '(no body)'}
+
+# Builder result
+
+${options.agentResult.summary}
+
+${options.agentResult.notes || ''}
+
+# Mechanical verification
+
+${verify}
+
+# Changed files
+
+${files}
+
+# Decision rules
+
+Return "approved" when the change is correct and can proceed to PR creation.
+Return "pr_only" when the change is acceptable but should explicitly be reviewed as a PR.
+Return "rejected" when the builder must revise the change before a PR is created.
+
+# Final response
+
+After completing the review, make your final response only this JSON in a json code fence:
+
+\`\`\`json
+{
+  "status": "approved",
+  "summary": "What you verified, in Japanese, within 3 lines.",
+  "notes": "",
+  "reason": ""
+}
+\`\`\``;
 }

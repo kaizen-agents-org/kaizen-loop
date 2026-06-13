@@ -8,6 +8,8 @@ describe('configSchema', () => {
 
     expect(config.agent.default).toBe('claude');
     expect(config.commands.verify).toEqual([]);
+    expect(config.builder.resultPath).toBe('.kaizen/builder/build-result.json');
+    expect(config.verifier.enabled).toBe(true);
     expect(config.policy.mode).toBe('hybrid');
     expect(config.issues.priorityOrder).toEqual(['kaizen:P0', 'kaizen:P1', 'kaizen:P2']);
   });
