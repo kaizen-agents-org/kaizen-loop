@@ -12,7 +12,8 @@ export function buildFixPrompt(options: {
 }): string {
   const comments = options.issue.comments?.map((comment) => comment.body).join('\n\n---\n\n') || '(none)';
   const verify = options.config.commands.verify.length > 0 ? options.config.commands.verify.join(' && ') : '(not configured)';
-  const constraints = [...options.config.policy.protectedPaths, ...options.config.policy.forbiddenPaths].join(', ');
+  const protectedPaths = options.config.policy.protectedPaths.join(', ') || '(none)';
+  const forbiddenPaths = options.config.policy.forbiddenPaths.join(', ') || '(none)';
 
   return `You are the nightly maintenance agent for "${options.repo}". Fix exactly this GitHub issue.
 
@@ -28,12 +29,13 @@ ${options.previousFailure ? `## Previous failure for attempt ${options.attempt}\
 # Constraints
 
 1. Fix only this issue. Do not do unrelated refactors, formatting, or dependency updates.
-2. Do not modify these paths: ${constraints}
-3. Do not run git push, gh commands, or create pull requests.
-4. Verify with: ${verify}
-5. Respect existing project instructions such as AGENTS.md or CLAUDE.md.
-6. Commit your changes with message: kaizen: <summary> (#${options.issue.number})
-7. Add regression tests when practical.
+2. Do not modify forbidden paths: ${forbiddenPaths}
+3. Changes under protected paths are allowed only when necessary and must be called out in the final notes. Protected path changes will be reviewed by PR: ${protectedPaths}
+4. Do not run git push, gh commands, or create pull requests.
+5. Verify with: ${verify}
+6. Respect existing project instructions such as AGENTS.md or CLAUDE.md.
+7. Commit your changes with message: kaizen: <summary> (#${options.issue.number})
+8. Add regression tests when practical.
 
 # Final response
 
@@ -48,7 +50,7 @@ After completing the work, make your final response only this JSON in a json cod
 }
 \`\`\`
 
-Use status "blocked" if the issue lacks information or the requested change would require modifying a forbidden/protected path.`;
+Use status "blocked" if the issue lacks information, requires modifying a forbidden path, or requires human approval for secrets, credentials, billing, destructive data changes, or production infrastructure.`;
 }
 
 export function buildVerifierPrompt(options: {
