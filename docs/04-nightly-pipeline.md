@@ -119,12 +119,12 @@ builder-agent adapter([06-agents.md](./06-agents.md))に修正を依頼する。
 
 ### verifier step
 
-`verifier.enabled: true` のとき、機械的検証が通ったあとに verifier-agent を呼ぶ。
+`verifier.enabled: true` のとき、機械的検証が通ったあとに verifier を呼ぶ。
 
 - `approved` → PR 作成へ進む
 - `pr_only` → PR 作成へ進む
 - `rejected` → 理由を builder-agent へ返して再修正させる。`maxVerifyRetries` 回まで。使い切ったら失敗処理へ
-- verifier-agent の失敗、結果ファイルなし、パース失敗 → 当該 Issue を失敗処理へ
+- verifier の失敗、結果ファイルなし、パース失敗 → 当該 Issue を失敗処理へ
 
 verifier 有効時は直接コミット判定へ進まない。人間レビューのため常に PR を作成する。
 

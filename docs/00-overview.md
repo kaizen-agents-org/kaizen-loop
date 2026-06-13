@@ -52,7 +52,7 @@ flowchart LR
 |---|---|
 | **ターゲットプロジェクト** | Kaizen Loop を導入し、改善対象となる Git リポジトリ(GitHub リモートを持つ) |
 | **Kaizen Issue** | `kaizen` ラベルが付いた GitHub Issue。夜間メンテナンスの処理対象 |
-| **メンテナンスエージェント** | 夜間に起動し Issue を修正する builder-agent と、機械的検証後にレビューする verifier-agent |
+| **メンテナンスエージェント** | 夜間に起動し Issue を修正する builder-agent と、機械的検証後にレビューする verifier |
 | **オーケストレータ** | `kaizen run` の本体。Issue 選択・ワークスペース管理・エージェント起動・検証・反映・報告を決定論的に制御するプログラム。AI ではない |
 | **ワークスペース** | 夜間作業専用のクローン(`~/.kaizen/workspaces/<slug>/`)。開発者の作業ツリーとは完全に分離 |
 | **リスク判定** | 修正の diff・対象ファイル・ラベルから「直接コミット可否」を機械的に決めるルール(→ [04-nightly-pipeline.md](./04-nightly-pipeline.md)) |
@@ -70,7 +70,7 @@ flowchart TB
     subgraph night["夜間(ローカルマシン)"]
         SCHED["launchd / cron"] -->|"起動"| ORCH["オーケストレータ<br/>(kaizen run)"]
         ORCH -->|"Issue取得"| GH
-        ORCH -->|"プロンプト投入"| AGENT["メンテナンスエージェント<br/>(builder-agent / verifier-agent)"]
+        ORCH -->|"プロンプト投入"| AGENT["メンテナンスエージェント<br/>(builder-agent / verifier)"]
         AGENT -->|"修正"| WS["ワークスペース<br/>(専用クローン)"]
         ORCH -->|"テスト・検証"| WS
         ORCH -->|"push / PR / コメント"| GH

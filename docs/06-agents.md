@@ -32,13 +32,13 @@ cd <workspaceDir> && builder-agent < prompt
 
 ### 2.2 VerifierAgentAdapter
 
-機械的検証(`commands.verify`)がすべて成功したあと、verifier-agent を呼び出す。
+機械的検証(`commands.verify`)がすべて成功したあと、verifier を呼び出す。
 
 ```sh
-cd <workspaceDir> && verifier-agent < prompt
+cd <workspaceDir> && verifier < prompt
 ```
 
-- verifier-agent は `verifier.resultPath` へ `{ "status": "approved" | "pr_only" | "rejected", ... }` を書く。stdout の最後の JSON もフォールバックとして読む
+- verifier は `verifier.resultPath` へ `{ "status": "approved" | "pr_only" | "rejected", ... }` を書く。stdout の最後の JSON もフォールバックとして読む
 - `approved` / `pr_only` は PR 作成へ進む。verifier 有効時は直接コミット判定へ進まない
 - `rejected` は理由を次の builder-agent プロンプトへ渡し、`run.maxVerifyRetries` の範囲で再修正させる
 - `error` / 結果ファイルなしは当該 Issue の失敗扱い
@@ -49,7 +49,7 @@ cd <workspaceDir> && verifier-agent < prompt
 - タイムアウト: `issueTimeoutMinutes`。超過時はプロセスグループごと SIGTERM → 10 秒後 SIGKILL
 - 環境変数: 最小限に絞る(PATH、HOME、各 CLI の認証に必要なもののみ)。ターゲットプロジェクトの `.env` は**渡さない**
 - builder-agent の生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/agent.log` に保存
-- verifier-agent の生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/verifier.log` に保存
+- verifier の生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/verifier.log` に保存
 
 ## 3. プロンプト契約(修正依頼)
 

@@ -55,14 +55,14 @@ export const configSchema = z
     verifier: z
       .object({
         enabled: z.boolean().default(true),
-        command: z.string().default('verifier-agent'),
+        command: z.string().default('verifier'),
         resultPath: z.string().default('.kaizen/verifier/verify-result.json'),
         timeoutMinutes: z.number().int().positive().default(15)
       })
       .strict()
       .default({
         enabled: true,
-        command: 'verifier-agent',
+        command: 'verifier',
         resultPath: '.kaizen/verifier/verify-result.json',
         timeoutMinutes: 15
       }),

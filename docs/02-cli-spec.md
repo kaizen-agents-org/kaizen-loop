@@ -180,7 +180,7 @@ kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--follow]
 kaizen doctor [--project <slug>] [--repair]
 ```
 
-検査項目: git / gh / builder-agent / verifier-agent の存在、Node バージョン、設定ファイルのスキーマ妥当性、ワークスペースの整合性(origin 一致、fetch 可能か)、ロックファイルの stale 検知、スケジューラ登録と registry の整合。
+検査項目: git / gh / builder-agent / verifier の存在、Node バージョン、設定ファイルのスキーマ妥当性、ワークスペースの整合性(origin 一致、fetch 可能か)、ロックファイルの stale 検知、スケジューラ登録と registry の整合。
 
 `--repair`: 壊れたワークスペースの再クローン、stale ロックの削除、スケジューラ定義の再生成。
 
