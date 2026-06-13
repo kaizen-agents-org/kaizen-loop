@@ -12,7 +12,7 @@ flowchart TB
     C -->|あり| D["3. ワークスペース同期<br/>+ setup + ベースライン検証<br/>+ 作業ブランチ作成"]
     D -->|ベースライン成功| E["4. エージェント実行<br/>(修正)"]
     D -->|setup 失敗| X["実行全体を中断<br/>(環境問題)"]
-    D -->|ベースライン失敗| H
+    D -->|ベースライン失敗| X
     X --> Z
     E --> F["5. 検証<br/>(test / lint / build)"]
     F -->|失敗| G{リトライ<br/>≤ maxVerifyRetries?}
@@ -85,7 +85,7 @@ git switch -c kaizen/issue-<N>-<title-slug>
 
 - Issue に `kaizen:in-progress` ラベルを付与してからワークスペースを触る(他実行との排他)
 - `commands.setup` が失敗した場合は**この夜の実行全体を中断**(環境問題であり、Issue 個別の問題ではないため)
-- ベースライン検証が失敗した場合、エージェントは起動しない。Issue に失敗コメントを残して `kaizen:in-progress` を剥がし、次の Issue へ進む
+- ベースライン検証が失敗した場合、エージェントは起動しない。これは Issue 固有ではなく clean な default branch の問題なので、`kaizen:in-progress` を剥がし、機械可読 result marker なしの中断コメントを残して**この夜の実行全体を中断**する
 - ベースライン検証後に再度 reset + setup する。ベースライン検証の副作用を作業ブランチへ持ち込まないため
 - `commands.verify` が未設定の場合、ベースライン検証も修正後検証もスキップする。この場合、直接コミットは禁止される
 
