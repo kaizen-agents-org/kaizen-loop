@@ -95,17 +95,15 @@ export class GitHubClient {
   }
 
   async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {
-    const args = [
-      'issue',
-      'create',
-      '--title',
-      options.title,
-      '--body',
-      options.body
-    ];
-    if (options.labels.length > 0) args.push('--label', options.labels.join(','));
-    if (options.repo) args.push('--repo', options.repo);
-    const result = await this.gh(args);
+    let labels = options.labels;
+    let result;
+    try {
+      result = await this.gh(createIssueArgs(options, labels));
+    } catch (error) {
+      if (labels.length === 0 || !isMissingLabelError(error)) throw error;
+      labels = [];
+      result = await this.gh(createIssueArgs(options, labels));
+    }
     const number = Number(result.stdout.match(/\/issues\/(\d+)/)?.[1]);
     if (!number) throw new Error(`Could not parse created issue URL: ${result.stdout.trim()}`);
     if (options.repo) {
@@ -113,7 +111,7 @@ export class GitHubClient {
         number,
         title: options.title,
         body: options.body,
-        labels: options.labels.map((name) => ({ name })),
+        labels: labels.map((name) => ({ name })),
         createdAt: new Date().toISOString(),
         comments: [],
         url: result.stdout.trim().split(/\s+/).find((part) => part.startsWith('http')) ?? result.stdout.trim()
@@ -166,6 +164,18 @@ export class GitHubClient {
     }
     throw lastError;
   }
+}
+
+function createIssueArgs(options: { title: string; body: string; repo?: string }, labels: string[]): string[] {
+  const args = ['issue', 'create', '--title', options.title, '--body', options.body];
+  if (labels.length > 0) args.push('--label', labels.join(','));
+  if (options.repo) args.push('--repo', options.repo);
+  return args;
+}
+
+function isMissingLabelError(error: unknown): boolean {
+  const message = String(error);
+  return /label/i.test(message) && /not found|does not exist|could not resolve|missing/i.test(message);
 }
 
 function emptyResult(args: string[], cwd: string) {
