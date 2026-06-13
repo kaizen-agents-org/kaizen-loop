@@ -17,7 +17,7 @@ flowchart TB
     ORCH --> ADAPT
     ORCH --> GHC
     ORCH --> WSM
-    ADAPT -->|"headless 実行"| EXT1["builder-agent / verifier-agent"]
+    ADAPT -->|"headless 実行"| EXT1["builder-agent / verifier"]
     GHC -->|"issue / pr / label"| EXT2["GitHub"]
     WSM -->|"clone / fetch / branch"| EXT3["~/.kaizen/workspaces/&lt;slug&gt;/"]
     SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt;"| CMD
@@ -26,7 +26,7 @@ flowchart TB
 ### 設計原則
 
 1. **オーケストレータは決定論的に**: Issue 選択、リスク判定、リトライ、反映方法の決定はすべてコード(機械的ルール)で行う。AI に委ねるのは「コードを修正する」行為のみ。これにより夜間の無人実行でも挙動が予測可能になる。
-2. **外部ツールに委譲**: GitHub 操作は `gh` CLI、AI 実行は `builder-agent` / `verifier-agent` に委譲する。Claude / Codex の直接起動は builder-agent 側に閉じ込め、Kaizen Loop 自体はトークンを保持しない。
+2. **外部ツールに委譲**: GitHub 操作は `gh` CLI、AI 実行は `builder-agent` / `verifier` に委譲する。Claude / Codex の直接起動は builder-agent 側に閉じ込め、Kaizen Loop 自体はトークンを保持しない。
 3. **作業の分離**: 夜間作業は開発者の作業ツリーでは絶対に行わない(→ §3)。
 4. **状態の分離**: リポジトリにコミットする設定(チームで共有するポリシー)と、マシンローカルの状態(スケジュール、ログ、ワークスペース)を分ける(→ §4)。
 
@@ -44,14 +44,14 @@ CLI のエントリポイント。各コマンドの仕様は [02-cli-spec.md](.
 - Kaizen Issue の取得・選択(優先度ソート、上限件数)
 - ワークスペースの最新化、Issue ごとの作業ブランチ作成
 - builder-agent adapter への修正依頼(プロンプト構築・タイムアウト管理)
-- 検証コマンド(テスト・lint・ビルド)と verifier-agent の実行、リトライ制御
+- 検証コマンド(テスト・lint・ビルド)と verifier の実行、リトライ制御
 - リスク判定 → 直接コミット or PR 作成
 - Issue へのコメント・ラベル更新・クローズ
 - ナイトリーレポート(ローカル `summary.json` + ログ)の出力
 
 ### 2.3 エージェントアダプタ層
 
-builder-agent / verifier-agent のヘッドレス実行を共通インターフェースで抽象化する。詳細は [06-agents.md](./06-agents.md)。
+builder-agent / verifier のヘッドレス実行を共通インターフェースで抽象化する。詳細は [06-agents.md](./06-agents.md)。
 
 ```typescript
 interface AgentAdapter {
@@ -174,5 +174,5 @@ kaizen run --project <slug> --scheduled
 - `git` ≥ 2.30
 - `gh` CLI(`gh auth status` が通ること)
 - `builder-agent`
-- `verifier-agent`(`verifier.enabled: true` の場合)
+- `verifier`(`verifier.enabled: true` の場合)
 - Node.js ≥ 20

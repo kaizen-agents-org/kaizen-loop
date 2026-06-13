@@ -50,10 +50,10 @@ builder:
   resultPath: ".kaizen/builder/build-result.json"
 
 verifier:
-  # 機械的 verify 成功後に verifier-agent を呼ぶ
+  # 機械的 verify 成功後に verifier を呼ぶ
   enabled: true
-  command: "verifier-agent"
-  # verifier-agent の構造化結果。status は approved | pr_only | rejected
+  command: "verifier"
+  # verifier の構造化結果。status は approved | pr_only | rejected
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
 

@@ -54,7 +54,7 @@ export function defaultConfigYaml(options: {
     },
     verifier: {
       enabled: true,
-      command: 'verifier-agent',
+      command: 'verifier',
       resultPath: '.kaizen/verifier/verify-result.json',
       timeoutMinutes: 15
     },

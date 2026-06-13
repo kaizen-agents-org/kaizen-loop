@@ -160,8 +160,8 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'verifier-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
-      if (command === 'verifier-agent') {
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
@@ -299,8 +299,8 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: `直した${builderRuns}`, notes: '' });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'verifier-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
-      if (command === 'verifier-agent') {
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
         verifierRuns += 1;
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
           status: verifierRuns === 1 ? 'rejected' : 'approved',
@@ -377,8 +377,8 @@ describe('runKaizen PR flow', () => {
           'built'
         );
       }
-      if (command === 'verifier-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
-      if (command === 'verifier-agent') {
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
