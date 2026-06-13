@@ -50,6 +50,7 @@ export class CodexAdapter implements AgentAdapter {
           status: 'error',
           summary: `Codex exited with code ${result.exitCode}`,
           notes: '',
+          discoveredIssues: [],
           raw,
           durationMs: result.durationMs
         };
@@ -60,6 +61,7 @@ export class CodexAdapter implements AgentAdapter {
         status: 'error',
         summary: String(error),
         notes: '',
+        discoveredIssues: [],
         raw: String(error),
         durationMs: req.timeoutMs
       };

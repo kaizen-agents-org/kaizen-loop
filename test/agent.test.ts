@@ -13,13 +13,21 @@ describe('parseAgentResult', () => {
   it('extracts final json from claude json result', () => {
     const parsed = parseAgentResult(
       JSON.stringify({
-        result: 'done\n```json\n{"status":"fixed","summary":"直した","notes":""}\n```'
+        result:
+          'done\n```json\n{"status":"fixed","summary":"直した","notes":"","discoveredIssues":[{"title":"Verifier false positive","repo":"verifier","evidence":"verifier.log"}]}\n```'
       }),
       123
     );
 
     expect(parsed.status).toBe('fixed');
     expect(parsed.summary).toBe('直した');
+    expect(parsed.discoveredIssues).toEqual([
+      {
+        title: 'Verifier false positive',
+        repo: 'verifier',
+        evidence: 'verifier.log'
+      }
+    ]);
     expect(parsed.durationMs).toBe(123);
   });
 });
@@ -33,7 +41,12 @@ describe('BuilderAgentAdapter', () => {
       if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
       await fs.writeFile(
         options.env.KAIZEN_BUILD_RESULT_PATH,
-        JSON.stringify({ status: 'fixed', summary: '直した', notes: 'なし' })
+        JSON.stringify({
+          status: 'fixed',
+          summary: '直した',
+          notes: 'なし',
+          discoveredIssues: [{ title: '別バグ', repo: 'kaizen-loop', body: '見つけた' }]
+        })
       );
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 123 };
     };
@@ -46,6 +59,7 @@ describe('BuilderAgentAdapter', () => {
 
     expect(result.status).toBe('fixed');
     expect(result.summary).toBe('直した');
+    expect(result.discoveredIssues).toEqual([{ title: '別バグ', repo: 'kaizen-loop', body: '見つけた' }]);
     await expect(fs.access(path.join(workspace, '.kaizen', 'builder', 'build-result.json'))).rejects.toThrow();
   });
 });
@@ -143,6 +157,7 @@ describe('buildFixPrompt', () => {
 
     expect(prompt).toContain('Do not modify forbidden paths: **/.git/**, **/.env*');
     expect(prompt).toContain('Protected path changes will be reviewed by PR: .github/**, .kaizen/**');
+    expect(prompt).toContain('Add it to "discoveredIssues" in the final JSON');
     expect(prompt).not.toContain('forbidden/protected path');
   });
 });

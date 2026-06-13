@@ -29,6 +29,7 @@ cd <workspaceDir> && builder-agent < prompt
 - Kaizen Loop は stdout の自己申告ではなく、`build-result.json` を読み取って `AgentResult` に変換する
 - `KAIZEN_BUILD_RESULT_PATH`、`KAIZEN_WORKSPACE_DIR`、`KAIZEN_PREFERRED_AGENT`、必要なら `KAIZEN_AGENT_MODEL` を環境変数として渡す
 - **push・PR 作成・gh 操作は builder-agent に任せない**。反映はオーケストレータの責務
+- builder-agent が処理中に別バグを見つけた場合は、GitHub 操作をせず `discoveredIssues` に構造化して返す。重複確認・Issue 起票・元 Issue へのコメントは Kaizen Loop が行う
 
 ### 2.2 VerifierAgentAdapter
 
@@ -80,6 +81,7 @@ cd <workspaceDir> && verifier < prompt
 6. 既存のコードスタイル・規約(CLAUDE.md / AGENTS.md があれば従う)を尊重する
 7. 修正が完了したら、変更をコミットする。コミットメッセージ: `kaizen: <変更の要約> (#{number})`
 8. テストで保護できる修正には、可能な範囲で回帰テストを追加する
+9. 修正中に別バグを見つけたら、今回のスコープに広げず `discoveredIssues` に記録する
 
 # 最終報告(必須)
 
@@ -90,7 +92,17 @@ cd <workspaceDir> && verifier < prompt
   "status": "fixed" | "partial" | "blocked",
   "summary": "<何をどう直したか。日本語で 3 行以内>",
   "notes": "<レビュアーへの注意点・残課題。なければ空文字>",
-  "blockedReason": "<blocked のときのみ: 何が不足しているか>"
+  "blockedReason": "<blocked のときのみ: 何が不足しているか>",
+  "discoveredIssues": [
+    {
+      "title": "<別Issueとして起票すべきバグ名>",
+      "repo": "kaizen-loop | builder-agent | verifier | .github | owner/repo",
+      "body": "<何が起きたか>",
+      "expected": "<期待動作>",
+      "evidence": "<コマンド、ログ抜粋、ファイルパス、観測事実>",
+      "severity": "P2"
+    }
+  ]
 }
 ​```
 ```
@@ -118,11 +130,14 @@ builder-agent の結果は `.kaizen/builder/build-result.json` から読む。
   "status": "fixed",
   "summary": "何をどう直したか。日本語で 3 行以内",
   "notes": "",
-  "blockedReason": ""
+  "blockedReason": "",
+  "discoveredIssues": []
 }
 ```
 
-`status` は `fixed` / `partial` / `blocked`。結果ファイルがない、またはパースできない場合は `error` 扱いにする。
+`status` は `fixed` / `partial` / `blocked`。`discoveredIssues` は任意で、省略時は空配列として扱う。結果ファイルがない、またはパースできない場合は `error` 扱いにする。
+
+`discoveredIssues[].repo` は `kaizen-loop` / `builder-agent` / `verifier` / `.github` の短縮名、または `owner/repo` を受け付ける。未指定または不明な短縮名の場合は処理中プロジェクトのリポジトリへ起票する。起票ラベルは `kaizen` と、`severity: P0|P1|P2` がある場合の `kaizen:P*` に限定する。
 
 ## 5. バックエンド比較
 

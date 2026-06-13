@@ -75,19 +75,50 @@ export class GitHubClient {
     await this.gh(['issue', 'comment', String(issue), '--body', body]);
   }
 
-  async createIssue(options: { title: string; body: string; labels: string[] }): Promise<GitHubIssue> {
-    const result = await this.gh([
+  async findOpenIssueByTitle(options: { repo?: string; title: string }): Promise<GitHubIssue | undefined> {
+    const args = [
       'issue',
-      'create',
-      '--title',
+      'list',
+      '--state',
+      'open',
+      '--search',
       options.title,
-      '--body',
-      options.body,
-      '--label',
-      options.labels.join(',')
-    ]);
+      '--json',
+      'number,title,body,labels,createdAt,comments,url',
+      '--limit',
+      '100'
+    ];
+    if (options.repo) args.push('--repo', options.repo);
+    const result = await this.gh(args);
+    const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
+    return issues.find((issue) => issue.title.trim().toLowerCase() === options.title.trim().toLowerCase());
+  }
+
+  async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {
+    let labels = options.labels;
+    let result;
+    while (!result) {
+      try {
+        result = await this.gh(createIssueArgs(options, labels), { noRetry: true });
+      } catch (error) {
+        const nextLabels = labelsAfterMissingLabelError(labels, error);
+        if (nextLabels.length === labels.length) throw error;
+        labels = nextLabels;
+      }
+    }
     const number = Number(result.stdout.match(/\/issues\/(\d+)/)?.[1]);
     if (!number) throw new Error(`Could not parse created issue URL: ${result.stdout.trim()}`);
+    if (options.repo) {
+      return {
+        number,
+        title: options.title,
+        body: options.body,
+        labels: labels.map((name) => ({ name })),
+        createdAt: new Date().toISOString(),
+        comments: [],
+        url: result.stdout.trim().split(/\s+/).find((part) => part.startsWith('http')) ?? result.stdout.trim()
+      };
+    }
     return this.getIssue(number);
   }
 
@@ -120,9 +151,10 @@ export class GitHubClient {
     return { url, number: number ? Number(number) : undefined };
   }
 
-  private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean } = {}) {
+  private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
     let lastError: unknown;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const attempts = options.noRetry ? 1 : 3;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
         return await this.run('gh', args, { cwd: this.cwd });
       } catch (error) {
@@ -135,6 +167,27 @@ export class GitHubClient {
     }
     throw lastError;
   }
+}
+
+function createIssueArgs(options: { title: string; body: string; repo?: string }, labels: string[]): string[] {
+  const args = ['issue', 'create', '--title', options.title, '--body', options.body];
+  if (labels.length > 0) args.push('--label', labels.join(','));
+  if (options.repo) args.push('--repo', options.repo);
+  return args;
+}
+
+function isMissingLabelError(error: unknown): boolean {
+  const message = String(error);
+  return /label/i.test(message) && /not found|does not exist|could not resolve|missing/i.test(message);
+}
+
+function labelsAfterMissingLabelError(labels: string[], error: unknown): string[] {
+  if (labels.length === 0 || !isMissingLabelError(error)) return labels;
+  const message = String(error).toLowerCase();
+  const missingOptional = labels.find((label) => label !== 'kaizen' && message.includes(label.toLowerCase()));
+  if (missingOptional) return labels.filter((label) => label !== missingOptional);
+  if (labels.includes('kaizen') && labels.length > 1) return ['kaizen'];
+  return [];
 }
 
 function emptyResult(args: string[], cwd: string) {
