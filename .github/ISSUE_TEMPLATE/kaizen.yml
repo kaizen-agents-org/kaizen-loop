@@ -1,5 +1,5 @@
 name: "Kaizen improvement"
-description: "Request an automated fix or improvement through Kaizen Loop"
+description: "Request an automated fix or improvement through Kaizen Loop. The kaizen label must exist before using this form; add optional kaizen:P0/P1/P2 labels manually when priority matters."
 labels: ["kaizen"]
 body:
   - type: textarea
