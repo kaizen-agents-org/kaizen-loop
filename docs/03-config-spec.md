@@ -53,7 +53,8 @@ verifier:
   # 機械的 verify 成功後に verifier を呼ぶ
   enabled: true
   command: "verifier"
-  # verifier の構造化結果。status は approved | pr_only | rejected
+  # verifier の構造化結果。status は open_pr | open_pr_with_warning | block_pr | needs_context
+  # (旧 approved | pr_only | rejected も当面受け付ける)
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
 
@@ -104,7 +105,7 @@ issues:
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
-- `verifier.enabled: true` の場合、`approved` / `pr_only` は常に PR 作成へ進む。直接コミット判定は行わない
+- `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
 
 ## 2. ローカル登録簿 `~/.kaizen/registry.json`
 

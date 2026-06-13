@@ -4,9 +4,28 @@ import { z } from 'zod';
 import type { CommandRunner } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
 
+/**
+ * Conservative PR-creation gate statuses. The verifier decides whether opening a
+ * PR is acceptable, it does not imply merge approval.
+ * - `open_pr`: change is acceptable, open a ready-for-review PR.
+ * - `open_pr_with_warning`: open a PR but surface a caveat for the human reviewer.
+ * - `block_pr`: do not open a PR yet; return the reason to the builder to revise.
+ * - `needs_context`: verifier lacks information to decide; return to the builder.
+ */
+export type VerifierGateStatus = 'open_pr' | 'open_pr_with_warning' | 'block_pr' | 'needs_context';
+
+/** Legacy statuses kept for temporary backward compatibility with older verifier payloads. */
+const legacyStatusMap: Record<string, VerifierGateStatus> = {
+  approved: 'open_pr',
+  pr_only: 'open_pr_with_warning',
+  rejected: 'block_pr'
+};
+
 const verifierPayloadSchema = z
   .object({
-    status: z.enum(['approved', 'pr_only', 'rejected']),
+    status: z
+      .enum(['open_pr', 'open_pr_with_warning', 'block_pr', 'needs_context', 'approved', 'pr_only', 'rejected'])
+      .transform((status) => legacyStatusMap[status] ?? (status as VerifierGateStatus)),
     summary: z.string().default(''),
     notes: z.string().default(''),
     reason: z.string().optional()
@@ -25,7 +44,7 @@ export interface VerifierRequest {
 }
 
 export interface VerifierResult {
-  status: 'approved' | 'pr_only' | 'rejected' | 'error' | 'timeout';
+  status: VerifierGateStatus | 'error' | 'timeout';
   summary: string;
   notes: string;
   reason?: string;

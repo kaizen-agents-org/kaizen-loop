@@ -236,14 +236,14 @@ async function processIssue(options: {
       });
       await fs.appendFile(path.join(issueDir, 'verifier.log'), `\n# Verifier attempt ${retry + 1}\n${verifierResult.raw}\n`);
 
-      if (verifierResult.status === 'approved' || verifierResult.status === 'pr_only') break;
+      if (verifierResult.status === 'open_pr' || verifierResult.status === 'open_pr_with_warning') break;
       if (verifierResult.status === 'error' || verifierResult.status === 'timeout') {
         return await finishFailed(options, agent, attempts, `Verifier failed: ${verifierResult.summary}`, started, verifyResults);
       }
       if (retry >= options.config.run.maxVerifyRetries) {
-        return await finishFailed(options, agent, attempts, verifierRejectedReason(verifierResult), started, verifyResults);
+        return await finishFailed(options, agent, attempts, verifierBlockedReason(verifierResult), started, verifyResults);
       }
-      previousFailure = `${verifierRejectedReason(verifierResult)}\n\n${verifierResult.notes || verifierResult.raw}`;
+      previousFailure = `${verifierBlockedReason(verifierResult)}\n\n${verifierResult.notes || verifierResult.raw}`;
     }
 
     if (!agentResult) {
@@ -264,7 +264,7 @@ async function processIssue(options: {
       return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${finalDiff.forbiddenFiles.join(', ')}`, started, verifyResults);
     }
 
-    if (verifierResult?.status === 'approved' || verifierResult?.status === 'pr_only') {
+    if (verifierResult?.status === 'open_pr' || verifierResult?.status === 'open_pr_with_warning') {
       const pr = await reflectPullRequest({
         workspace,
         branch,
@@ -688,11 +688,16 @@ async function reflectPullRequest(options: {
 
 function verifierPrReason(result: VerifierResult): string {
   const detail = result.reason || result.summary;
-  return result.status === 'pr_only' ? `Verifier requested PR-only: ${detail}` : `Verifier approved: ${detail}`;
+  return result.status === 'open_pr_with_warning'
+    ? `Verifier cleared PR with warning: ${detail}`
+    : `Verifier cleared PR: ${detail}`;
 }
 
-function verifierRejectedReason(result: VerifierResult): string {
-  return `Verifier rejected: ${result.reason || result.summary}`;
+function verifierBlockedReason(result: VerifierResult): string {
+  const detail = result.reason || result.summary;
+  return result.status === 'needs_context'
+    ? `Verifier needs context: ${detail}`
+    : `Verifier blocked PR: ${detail}`;
 }
 
 function modelFor(config: KaizenConfig, agent: 'claude' | 'codex'): string | null | undefined {

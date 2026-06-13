@@ -121,12 +121,16 @@ builder-agent adapter([06-agents.md](./06-agents.md))に修正を依頼する。
 
 `verifier.enabled: true` のとき、機械的検証が通ったあとに verifier を呼ぶ。
 
-- `approved` → PR 作成へ進む
-- `pr_only` → PR 作成へ進む
-- `rejected` → 理由を builder-agent へ返して再修正させる。`maxVerifyRetries` 回まで。使い切ったら失敗処理へ
+verifier は「PR を作って良いか」だけを判断する保守的なゲート。マージ承認ではない。
+
+- `open_pr` → PR 作成へ進む
+- `open_pr_with_warning` → 警告を添えて PR 作成へ進む(理由は PR とコメントに残る)
+- `block_pr` → 理由を builder-agent へ返して再修正させる。`maxVerifyRetries` 回まで。使い切ったら失敗処理へ
+- `needs_context` → 不足情報を builder-agent へ返して再試行させる。`maxVerifyRetries` 回まで。使い切ったら失敗処理へ
+- 互換性のため旧 `approved` / `pr_only` / `rejected` も当面受け付ける(それぞれ `open_pr` / `open_pr_with_warning` / `block_pr` 扱い)
 - verifier の失敗、結果ファイルなし、パース失敗 → 当該 Issue を失敗処理へ
 
-verifier 有効時は直接コミット判定へ進まない。人間レビューのため常に PR を作成する。
+verifier 有効時は直接コミット判定へ進まない。人間レビューのため常に ready-for-review の PR を作成する(`--draft` は付けない)。
 
 ## 6. リスク判定(ハイブリッドの中核)
 

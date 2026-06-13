@@ -166,7 +166,7 @@ describe('runKaizen PR flow', () => {
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
-        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
@@ -190,7 +190,9 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary.trigger).toBe('instant');
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
-    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier approved');
+    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier cleared PR');
+    const prCreateArgs = runner.mock.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
+    expect(prCreateArgs?.[1]).not.toContain('--draft');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
     expect(gitCommands).not.toContain('push origin main');
@@ -264,7 +266,7 @@ describe('runKaizen PR flow', () => {
     expect(gitCommands.some((command) => command.startsWith('push'))).toBe(false);
   });
 
-  it('returns rejected verifier results to the builder before creating a PR', async () => {
+  it('returns block_pr verifier results to the builder before creating a PR', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -311,7 +313,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'verifier') {
         verifierRuns += 1;
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
-          status: verifierRuns === 1 ? 'rejected' : 'approved',
+          status: verifierRuns === 1 ? 'block_pr' : 'open_pr',
           summary: verifierRuns === 1 ? '不足あり' : '確認した',
           notes: verifierRuns === 1 ? 'テストを追加してください' : ''
         });
@@ -336,9 +338,69 @@ describe('runKaizen PR flow', () => {
 
     expect(builderRuns).toBe(2);
     expect(verifierRuns).toBe(2);
-    expect(builderPrompts[1]).toContain('Verifier rejected');
+    expect(builderPrompts[1]).toContain('Verifier blocked PR');
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
-    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier approved');
+    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier cleared PR');
+  });
+
+  it('accepts legacy approved verifier payloads as open_pr', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, JSON.stringify([issue()]));
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier cleared PR');
   });
 
   it('commits verifier-generated changes before pushing the branch', async () => {
@@ -387,7 +449,7 @@ describe('runKaizen PR flow', () => {
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
-        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
