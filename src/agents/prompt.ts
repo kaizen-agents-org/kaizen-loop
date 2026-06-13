@@ -36,6 +36,7 @@ ${options.previousFailure ? `## Previous failure for attempt ${options.attempt}\
 6. Respect existing project instructions such as AGENTS.md or CLAUDE.md.
 7. Commit your changes with message: kaizen: <summary> (#${options.issue.number})
 8. Add regression tests when practical.
+9. If you discover a separate Kaizen Agents bug or unrelated repository bug while working, do not file it yourself and do not expand this fix. Add it to "discoveredIssues" in the final JSON so kaizen-loop can route and file a follow-up issue.
 
 # Final response
 
@@ -46,11 +47,21 @@ After completing the work, make your final response only this JSON in a json cod
   "status": "fixed",
   "summary": "What changed, in Japanese, within 3 lines.",
   "notes": "",
-  "blockedReason": ""
+  "blockedReason": "",
+  "discoveredIssues": [
+    {
+      "title": "Short bug title",
+      "repo": "kaizen-loop | builder-agent | verifier | .github | owner/repo",
+      "body": "What failed.",
+      "expected": "What should happen instead.",
+      "evidence": "Command, log excerpt, file path, or observed behavior.",
+      "severity": "P2"
+    }
+  ]
 }
 \`\`\`
 
-Use status "blocked" if the issue lacks information, requires modifying a forbidden path, or requires human approval for secrets, credentials, billing, destructive data changes, or production infrastructure.`;
+Use an empty discoveredIssues array when you did not find a separate follow-up bug. Use status "blocked" if the issue lacks information, requires modifying a forbidden path, or requires human approval for secrets, credentials, billing, destructive data changes, or production infrastructure.`;
 }
 
 export function buildVerifierPrompt(options: {

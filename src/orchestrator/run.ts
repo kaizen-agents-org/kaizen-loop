@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BuilderAgentAdapter } from '../agents/builder.js';
 import { VerifierAgentAdapter, type VerifierResult } from '../agents/verifier.js';
-import type { AgentAdapter, AgentResult } from '../agents/types.js';
+import type { AgentAdapter, AgentResult, DiscoveredIssue } from '../agents/types.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
@@ -176,6 +176,7 @@ async function processIssue(options: {
     let verifierResult: VerifierResult | undefined;
     let verifyResults: Array<{ command: string; ok: boolean; output: string }> = [];
     let previousFailure: string | undefined;
+    const filedDiscoveredIssues = new Set<string>();
 
     for (let retry = 0; retry <= options.config.run.maxVerifyRetries; retry += 1) {
       const prompt = buildFixPrompt({
@@ -193,6 +194,15 @@ async function processIssue(options: {
         preferredBackend
       });
       await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
+      await fileDiscoveredIssues({
+        sourceIssue: options.issue,
+        projectRepo: options.project.repo,
+        github: options.github,
+        runId: options.runId,
+        issueDir,
+        discoveredIssues: agentResult.discoveredIssues,
+        filedKeys: filedDiscoveredIssues
+      });
 
       if (agentResult.status === 'blocked') {
         return await finishBlocked(options, agent, attempts, agentResult, started);
@@ -693,6 +703,125 @@ function verifierPrReason(result: VerifierResult): string {
 
 function verifierRejectedReason(result: VerifierResult): string {
   return `Verifier rejected: ${result.reason || result.summary}`;
+}
+
+async function fileDiscoveredIssues(options: {
+  sourceIssue: GitHubIssue;
+  projectRepo: string;
+  github: GitHubClient;
+  runId: string;
+  issueDir: string;
+  discoveredIssues: DiscoveredIssue[];
+  filedKeys: Set<string>;
+}): Promise<void> {
+  const filed: Array<{ title: string; repo: string; url?: string; duplicate?: boolean }> = [];
+
+  for (const issue of options.discoveredIssues) {
+    const repo = resolveDiscoveredIssueRepo(issue.repo, options.projectRepo);
+    const key = `${repo}\n${issue.title.trim().toLowerCase()}`;
+    if (options.filedKeys.has(key)) continue;
+    options.filedKeys.add(key);
+
+    try {
+      const existing = await options.github.findOpenIssueByTitle({ repo, title: issue.title });
+      if (existing) {
+        filed.push({ title: issue.title, repo, url: existing.url, duplicate: true });
+        continue;
+      }
+      const created = await options.github.createIssue({
+        repo,
+        title: issue.title,
+        body: buildDiscoveredIssueBody({
+          issue,
+          repo,
+          sourceIssue: options.sourceIssue,
+          sourceRepo: options.projectRepo,
+          runId: options.runId
+        }),
+        labels: labelsForDiscoveredIssue(issue)
+      });
+      filed.push({ title: issue.title, repo, url: created.url });
+    } catch (error) {
+      await fs.appendFile(
+        path.join(options.issueDir, 'discovered-issues.log'),
+        `Failed to file discovered issue "${issue.title}" in ${repo}: ${String(error)}\n`
+      );
+    }
+  }
+
+  if (filed.length === 0) return;
+
+  try {
+    await options.github.comment(
+      options.sourceIssue.number,
+      `## Kaizen discovered follow-up issue${filed.length === 1 ? '' : 's'}
+
+${filed.map((item) => `- ${item.duplicate ? 'Existing' : 'Created'} in \`${item.repo}\`: ${item.url ?? item.title}`).join('\n')}
+
+These were reported by the builder agent as separate bugs and filed by kaizen-loop.`
+    );
+  } catch (error) {
+    await fs.appendFile(
+      path.join(options.issueDir, 'discovered-issues.log'),
+      `Failed to comment about discovered issue filing on source issue #${options.sourceIssue.number}: ${String(error)}\n`
+    );
+  }
+}
+
+function buildDiscoveredIssueBody(options: {
+  issue: DiscoveredIssue;
+  repo: string;
+  sourceIssue: GitHubIssue;
+  sourceRepo: string;
+  runId: string;
+}): string {
+  const body = options.issue.body?.trim() || 'A separate bug was discovered while processing a Kaizen issue.';
+  const evidence = options.issue.evidence?.trim() || 'No additional evidence was provided by the builder agent.';
+  const expected = options.issue.expected?.trim() || 'The behavior should be investigated and corrected.';
+
+  return `## Bug
+${body}
+
+## Evidence
+${evidence}
+
+## Expected
+${expected}
+
+## Routing
+Filed in \`${options.repo}\` because the builder agent reported this target while processing \`${options.sourceRepo}#${options.sourceIssue.number}\`.
+
+## Notes
+- Source issue: ${options.sourceIssue.url ?? `${options.sourceRepo}#${options.sourceIssue.number}`}
+- Source title: ${options.sourceIssue.title}
+- Kaizen run: ${options.runId}
+${options.issue.severity ? `- Reported severity: ${options.issue.severity}` : ''}`;
+}
+
+function resolveDiscoveredIssueRepo(repo: string | undefined, fallbackRepo: string): string {
+  if (!repo?.trim()) return fallbackRepo;
+  const normalized = repo.trim();
+  if (normalized.includes('/')) return normalized;
+  const key = normalized.toLowerCase();
+  const aliases: Record<string, string> = {
+    'kaizen-loop': 'kaizen-agents-org/kaizen-loop',
+    'builder-agent': 'kaizen-agents-org/builder-agent',
+    verifier: 'kaizen-agents-org/verifier',
+    '.github': 'kaizen-agents-org/.github',
+    github: 'kaizen-agents-org/.github'
+  };
+  return aliases[key] ?? fallbackRepo;
+}
+
+function labelsForDiscoveredIssue(issue: DiscoveredIssue): string[] {
+  const labels = new Set(['kaizen']);
+  const severity = issue.severity?.trim().toUpperCase();
+  if (severity && /^P[0-2]$/.test(severity)) labels.add(`kaizen:${severity}`);
+  for (const label of issue.labels ?? []) {
+    const trimmed = label.trim();
+    if (trimmed === 'kaizen' || /^kaizen:P[0-2]$/i.test(trimmed)) labels.add(trimmed.replace(/:p/i, ':P'));
+  }
+  return [...labels];
 }
 
 function modelFor(config: KaizenConfig, agent: 'claude' | 'codex'): string | null | undefined {

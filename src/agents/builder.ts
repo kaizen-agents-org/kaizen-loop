@@ -9,7 +9,22 @@ const builderPayloadSchema = z
     status: z.enum(['fixed', 'partial', 'blocked']),
     summary: z.string().default(''),
     notes: z.string().default(''),
-    blockedReason: z.string().optional()
+    blockedReason: z.string().optional(),
+    discoveredIssues: z
+      .array(
+        z
+          .object({
+            title: z.string().min(1),
+            body: z.string().optional(),
+            expected: z.string().optional(),
+            evidence: z.string().optional(),
+            repo: z.string().optional(),
+            severity: z.string().optional(),
+            labels: z.array(z.string()).optional()
+          })
+          .passthrough()
+      )
+      .default([])
   })
   .passthrough();
 
@@ -62,6 +77,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
           status: 'error',
           summary: `Builder agent exited with code ${result.exitCode}`,
           notes: '',
+          discoveredIssues: [],
           raw,
           durationMs: result.durationMs
         };
@@ -71,6 +87,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
           status: 'error',
           summary: `Builder agent did not write ${this.options.resultPath}`,
           notes: '',
+          discoveredIssues: [],
           raw,
           durationMs: result.durationMs
         };
@@ -80,6 +97,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
         summary: payload.summary,
         notes: payload.notes,
         blockedReason: payload.blockedReason,
+        discoveredIssues: payload.discoveredIssues,
         raw: `${raw}\n${JSON.stringify(payload)}`,
         durationMs: result.durationMs
       };
@@ -88,6 +106,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
         status: 'error',
         summary: String(error),
         notes: '',
+        discoveredIssues: [],
         raw: String(error),
         durationMs: req.timeoutMs
       };

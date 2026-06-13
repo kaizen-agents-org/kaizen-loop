@@ -75,19 +75,50 @@ export class GitHubClient {
     await this.gh(['issue', 'comment', String(issue), '--body', body]);
   }
 
-  async createIssue(options: { title: string; body: string; labels: string[] }): Promise<GitHubIssue> {
-    const result = await this.gh([
+  async findOpenIssueByTitle(options: { repo?: string; title: string }): Promise<GitHubIssue | undefined> {
+    const args = [
+      'issue',
+      'list',
+      '--state',
+      'open',
+      '--search',
+      options.title,
+      '--json',
+      'number,title,body,labels,createdAt,comments,url',
+      '--limit',
+      '20'
+    ];
+    if (options.repo) args.push('--repo', options.repo);
+    const result = await this.gh(args);
+    const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
+    return issues.find((issue) => issue.title.trim().toLowerCase() === options.title.trim().toLowerCase());
+  }
+
+  async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {
+    const args = [
       'issue',
       'create',
       '--title',
       options.title,
       '--body',
-      options.body,
-      '--label',
-      options.labels.join(',')
-    ]);
+      options.body
+    ];
+    if (options.labels.length > 0) args.push('--label', options.labels.join(','));
+    if (options.repo) args.push('--repo', options.repo);
+    const result = await this.gh(args);
     const number = Number(result.stdout.match(/\/issues\/(\d+)/)?.[1]);
     if (!number) throw new Error(`Could not parse created issue URL: ${result.stdout.trim()}`);
+    if (options.repo) {
+      return {
+        number,
+        title: options.title,
+        body: options.body,
+        labels: options.labels.map((name) => ({ name })),
+        createdAt: new Date().toISOString(),
+        comments: [],
+        url: result.stdout.trim().split(/\s+/).find((part) => part.startsWith('http')) ?? result.stdout.trim()
+      };
+    }
     return this.getIssue(number);
   }
 
