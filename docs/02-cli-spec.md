@@ -40,7 +40,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 
 1. **前提検査**: Git リポジトリであること、GitHub リモート(origin)があること、`gh auth status` が通ること。失敗時は是正方法を表示して終了コード 2
 2. **対話セットアップ**(`--yes` で全デフォルト採用):
-   - 使用エージェント(デフォルト: 利用可能なものを自動検出。両方あれば claude)
+   - builder-agent へ渡す希望バックエンド(デフォルト: claude)
    - 起動時刻(デフォルト: 02:00。登録済みプロジェクトと重複しない時刻を提案)
    - 検証コマンド(`package.json` 等から `test` / `lint` / `build` を自動検出して提案)
 3. **ファイル生成**(リポジトリ内 → 要コミット):
@@ -68,6 +68,7 @@ kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
 | `--issue <番号>` | 指定 Issue のみ処理(優先度選択をスキップ)。デバッグ・即時修正用 |
 | `--dry-run` | Issue 取得・除外フィルタ・優先順位による選択までを実行し、**ワークスペース変更・push・コメントは行わない**。リスク判定は実 diff が必要なため実行しない |
 | `--max-issues <N>` | この実行に限り処理上限を上書き |
+| `--agent <agent>` | builder-agent へ渡す希望バックエンドを上書き(`claude` または `codex`) |
 | `--agent` | この実行に限りエージェントを上書き |
 
 ### 終了時の通知(macOS)
@@ -179,7 +180,7 @@ kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--follow]
 kaizen doctor [--project <slug>] [--repair]
 ```
 
-検査項目: git / gh / claude / codex の存在と認証、Node バージョン、設定ファイルのスキーマ妥当性、ワークスペースの整合性(origin 一致、fetch 可能か)、ロックファイルの stale 検知、スケジューラ登録と registry の整合。
+検査項目: git / gh / builder-agent / verifier-agent の存在、Node バージョン、設定ファイルのスキーマ妥当性、ワークスペースの整合性(origin 一致、fetch 可能か)、ロックファイルの stale 検知、スケジューラ登録と registry の整合。
 
 `--repair`: 壊れたワークスペースの再クローン、stale ロックの削除、スケジューラ定義の再生成。
 

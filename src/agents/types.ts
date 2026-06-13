@@ -3,6 +3,7 @@ export interface AgentRequest {
   prompt: string;
   timeoutMs: number;
   model?: string | null;
+  preferredBackend?: 'claude' | 'codex';
 }
 
 export interface AgentResult {
@@ -15,7 +16,7 @@ export interface AgentResult {
 }
 
 export interface AgentAdapter {
-  readonly name: 'claude' | 'codex';
+  readonly name: 'builder' | 'claude' | 'codex';
   isAvailable(): Promise<boolean>;
   run(req: AgentRequest): Promise<AgentResult>;
 }

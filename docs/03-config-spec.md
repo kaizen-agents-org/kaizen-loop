@@ -16,11 +16,11 @@
 version: 1
 
 agent:
-  # 既定エージェント。Issue ラベル kaizen:agent:* が最優先で上書きする
+  # builder-agent へ渡す既定の希望バックエンド。Issue ラベル kaizen:agent:* が最優先で上書きする
   default: claude            # claude | codex
-  # default が利用不可(未インストール・未認証)のとき他方に切り替えるか
+  # 互換用の設定。実際のフォールバックは builder-agent 側で扱う
   fallback: true
-  # アダプタ固有のモデル指定(省略時は各 CLI のデフォルト)
+  # 希望バックエンドに対応するモデル指定。builder-agent へ KAIZEN_AGENT_MODEL として渡す
   model:
     claude: null             # 例: "claude-opus-4-8"
     codex: null              # 例: "gpt-5-codex"
@@ -42,6 +42,20 @@ commands:
     - "npm run lint"
   # 検証コマンドのタイムアウト(分)
   verifyTimeoutMinutes: 15
+
+builder:
+  # Kaizen Loop は Claude/Codex を直接呼ばず、このコマンドへプロンプトを stdin で渡す
+  command: "builder-agent"
+  # builder-agent が構造化結果を書き込むパス(ワークスペース相対)
+  resultPath: ".kaizen/builder/build-result.json"
+
+verifier:
+  # 機械的 verify 成功後に verifier-agent を呼ぶ
+  enabled: true
+  command: "verifier-agent"
+  # verifier-agent の構造化結果。status は approved | pr_only | rejected
+  resultPath: ".kaizen/verifier/verify-result.json"
+  timeoutMinutes: 15
 
 policy:
   # 反映方法: hybrid | pr-only | direct-only
@@ -90,6 +104,7 @@ issues:
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
+- `verifier.enabled: true` の場合、`approved` / `pr_only` は常に PR 作成へ進む。直接コミット判定は行わない
 
 ## 2. ローカル登録簿 `~/.kaizen/registry.json`
 
@@ -134,7 +149,7 @@ issues:
       "number": 42,
       "title": "status コマンドで --json が効かない",
       "priority": "kaizen:P1",
-      "agent": "claude",
+      "agent": "builder",
       "attempt": 1,
       "outcome": "direct-commit",
       "commit": "a1b2c3d",
@@ -147,7 +162,7 @@ issues:
       "number": 43,
       "title": "設定リロード時に古い値が残る",
       "priority": "kaizen:P2",
-      "agent": "claude",
+      "agent": "builder",
       "attempt": 2,
       "outcome": "pr-created",
       "pr": 51,

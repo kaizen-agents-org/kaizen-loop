@@ -9,7 +9,7 @@ flowchart TB
     subgraph cli["kaizen-loop CLI"]
         CMD["コマンド層<br/>init / run / report / status / enable / disable / logs / doctor"]
         ORCH["オーケストレータ<br/>(夜間パイプライン制御)"]
-        ADAPT["エージェントアダプタ層<br/>ClaudeCodeAdapter / CodexAdapter"]
+        ADAPT["エージェントアダプタ層<br/>BuilderAgentAdapter / VerifierAgentAdapter"]
         GHC["GitHub クライアント<br/>(gh CLI ラッパー)"]
         WSM["ワークスペースマネージャ<br/>(専用クローン管理)"]
     end
@@ -17,7 +17,7 @@ flowchart TB
     ORCH --> ADAPT
     ORCH --> GHC
     ORCH --> WSM
-    ADAPT -->|"headless 実行"| EXT1["claude CLI / codex CLI"]
+    ADAPT -->|"headless 実行"| EXT1["builder-agent / verifier-agent"]
     GHC -->|"issue / pr / label"| EXT2["GitHub"]
     WSM -->|"clone / fetch / branch"| EXT3["~/.kaizen/workspaces/&lt;slug&gt;/"]
     SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt;"| CMD
@@ -26,7 +26,7 @@ flowchart TB
 ### 設計原則
 
 1. **オーケストレータは決定論的に**: Issue 選択、リスク判定、リトライ、反映方法の決定はすべてコード(機械的ルール)で行う。AI に委ねるのは「コードを修正する」行為のみ。これにより夜間の無人実行でも挙動が予測可能になる。
-2. **外部ツールに委譲**: GitHub 操作は `gh` CLI、AI 実行は `claude` / `codex` CLI に委譲する。認証は各 CLI の既存セッションを利用し、Kaizen Loop 自体はトークンを保持しない。
+2. **外部ツールに委譲**: GitHub 操作は `gh` CLI、AI 実行は `builder-agent` / `verifier-agent` に委譲する。Claude / Codex の直接起動は builder-agent 側に閉じ込め、Kaizen Loop 自体はトークンを保持しない。
 3. **作業の分離**: 夜間作業は開発者の作業ツリーでは絶対に行わない(→ §3)。
 4. **状態の分離**: リポジトリにコミットする設定(チームで共有するポリシー)と、マシンローカルの状態(スケジュール、ログ、ワークスペース)を分ける(→ §4)。
 
@@ -43,20 +43,20 @@ CLI のエントリポイント。各コマンドの仕様は [02-cli-spec.md](.
 - プリフライトチェック(認証、CLI 存在、ロック取得)
 - Kaizen Issue の取得・選択(優先度ソート、上限件数)
 - ワークスペースの最新化、Issue ごとの作業ブランチ作成
-- エージェントアダプタへの修正依頼(プロンプト構築・タイムアウト管理)
-- 検証コマンド(テスト・lint・ビルド)の実行とリトライ制御
+- builder-agent adapter への修正依頼(プロンプト構築・タイムアウト管理)
+- 検証コマンド(テスト・lint・ビルド)と verifier-agent の実行、リトライ制御
 - リスク判定 → 直接コミット or PR 作成
 - Issue へのコメント・ラベル更新・クローズ
 - ナイトリーレポート(ローカル `summary.json` + ログ)の出力
 
 ### 2.3 エージェントアダプタ層
 
-`claude` / `codex` CLI のヘッドレス実行を共通インターフェースで抽象化する。詳細は [06-agents.md](./06-agents.md)。
+builder-agent / verifier-agent のヘッドレス実行を共通インターフェースで抽象化する。詳細は [06-agents.md](./06-agents.md)。
 
 ```typescript
 interface AgentAdapter {
-  readonly name: 'claude' | 'codex';
-  /** CLI が利用可能か(インストール・認証済みか) */
+  readonly name: 'builder';
+  /** builder-agent が利用可能か */
   isAvailable(): Promise<boolean>;
   /** ワークスペース内でプロンプトを実行し、構造化結果を返す */
   run(req: AgentRequest): Promise<AgentResult>;
@@ -77,7 +77,7 @@ interface AgentResult {
 }
 ```
 
-エージェントの選択順序: **Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`) > 設定ファイルの `agent.default` > 利用可能な方へのフォールバック**。
+Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `agent.default` は、builder-agent へ渡す希望バックエンドとして扱う。
 
 ### 2.4 GitHub クライアント
 
@@ -173,5 +173,6 @@ kaizen run --project <slug> --scheduled
 
 - `git` ≥ 2.30
 - `gh` CLI(`gh auth status` が通ること)
-- `claude` CLI または `codex` CLI の少なくとも一方(認証済み)
+- `builder-agent`
+- `verifier-agent`(`verifier.enabled: true` の場合)
 - Node.js ≥ 20

@@ -36,7 +36,7 @@ flowchart LR
 - **G2**: 翌朝のターゲットプロジェクトが、前日に登録された低リスクの問題については修正済みであること
 - **G3**: 高リスクな変更は人間のレビューを経ること(PR)。安全性と自動化のバランスをラベルと機械的ルールで制御できること
 - **G4**: 複数のターゲットプロジェクトに同じ仕組みを `kaizen init` 一発で導入できること
-- **G5**: AI エージェント(Claude Code / Codex)を設定・ラベルで切り替えられること
+- **G5**: builder-agent へ渡す希望バックエンド(Claude / Codex)を設定・ラベルで切り替えられること
 - **G6**: 失敗しても安全であること — 開発者の作業ツリーを壊さない、暴走しない、止められる
 
 ### 非ゴール
@@ -52,7 +52,7 @@ flowchart LR
 |---|---|
 | **ターゲットプロジェクト** | Kaizen Loop を導入し、改善対象となる Git リポジトリ(GitHub リモートを持つ) |
 | **Kaizen Issue** | `kaizen` ラベルが付いた GitHub Issue。夜間メンテナンスの処理対象 |
-| **メンテナンスエージェント** | 夜間に起動し Issue を修正する AI エージェント(Claude Code または Codex CLI のヘッドレス実行) |
+| **メンテナンスエージェント** | 夜間に起動し Issue を修正する builder-agent と、機械的検証後にレビューする verifier-agent |
 | **オーケストレータ** | `kaizen run` の本体。Issue 選択・ワークスペース管理・エージェント起動・検証・反映・報告を決定論的に制御するプログラム。AI ではない |
 | **ワークスペース** | 夜間作業専用のクローン(`~/.kaizen/workspaces/<slug>/`)。開発者の作業ツリーとは完全に分離 |
 | **リスク判定** | 修正の diff・対象ファイル・ラベルから「直接コミット可否」を機械的に決めるルール(→ [04-nightly-pipeline.md](./04-nightly-pipeline.md)) |
@@ -70,7 +70,7 @@ flowchart TB
     subgraph night["夜間(ローカルマシン)"]
         SCHED["launchd / cron"] -->|"起動"| ORCH["オーケストレータ<br/>(kaizen run)"]
         ORCH -->|"Issue取得"| GH
-        ORCH -->|"プロンプト投入"| AGENT["メンテナンスエージェント<br/>(Claude Code / Codex)"]
+        ORCH -->|"プロンプト投入"| AGENT["メンテナンスエージェント<br/>(builder-agent / verifier-agent)"]
         AGENT -->|"修正"| WS["ワークスペース<br/>(専用クローン)"]
         ORCH -->|"テスト・検証"| WS
         ORCH -->|"push / PR / コメント"| GH
