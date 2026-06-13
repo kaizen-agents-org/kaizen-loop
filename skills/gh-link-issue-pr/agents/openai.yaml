@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Issue-Linked PR"
+  short_description: "Create GitHub PRs that close their source issues."
+  default_prompt: "Create a ready-for-review PR for this Kaizen Agents issue and link it with the correct closing keyword."
