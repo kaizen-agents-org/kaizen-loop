@@ -18,7 +18,7 @@ export class WorkspaceManager {
   constructor(
     private readonly run: CommandRunner,
     private readonly workspacePath: string,
-    private readonly remoteUrl: string
+    private readonly remoteUrl = ''
   ) {}
 
   async ensure(): Promise<void> {
@@ -34,6 +34,10 @@ export class WorkspaceManager {
 
   git(): GitClient {
     return new GitClient(this.run, this.workspacePath);
+  }
+
+  get path(): string {
+    return this.workspacePath;
   }
 
   async sync(defaultBranch: string): Promise<void> {
@@ -64,11 +68,35 @@ export class WorkspaceManager {
   }
 
   async createIssueBranch(config: KaizenConfig, issue: { number: number; title: string }): Promise<string> {
-    const branch = `${config.git.branchPrefix}issue-${issue.number}-${slugify(issue.title)}`;
+    const branch = issueBranchName(config, issue);
     const git = this.git();
     await git.deleteLocalBranch(branch);
     await git.switchNew(branch);
     return branch;
+  }
+
+  async createIssueWorktree(
+    config: KaizenConfig,
+    issue: { number: number; title: string },
+    runId: string
+  ): Promise<{ branch: string; path: string }> {
+    const branch = issueBranchName(config, issue);
+    const worktreePath = issueWorktreePath(this.workspacePath, runId, issue.number);
+    const git = this.git();
+    await git.worktreeRemove(worktreePath);
+    await fs.rm(worktreePath, { recursive: true, force: true });
+    await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+    await git.worktreePrune();
+    await git.deleteLocalBranch(branch);
+    await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
+    return { branch, path: worktreePath };
+  }
+
+  async removeIssueWorktree(worktreePath: string): Promise<void> {
+    const git = this.git();
+    await git.worktreeRemove(worktreePath);
+    await fs.rm(worktreePath, { recursive: true, force: true });
+    await git.worktreePrune();
   }
 
   async collectDiffStats(config: KaizenConfig): Promise<DiffStats> {
@@ -93,6 +121,14 @@ export class WorkspaceManager {
       rejectOnNonZero: false
     });
   }
+}
+
+function issueBranchName(config: KaizenConfig, issue: { number: number; title: string }): string {
+  return `${config.git.branchPrefix}issue-${issue.number}-${slugify(issue.title)}`;
+}
+
+function issueWorktreePath(workspacePath: string, runId: string, issueNumber: number): string {
+  return path.join(path.dirname(workspacePath), `${path.basename(workspacePath)}-worktrees`, runId, `issue-${issueNumber}`);
 }
 
 function matchesAny(file: string, patterns: string[]): boolean {

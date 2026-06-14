@@ -58,6 +58,18 @@ export class GitClient {
     await this.git(['clean', '-fdx']);
   }
 
+  async worktreeAdd(target: string, branch: string, ref: string): Promise<void> {
+    await this.git(['worktree', 'add', '-B', branch, target, ref]);
+  }
+
+  async worktreeRemove(target: string): Promise<void> {
+    await this.git(['worktree', 'remove', '--force', target], { rejectOnNonZero: false });
+  }
+
+  async worktreePrune(): Promise<void> {
+    await this.git(['worktree', 'prune'], { rejectOnNonZero: false });
+  }
+
   async switchNew(branch: string): Promise<void> {
     await this.git(['switch', '-c', branch]);
   }
