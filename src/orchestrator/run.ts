@@ -128,7 +128,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
             const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId);
             worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
           }
-          const issueSummaries = await Promise.all(
+          const issueResults = await Promise.allSettled(
             worktrees.map((worktree) =>
               processIssueInWorktree({
                 issue: worktree.issue,
@@ -147,7 +147,21 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
               })
             )
           );
-          summary.issues.push(...issueSummaries);
+          for (let index = 0; index < issueResults.length; index += 1) {
+            const result = issueResults[index];
+            if (result.status === 'fulfilled') {
+              summary.issues.push(result.value);
+              continue;
+            }
+            const issue = worktrees[index].issue;
+            summary.issues.push({
+              number: issue.number,
+              title: issue.title,
+              priority: priorityLabel(issue, config),
+              outcome: 'failed',
+              reason: String(result.reason)
+            });
+          }
         } finally {
           for (const worktree of worktrees) {
             await baseWorkspace.removeIssueWorktree(worktree.path);
@@ -155,6 +169,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         }
       }
     }
+  } catch (error) {
+    runFailed = true;
+    throw error;
   } finally {
     summary.finishedAt = new Date().toISOString();
     summary.result = runFailed ? 'failed' : resultFor(summary.issues);

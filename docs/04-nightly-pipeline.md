@@ -202,7 +202,7 @@ codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 
 ### 失敗処理(検証リトライ枯渇・タイムアウト・禁止パス変更)
 
-- Issue 用 worktree を削除する。作業ブランチはローカルに残さない
+- Issue 用 worktree を削除する。作業ブランチは再実行時の復旧・調査用にローカルへ残す
 - Issue に失敗コメント: 試行回数、失敗理由、エージェントログ・検証ログの要約(末尾抜粋)
 - 累計試行回数が `maxAttemptsPerIssue` に達したら `kaizen:needs-human` を付与
 - `kaizen:in-progress` を剥がす
