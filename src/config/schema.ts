@@ -22,7 +22,7 @@ export const configSchema = z
     run: z
       .object({
         maxIssuesPerNight: z.number().int().positive().default(3),
-        issueTimeoutMinutes: z.number().int().positive().default(30),
+        issueTimeoutMinutes: z.number().int().positive().default(120),
         runTimeoutMinutes: z.number().int().positive().default(240),
         maxVerifyRetries: z.number().int().min(0).default(2),
         maxAttemptsPerIssue: z.number().int().positive().default(3),
@@ -31,7 +31,7 @@ export const configSchema = z
       .strict()
       .default({
         maxIssuesPerNight: 3,
-        issueTimeoutMinutes: 30,
+        issueTimeoutMinutes: 120,
         runTimeoutMinutes: 240,
         maxVerifyRetries: 2,
         maxAttemptsPerIssue: 3,

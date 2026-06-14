@@ -27,6 +27,7 @@ export async function runPrGuardianSkill(
   }
 
   const prompt = buildPrompt(req);
+  const startMs = Date.now();
   try {
     const result = await runCommand(
       req.config.guardian.command,
@@ -58,13 +59,12 @@ export async function runPrGuardianSkill(
       status: 'failed',
       summary: String(error),
       raw: String(error),
-      durationMs: req.config.guardian.timeoutMinutes * 60_000
+      durationMs: Date.now() - startMs
     };
   }
 }
 
 export async function isPrGuardianSkillRunnerAvailable(config: KaizenConfig, runCommand: CommandRunner): Promise<boolean> {
-  if (!config.guardian.enabled) return true;
   try {
     await runCommand(config.guardian.command, ['--version'], { rejectOnNonZero: true, timeoutMs: 30_000 });
     return true;
@@ -87,7 +87,7 @@ Monitor this pull request until it is mergeable or a real blocker remains:
 Requirements:
 - Read and follow skills/pr-guardian/SKILL.md.
 - Check the PR with gh pr view and gh pr checks.
-- Watch relevant workflow runs with gh run watch when a run exists.
+- Watch relevant workflow runs with gh run watch --exit-status when a run exists.
 - Inspect CI logs and review feedback if anything fails or blocks mergeability.
 - Address actionable feedback with focused commits and push them.
 - Reply or comment on each addressed review item with the action taken.

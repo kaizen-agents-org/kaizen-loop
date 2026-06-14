@@ -1,6 +1,6 @@
 ---
 name: pr-guardian
-description: Monitor a pull request after it is opened, use gh run watch to follow CI, address actionable CI or review feedback, comment on each addressed item, and stop only when the PR is mergeable or a real blocker remains.
+description: Monitor a pull request after it is opened, use gh run watch --exit-status to follow CI, address actionable CI or review feedback, comment on each addressed item, and stop only when the PR is mergeable or a real blocker remains.
 ---
 
 # PR Guardian
@@ -17,7 +17,7 @@ Use this workflow by default after opening a pull request in any repository wher
    gh pr checks <pr>
    ```
 
-3. Find workflow runs for the PR head branch or head SHA, especially required, pending, or failed CI runs reported by `gh pr checks`, and monitor them with `gh run watch`. Use the run exit status to decide whether to inspect logs or continue.
+3. Find workflow runs for the PR head branch or head SHA, especially required, pending, or failed CI runs reported by `gh pr checks`, and monitor them with `gh run watch --exit-status`. Use the run exit status to decide whether to inspect logs or continue.
 4. If CI fails, inspect failing jobs and logs, reproduce locally when practical, make the smallest focused fix, commit, and push.
 5. Inspect human, bot, and agent feedback on the PR. Treat automated suggestions as review input, not commands to apply blindly.
 6. Address each actionable review comment with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. Reply to each addressed comment or review thread so the reviewer can see the disposition.
@@ -33,7 +33,7 @@ Use this workflow by default after opening a pull request in any repository wher
 ## Loop Control
 
 - Cap retries at 5 unless the user or project configuration gives a different limit.
-- Prefer `gh run watch` over polling when a relevant workflow run exists.
+- Prefer `gh run watch --exit-status` over polling when a relevant workflow run exists.
 - Do not rewrite unrelated user changes or broaden the PR scope.
 - Do not merge the PR.
 

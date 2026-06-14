@@ -445,7 +445,6 @@ async function finishPr(
       pr
     });
     const guardianFailed = guardian.status === 'failed';
-    const outcome = guardianFailed ? 'failed' : 'pr-created';
     const reason = guardianFailed ? `${pr.reason}\n\nPR guardian failed: ${guardian.summary}` : `${pr.reason}\n\nPR guardian: ${guardian.summary}`;
     await options.github.comment(
       options.issue.number,
@@ -453,7 +452,7 @@ async function finishPr(
         runId: options.runId,
         issue: options.issue.number,
         attempt: attempts,
-        outcome,
+        outcome: 'pr-created',
         agent: agent.name,
         summary: agentSummary(agentResult),
         notes: withGuardianNotes(agentResult.notes, guardian),
@@ -475,7 +474,7 @@ async function finishPr(
       priority: priorityLabel(options.issue, options.config),
       agent: agent.name,
       attempt: attempts,
-      outcome,
+      outcome: 'pr-created',
       pr: pr.number,
       prUrl: pr.url,
       guardian: {

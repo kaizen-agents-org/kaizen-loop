@@ -15,7 +15,7 @@ The CLI currently implements:
 - `kaizen logs`
 - `kaizen doctor`
 
-The Phase 2 implementation supports builder-agent based fixes, verifier review, PR creation followed by the vendored `pr-guardian` skill, hybrid reflection when verifier is disabled, verification retries, scheduler registration, and basic operational commands. `kaizen watch` remains a later-phase feature.
+The Phase 2 implementation supports builder-agent-based fixes, verifier review, PR creation followed by the vendored `pr-guardian` skill, hybrid reflection when verifier is disabled, verification retries, scheduler registration, and basic operational commands. `kaizen watch` remains a later-phase feature.
 
 See [docs/README.md](./docs/README.md) for the full specification.
 

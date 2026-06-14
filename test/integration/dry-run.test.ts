@@ -203,6 +203,7 @@ describe('runKaizen PR flow', () => {
     expect(guardian).toBeDefined();
     expect(guardian?.[1]).toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(String(guardian?.[1].at(-1))).toContain('skills/pr-guardian/SKILL.md');
+    expect(String(guardian?.[1].at(-1))).toContain('gh run watch --exit-status');
     expect(String(guardian?.[1].at(-1))).toContain('https://github.com/o/r/pull/4');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('"trigger":"instant"');

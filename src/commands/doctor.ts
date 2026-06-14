@@ -30,6 +30,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   await check(checks, 'pr guardian skill runner', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
+    if (!loaded.guardian.enabled) return;
     if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
   await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));

@@ -37,7 +37,7 @@ export function defaultConfigYaml(options: {
     },
     run: {
       maxIssuesPerNight: 3,
-      issueTimeoutMinutes: 30,
+      issueTimeoutMinutes: 120,
       runTimeoutMinutes: 240,
       maxVerifyRetries: 2,
       maxAttemptsPerIssue: 3,
