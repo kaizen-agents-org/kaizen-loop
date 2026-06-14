@@ -3,13 +3,17 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { reportIssue, reportIssueNow } from '../src/commands/report.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 const execFileAsync = promisify(execFile);
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('kaizen report CLI', () => {
   it('creates a report-only issue as JSON', async () => {
@@ -50,6 +54,44 @@ describe('kaizen report CLI', () => {
     const prCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('pr create'));
     expect(prCreate).toBeDefined();
     expect(prCreate?.args).not.toContain('--draft');
+  });
+
+  it('creates an issue and produces a PR with report --now --yes --json', async () => {
+    const { repo } = await setupProject({ verify: ['npm test'], guardianEnabled: false });
+    const { binDir, logPath } = await setupFakeBins();
+
+    const { stdout } = await runCli({
+      cwd: repo,
+      binDir,
+      args: ['report', 'CLI yes', '--project', 'o-r', '--body', 'Dogfooding failure', '--now', '--yes', '--json']
+    });
+
+    const output = JSON.parse(stdout) as { issue: { number: number }; fix: { trigger: string; issues: Array<{ outcome: string; prUrl?: string }> } };
+    expect(output.issue.number).toBe(14);
+    expect(output.fix.trigger).toBe('instant');
+    expect(output.fix.issues[0].outcome).toBe('pr-created');
+    expect(output.fix.issues[0].prUrl).toBe('https://github.com/o/r/pull/4');
+    const calls = await readCalls(logPath);
+    const issueCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('issue create'));
+    expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2');
+    expect(calls.some((call) => call.command === 'builder-agent' && call.args.length === 0)).toBe(true);
+    const prCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('pr create'));
+    expect(prCreate).toBeDefined();
+    expect(prCreate?.args).not.toContain('--draft');
+  });
+
+  it('rejects --yes without --now', async () => {
+    const { repo } = await setupProject();
+    const { binDir } = await setupFakeBins();
+
+    await expect(runCli({
+      cwd: repo,
+      binDir,
+      args: ['report', 'CLI report', '--project', 'o-r', '--yes']
+    })).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining('--yes can only be used with --now')
+    });
   });
 });
 

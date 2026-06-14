@@ -99,6 +99,9 @@ program
     const globals = program.opts<{ project?: string; json?: boolean }>();
     const json = Boolean(options.json ?? globals.json);
     const assumeYes = Boolean(options.yes);
+    if (assumeYes && !options.now) {
+      throw new KaizenError('--yes can only be used with --now', 2);
+    }
     const reportOptions = {
       cwd: process.cwd(),
       project: options.project ?? globals.project,
