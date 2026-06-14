@@ -66,6 +66,20 @@ export const configSchema = z
         resultPath: '.kaizen/verifier/verify-result.json',
         timeoutMinutes: 15
       }),
+    guardian: z
+      .object({
+        enabled: z.boolean().default(true),
+        command: z.string().default('codex'),
+        timeoutMinutes: z.number().int().positive().default(60),
+        maxAttempts: z.number().int().positive().default(5)
+      })
+      .strict()
+      .default({
+        enabled: true,
+        command: 'codex',
+        timeoutMinutes: 60,
+        maxAttempts: 5
+      }),
     policy: z
       .object({
         mode: z.enum(['hybrid', 'pr-only', 'direct-only']).default('hybrid'),

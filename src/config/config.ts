@@ -58,6 +58,12 @@ export function defaultConfigYaml(options: {
       resultPath: '.kaizen/verifier/verify-result.json',
       timeoutMinutes: 15
     },
+    guardian: {
+      enabled: true,
+      command: 'codex',
+      timeoutMinutes: 60,
+      maxAttempts: 5
+    },
     policy: {
       mode: 'hybrid',
       directCommit: {

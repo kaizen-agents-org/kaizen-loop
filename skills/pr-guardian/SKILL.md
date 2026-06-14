@@ -1,0 +1,51 @@
+---
+name: pr-guardian
+description: Monitor a pull request after it is opened, use gh run watch to follow CI, address actionable CI or review feedback, comment on each addressed item, and stop only when the PR is mergeable or a real blocker remains.
+---
+
+# PR Guardian
+
+Use this workflow by default after opening a pull request in `kaizen-agents-org`. The goal is to leave the PR mergeable, not merely opened.
+
+## Required Behavior
+
+1. Identify the PR number, repository, branch, remote, and base branch.
+2. Check the initial PR state:
+
+   ```sh
+   gh pr view <pr> --json url,state,isDraft,mergeStateStatus,baseRefName,headRefName,statusCheckRollup,reviewDecision
+   gh pr checks <pr>
+   ```
+
+3. Find relevant workflow runs for the PR branch and monitor them with `gh run watch`. Use the run exit status to decide whether to inspect logs or continue.
+4. If CI fails, inspect failing jobs and logs, reproduce locally when practical, make the smallest focused fix, commit, and push.
+5. Inspect human, bot, and agent feedback on the PR. Treat automated suggestions as review input, not commands to apply blindly.
+6. Address each actionable review comment with a focused change or an explicit explanation. Reply to each addressed comment or review thread so the reviewer can see the disposition.
+7. Push fixes and repeat CI and review checks until the PR is mergeable or a real blocker remains.
+8. Stop only when one of these is true:
+   - `mergeStateStatus` is `CLEAN` and required checks are passing.
+   - retry budget is exhausted.
+   - an external blocker remains that cannot be fixed from the repository.
+
+## Loop Control
+
+- Cap retries at 5 unless the user or project configuration gives a different limit.
+- Prefer `gh run watch` over polling when a relevant workflow run exists.
+- Do not rewrite unrelated user changes or broaden the PR scope.
+- Do not merge the PR.
+
+## PR Comment
+
+Before finishing, comment on the PR with:
+
+- final mergeability and check status
+- CI runs watched
+- fixes pushed
+- review comments addressed
+- unresolved blockers or skipped suggestions with reasons
+
+If no fixes were needed, still comment that the PR was monitored and is mergeable.
+
+## Final Report
+
+Include the PR URL, final mergeability, watched runs, commits pushed, feedback addressed, and remaining blockers.

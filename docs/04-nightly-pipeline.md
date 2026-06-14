@@ -20,7 +20,7 @@ flowchart TB
     G -->|いいえ| H["失敗処理<br/>(コメント+ラベル)"]
     F -->|成功| I["6. リスク判定"]
     I -->|低リスク| J["7a. main へ直接コミット<br/>→ Issue クローズ"]
-    I -->|高リスク| K["7b. PR 作成<br/>→ Issue にリンク"]
+    I -->|高リスク| K["7b. PR 作成<br/>→ Issue にリンク<br/>+ pr-guardian skill"]
     J --> L["8. 次の Issue へ"]
     K --> L
     H --> L
@@ -185,9 +185,11 @@ git push origin <defaultBranch>
 git push origin kaizen/issue-<N>-<slug>
 gh pr create --base <defaultBranch> --head kaizen/issue-<N>-<slug> \
   --title "kaizen: <修正サマリ> (#<N>)" --body <生成本文>
+codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 ```
 
 - PR 本文: 修正サマリ、対象 Issue へのリンク(`Closes #N`)、変更概要、検証結果、リスク判定で PR になった理由
+- PR 作成後、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を Codex で実行する。TypeScript 側は skill を起動するだけで、CI 監視、`gh run watch`、レビューコメント対応、mergeable 判定は `pr-guardian` skill の責務
 - Issue には PR へのリンクをコメント。Issue は**クローズしない**(PR マージ時に `Closes #N` で自動クローズ)
 - `kaizen:in-progress` は剥がす(PR レビュー待ちは人間のフェーズ)
 
