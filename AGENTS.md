@@ -34,5 +34,6 @@ Shared Kaizen Agents skills are vendored under `skills/` from `kaizen-agents-org
 
 - Use `skills/gh-link-issue-pr/SKILL.md` when opening or updating implementation PRs so source issues are linked with closing keywords.
 - Use `skills/kaizen-bug-router/SKILL.md` when a Kaizen Agents bug is reported; file the bug in the owning repository, or in `kaizen-loop` if ownership is unclear.
+- Use `skills/pr-guardian/SKILL.md` after opening a PR; monitor checks with `gh run watch`, address actionable feedback, comment on each addressed item, and stop only when the PR is mergeable or a real blocker remains.
 
 When the shared skills are updated in `.github`, apply the sync PR for this repository or run the org-level sync script from the sibling `.github` checkout.

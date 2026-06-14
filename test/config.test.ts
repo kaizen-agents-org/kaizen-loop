@@ -11,6 +11,9 @@ describe('configSchema', () => {
     expect(config.builder.resultPath).toBe('.kaizen/builder/build-result.json');
     expect(config.verifier.enabled).toBe(true);
     expect(config.verifier.command).toBe('verifier');
+    expect(config.guardian.enabled).toBe(true);
+    expect(config.guardian.command).toBe('codex');
+    expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.policy.mode).toBe('hybrid');
     expect(config.issues.priorityOrder).toEqual(['kaizen:P0', 'kaizen:P1', 'kaizen:P2']);
   });

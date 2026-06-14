@@ -9,7 +9,7 @@ agent:
 
 run:
   maxIssuesPerNight: 1
-  issueTimeoutMinutes: 30
+  issueTimeoutMinutes: 120
   runTimeoutMinutes: 180
   maxVerifyRetries: 1
   maxAttemptsPerIssue: 3
@@ -21,6 +21,7 @@ commands:
     - "npm test"
     - "npm run typecheck"
     - "npm run build"
+    - "test -f skills/gh-link-issue-pr/SKILL.md && test -f skills/kaizen-bug-router/SKILL.md && test -f skills/pr-guardian/SKILL.md"
   verifyTimeoutMinutes: 15
 
 builder:

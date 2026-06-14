@@ -199,9 +199,16 @@ describe('runKaizen PR flow', () => {
     const prCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr create'));
     expect(String(prCreate?.[1].at(-1))).toContain('## Builder notes');
     expect(String(prCreate?.[1].at(-1))).toContain('Protected path changed');
+    const guardian = runner.mock.calls.find(([command, args]) => command === 'codex' && args.join(' ').startsWith('exec '));
+    expect(guardian).toBeDefined();
+    expect(guardian?.[1]).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(String(guardian?.[1].at(-1))).toContain('skills/pr-guardian/SKILL.md');
+    expect(String(guardian?.[1].at(-1))).toContain('gh run watch --exit-status');
+    expect(String(guardian?.[1].at(-1))).toContain('https://github.com/o/r/pull/4');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('"trigger":"instant"');
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('### Notes');
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('PR guardian: success');
   });
 
   it('files builder-discovered follow-up issues through GitHub', async () => {

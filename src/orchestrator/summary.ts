@@ -8,6 +8,10 @@ export interface RunIssueSummary {
   commit?: string;
   pr?: number;
   prUrl?: string;
+  guardian?: {
+    status: 'success' | 'failed' | 'skipped';
+    summary: string;
+  };
   reason?: string;
   changedFiles?: number;
   changedLines?: number;

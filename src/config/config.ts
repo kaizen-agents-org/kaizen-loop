@@ -37,7 +37,7 @@ export function defaultConfigYaml(options: {
     },
     run: {
       maxIssuesPerNight: 3,
-      issueTimeoutMinutes: 30,
+      issueTimeoutMinutes: 120,
       runTimeoutMinutes: 240,
       maxVerifyRetries: 2,
       maxAttemptsPerIssue: 3,
@@ -57,6 +57,12 @@ export function defaultConfigYaml(options: {
       command: 'verifier',
       resultPath: '.kaizen/verifier/verify-result.json',
       timeoutMinutes: 15
+    },
+    guardian: {
+      enabled: true,
+      command: 'codex',
+      timeoutMinutes: 60,
+      maxAttempts: 5
     },
     policy: {
       mode: 'hybrid',

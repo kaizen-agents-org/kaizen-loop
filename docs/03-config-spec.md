@@ -58,6 +58,13 @@ verifier:
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
 
+guardian:
+  # PR 作成後に skills/pr-guardian/SKILL.md を Codex で実行する
+  enabled: true
+  command: "codex"
+  timeoutMinutes: 60
+  maxAttempts: 5
+
 policy:
   # 反映方法: hybrid | pr-only | direct-only
   # direct-only でも verify / protectedPaths / forbiddenPaths / pr-only ラベルの安全ゲートはバイパスしない
@@ -106,6 +113,7 @@ issues:
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
+- `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、レビューコメントへの返信は skill 側の責務
 
 ## 2. ローカル登録簿 `~/.kaizen/registry.json`
 

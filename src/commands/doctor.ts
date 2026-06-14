@@ -5,6 +5,7 @@ import { loadConfig } from '../config/config.js';
 import { resolveProject } from '../config/registry.js';
 import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
+import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
 import type { CommandRunner } from '../utils/command.js';
 
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {
@@ -25,6 +26,12 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!loaded) throw new Error('config unavailable');
     if (!loaded.verifier.enabled) return;
     if (!(await new VerifierAgentAdapter(options.runCommand, loaded.verifier).isAvailable())) throw new Error('unavailable');
+  });
+  await check(checks, 'pr guardian skill runner', async () => {
+    const loaded = config;
+    if (!loaded) throw new Error('config unavailable');
+    if (!loaded.guardian.enabled) return;
+    if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
   await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
   return { slug: resolved.slug, checks, ok: checks.every((item) => item.ok) };

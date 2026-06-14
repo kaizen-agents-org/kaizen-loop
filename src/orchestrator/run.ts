@@ -17,6 +17,7 @@ import { WorkspaceManager, type DiffStats } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
 import { RunLock } from './lock.js';
+import { runPrGuardianSkill, type PrGuardianSkillResult } from './prGuardian.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
 import type { RunIssueSummary, RunSummary } from './summary.js';
 
@@ -42,6 +43,14 @@ export interface DirectCommitConfirmation {
   decision: ReflectionDecision;
   diff: DiffStats;
   verifyResults: Array<{ command: string; ok: boolean; output: string }>;
+}
+
+interface PullRequestReflection {
+  url: string;
+  number?: number;
+  reason: string;
+  branch: string;
+  baseBranch: string;
 }
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
@@ -416,15 +425,27 @@ async function finishPr(
     runId: string;
     github: GitHubClient;
     trigger: RunSummary['trigger'];
+    project: { repo: string; workspacePath: string };
+    runCommand: CommandRunner;
   },
   agent: AgentAdapter,
   attempts: number,
   agentResult: AgentResult,
   verifyResults: Array<{ command: string; ok: boolean; output: string }>,
   finalDiff: DiffStats,
-  pr: { url: string; number?: number; reason: string },
+  pr: PullRequestReflection,
   started: number
 ): Promise<RunIssueSummary> {
+    const guardian = await runPrGuardianAfterPullRequest({
+      issue: options.issue,
+      config: options.config,
+      project: options.project,
+      github: options.github,
+      runCommand: options.runCommand,
+      pr
+    });
+    const guardianFailed = guardian.status === 'failed';
+    const reason = guardianFailed ? `${pr.reason}\n\nPR guardian failed: ${guardian.summary}` : `${pr.reason}\n\nPR guardian: ${guardian.summary}`;
     await options.github.comment(
       options.issue.number,
       buildResultComment({
@@ -434,14 +455,17 @@ async function finishPr(
         outcome: 'pr-created',
         agent: agent.name,
         summary: agentSummary(agentResult),
-        notes: agentResult.notes,
+        notes: withGuardianNotes(agentResult.notes, guardian),
         verifyResults,
         prUrl: pr.url,
-        reason: pr.reason,
+        reason,
         trigger: options.trigger,
         maxAttempts: options.config.run.maxAttemptsPerIssue
       })
     );
+    if (guardianFailed) {
+      await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+    }
     await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
 
     return {
@@ -453,7 +477,11 @@ async function finishPr(
       outcome: 'pr-created',
       pr: pr.number,
       prUrl: pr.url,
-      reason: pr.reason,
+      guardian: {
+        status: guardian.status,
+        summary: guardian.summary
+      },
+      reason,
       changedFiles: finalDiff.changedFiles,
       changedLines: finalDiff.changedLines,
       verifyRetries: 0,
@@ -685,7 +713,7 @@ async function reflectPullRequest(options: {
   diff: DiffStats;
   github: GitHubClient;
   reason: string;
-}): Promise<{ url: string; number?: number; reason: string }> {
+}): Promise<PullRequestReflection> {
   await options.workspace.git().push(options.branch, { forceWithLease: true });
   const pr = await options.github.createPullRequest({
     base: options.config.git.defaultBranch,
@@ -693,7 +721,42 @@ async function reflectPullRequest(options: {
     title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
     body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason)
   });
-  return { ...pr, reason: options.reason };
+  return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch };
+}
+
+async function runPrGuardianAfterPullRequest(options: {
+  issue: GitHubIssue;
+  config: KaizenConfig;
+  project: { repo: string; workspacePath: string };
+  github: GitHubClient;
+  runCommand: CommandRunner;
+  pr: { url: string; number?: number; branch: string; baseBranch: string };
+}): Promise<PrGuardianSkillResult> {
+  if (!options.pr.number) {
+    return {
+      status: 'skipped',
+      summary: 'PR number could not be parsed; skipped mergeability monitoring.',
+      raw: '',
+      durationMs: 0
+    };
+  }
+
+  const result = await runPrGuardianSkill(options.runCommand, {
+    config: options.config,
+    workspaceDir: options.project.workspacePath,
+    repo: options.project.repo,
+    prUrl: options.pr.url,
+    prNumber: options.pr.number,
+    branch: options.pr.branch,
+    baseBranch: options.pr.baseBranch
+  });
+  return result;
+}
+
+function withGuardianNotes(notes: string | undefined, guardian: PrGuardianSkillResult): string {
+  const base = notes?.trim() ?? '';
+  const guardianNotes = `PR guardian: ${guardian.status} - ${guardian.summary}`;
+  return base ? `${base}\n\n${guardianNotes}` : guardianNotes;
 }
 
 function verifierPrReason(result: VerifierResult): string {
