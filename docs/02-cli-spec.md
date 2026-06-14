@@ -59,12 +59,14 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 
 ```
 kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
+           [--trigger manual|scheduled|instant|watch]
            [--max-issues <N>] [--agent claude|codex]
 ```
 
 | オプション | 意味 |
 |---|---|
 | `--scheduled` | 無人実行モード。対話なし。スケジューラからの呼び出し専用 |
+| `--trigger <trigger>` | 実行契機を明示する。`scheduled` は nightly job、`watch` は poll job、`instant` は即時実行、`manual` は手動実行 |
 | `--issue <番号>` | 指定 Issue のみ処理(優先度選択をスキップ)。デバッグ・即時修正用 |
 | `--dry-run` | Issue 取得・除外フィルタ・優先順位による選択までを実行し、**ワークスペース変更・push・コメントは行わない**。リスク判定は実 diff が必要なため実行しない |
 | `--max-issues <N>` | この実行に限り処理上限を上書き |

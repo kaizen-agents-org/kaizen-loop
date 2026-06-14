@@ -255,9 +255,9 @@ issues:
 
 ```cron
 # KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) nightly
-0 2 * * * /path/to/node /path/to/kaizen run --project s-hiraoku-myapp --scheduled --trigger scheduled >> ~/.kaizen/projects/s-hiraoku-myapp/nightly.cron.log 2>&1
+0 2 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'scheduled' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/nightly.cron.log' 2>&1
 # KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) poll
-*/5 * * * * /path/to/node /path/to/kaizen run --project s-hiraoku-myapp --scheduled --trigger watch >> ~/.kaizen/projects/s-hiraoku-myapp/poll.cron.log 2>&1
+*/5 * * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'watch' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/poll.cron.log' 2>&1
 ```
 
 マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。poll は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、前回 run が続いていれば `run.lock` によりスキップされる。

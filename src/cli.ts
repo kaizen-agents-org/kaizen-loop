@@ -34,7 +34,7 @@ program
     const result = await initProject({
       cwd: process.cwd(),
       agent: parseAgent(options.agent),
-      schedule: options.schedule,
+      schedule: parseSchedule(options.schedule),
       yes: Boolean(options.yes),
       runCommand
     });
@@ -173,7 +173,7 @@ program
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
-    const schedule = options.schedule ?? config.scheduler.nightly.time;
+    const schedule = parseSchedule(options.schedule ?? config.scheduler.nightly.time);
     const scheduler = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
     project.enabled = true;
     project.schedule = schedule;
@@ -269,6 +269,11 @@ function parseTrigger(value: unknown): 'manual' | 'scheduled' | 'instant' | 'wat
   if (value === undefined) return undefined;
   if (value === 'manual' || value === 'scheduled' || value === 'instant' || value === 'watch') return value;
   throw new KaizenError(`Invalid trigger: ${String(value)}`, 2);
+}
+
+function parseSchedule(value: unknown): string {
+  if (typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) return value;
+  throw new KaizenError(`Invalid schedule: ${String(value)}`, 2);
 }
 
 function parsePriority(value: unknown): 'P0' | 'P1' | 'P2' {

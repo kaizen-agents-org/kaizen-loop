@@ -141,6 +141,40 @@ describe('enableScheduler', () => {
     expect(plist).toContain('<string>--trigger</string><string>watch</string>');
   });
 
+  it('fails when launchd bootstrap fails', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('KAIZEN_HOME', home);
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'launchctl' && args[0] === 'bootstrap') throw new Error('bootstrap failed');
+      return {
+        command,
+        args,
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+    const project: RegistryProject = {
+      repo: 'owner/repo',
+      localPath: '/repo',
+      workspacePath: '/workspace',
+      schedule: '02:00',
+      enabled: false,
+      createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableScheduler({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({ version: 1 }),
+      schedule: '02:00',
+      runCommand: runner,
+      platform: 'darwin'
+    })).rejects.toThrow('bootstrap failed');
+  });
+
   it('removes legacy and configured scheduler entries when disabling', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
@@ -169,5 +203,31 @@ describe('enableScheduler', () => {
     expect(crontabInput).not.toContain('--trigger scheduled');
     expect(crontabInput).not.toContain('--trigger watch');
     expect(crontabInput).toContain('0 4 * * * node kaizen run --project owner-repo --scheduled --unmanaged');
+  });
+
+  it('does not remove legacy cron entries for slugs with the same prefix', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout:
+        command === 'crontab' && args[0] === '-l'
+          ? [
+              '# KAIZEN-LOOP owner',
+              '0 2 * * * node kaizen run --project owner --scheduled',
+              '# KAIZEN-LOOP owner-repo',
+              '0 3 * * * node kaizen run --project owner-repo --scheduled'
+            ].join('\n')
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await disableScheduler({ slug: 'owner', runCommand: runner, platform: 'linux' });
+
+    const crontabInput = String(runner.mock.calls.find(([command, args]) => command === 'crontab' && args[0] === '-')?.[2]?.input);
+    expect(crontabInput).not.toContain('--project owner --scheduled');
+    expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo');
+    expect(crontabInput).toContain('--project owner-repo --scheduled');
   });
 });

@@ -23,9 +23,7 @@ export async function enableScheduler(options: {
       paths.push(plistPath);
       await fs.mkdir(path.dirname(plistPath), { recursive: true });
       await fs.writeFile(plistPath, launchdPlist(options.slug, job));
-      await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath], {
-        rejectOnNonZero: false
-      });
+      await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath]);
     }
     return { type: 'launchd', path: paths[0], paths, jobs };
   }
@@ -119,10 +117,6 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function legacyCronMarker(slug: string): string {
-  return `KAIZEN-LOOP ${slug}`;
-}
-
 function cronTime(job: SchedulerJob): string {
   if (job.name === 'poll') return `*/${job.intervalMinutes ?? 5} * * * *`;
   const [hour, minute] = (job.time ?? '02:00').split(':');
@@ -146,7 +140,6 @@ async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Pro
 
 function removeManagedCronLines(crontab: string, slug: string): string[] {
   const marker = cronMarker(slug);
-  const legacyMarker = legacyCronMarker(slug);
   const lines: string[] = [];
   let skipNextCommand = false;
 
@@ -156,7 +149,7 @@ function removeManagedCronLines(crontab: string, slug: string): string[] {
       skipNextCommand = false;
       continue;
     }
-    if (line.includes(marker) || line.includes(legacyMarker)) {
+    if (line.includes(marker) || legacyCronMarkerPattern(slug).test(line)) {
       skipNextCommand = trimmed.startsWith('#');
       continue;
     }
@@ -168,6 +161,14 @@ function removeManagedCronLines(crontab: string, slug: string): string[] {
 
 function shQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function legacyCronMarkerPattern(slug: string): RegExp {
+  return new RegExp(`(^|\\s)#?\\s*KAIZEN-LOOP\\s+${escapeRegExp(slug)}(?:\\s|$)`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function launchdCalendar(time: string): string {

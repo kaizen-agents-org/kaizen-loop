@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { parse, stringify } from 'yaml';
 import { defaultConfigYaml } from '../../src/config/config.js';
 import { saveRegistry } from '../../src/config/registry.js';
 import { runKaizen } from '../../src/orchestrator/run.js';
@@ -78,10 +79,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }).replace(
-        'poll:\n    enabled: false',
-        'poll:\n    enabled: true'
-      )
+      defaultConfigWith({ scheduler: { poll: { enabled: true } } }, { agent: 'claude', setup: null, verify: [] })
     );
     await saveRegistry({
       version: 1,
@@ -273,10 +271,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }).replace(
-        'verifier:\n  enabled: true',
-        'verifier:\n  enabled: false'
-      )
+      defaultConfigWith({ verifier: { enabled: false } }, { agent: 'claude', setup: null, verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,
@@ -587,10 +582,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }).replace(
-        'verifier:\n  enabled: true',
-        'verifier:\n  enabled: false'
-      )
+      defaultConfigWith({ verifier: { enabled: false } }, { agent: 'claude', setup: null, verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,
@@ -889,4 +881,27 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
 async function writeJsonResult(filePath: unknown, payload: unknown) {
   if (typeof filePath !== 'string') throw new Error('missing result path');
   await fs.writeFile(filePath, JSON.stringify(payload));
+}
+
+function defaultConfigWith(
+  overrides: Record<string, unknown>,
+  options: { agent: 'claude' | 'codex'; setup: string | null; verify: string[] }
+): string {
+  const config = parse(defaultConfigYaml(options)) as Record<string, unknown>;
+  mergeConfig(config, overrides);
+  return stringify(config);
+}
+
+function mergeConfig(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (isPlainObject(value) && isPlainObject(target[key])) {
+      mergeConfig(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -20,7 +20,7 @@ flowchart TB
     ADAPT -->|"headless 実行"| EXT1["builder-agent / verifier"]
     GHC -->|"issue / pr / label"| EXT2["GitHub"]
     WSM -->|"clone / fetch / branch"| EXT3["~/.kaizen/workspaces/&lt;slug&gt;/"]
-    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt;"| CMD
+    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt; --scheduled --trigger scheduled&#124;watch"| CMD
 ```
 
 ### 設計原則
