@@ -155,6 +155,7 @@ kaizen disable [--project <slug>] [--all]
 
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
+- `enable` は `.kaizen/config.yml` の `scheduler.nightly` / `scheduler.poll` を読み、nightly と poll をそれぞれ登録する。`--schedule` は nightly の時刻だけを一時上書きする
 - `disable --all`: 登録済み全プロジェクトを無効化
 - `disable` は実行中の run があれば、ロックファイルの PID に SIGTERM を送って中断させる(中断時の安全性は [07-safety.md](./07-safety.md) §4)
 

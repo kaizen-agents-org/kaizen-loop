@@ -22,6 +22,7 @@ export async function loadConfig(repoDir: string): Promise<KaizenConfig> {
 
 export function defaultConfigYaml(options: {
   agent: 'claude' | 'codex';
+  schedule?: string;
   setup: string | null;
   verify: string[];
 }): string {
@@ -42,6 +43,17 @@ export function defaultConfigYaml(options: {
       maxVerifyRetries: 2,
       maxAttemptsPerIssue: 3,
       latestStartHour: 7
+    },
+    scheduler: {
+      nightly: {
+        enabled: true,
+        time: options.schedule ?? '02:00'
+      },
+      poll: {
+        enabled: false,
+        intervalMinutes: 5,
+        skipIfRunning: true
+      }
     },
     commands: {
       setup: options.setup,

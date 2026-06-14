@@ -14,6 +14,8 @@ describe('configSchema', () => {
     expect(config.guardian.enabled).toBe(true);
     expect(config.guardian.command).toBe('codex');
     expect(config.run.issueTimeoutMinutes).toBe(120);
+    expect(config.scheduler.nightly).toEqual({ enabled: true, time: '02:00' });
+    expect(config.scheduler.poll).toEqual({ enabled: false, intervalMinutes: 5, skipIfRunning: true });
     expect(config.policy.mode).toBe('hybrid');
     expect(config.issues.priorityOrder).toEqual(['kaizen:P0', 'kaizen:P1', 'kaizen:P2']);
   });
@@ -21,6 +23,12 @@ describe('configSchema', () => {
   it('rejects unknown keys', () => {
     expect(() => configSchema.parse({ version: 1, typo: true })).toThrow();
     expect(() => configSchema.parse({ version: 1, run: { maxIssuesPerNight: 1, typo: true } })).toThrow();
+  });
+
+  it('rejects invalid scheduler values', () => {
+    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '24:00' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:60' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 60 } } })).toThrow();
   });
 
   it('parses generated yaml shape', () => {

@@ -1,38 +1,45 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { RegistryProject } from '../config/schema.js';
+import type { KaizenConfig, RegistryProject } from '../config/schema.js';
 import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
 
 export async function enableScheduler(options: {
   slug: string;
   project: RegistryProject;
-  schedule: string;
+  config: KaizenConfig;
+  schedule?: string;
   runCommand: CommandRunner;
   platform?: NodeJS.Platform;
-}): Promise<{ type: 'launchd' | 'cron'; path?: string }> {
+}): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[] }> {
+  const jobs = schedulerJobs(options.config, options.schedule);
   if ((options.platform ?? process.platform) === 'darwin') {
-    const plistPath = launchdPlistPath(options.slug);
-    await fs.mkdir(path.dirname(plistPath), { recursive: true });
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
-    await fs.writeFile(plistPath, launchdPlist(options.slug, options.schedule));
-    await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath], {
-      rejectOnNonZero: false
-    });
-    return { type: 'launchd', path: plistPath };
+    await removeLaunchdPlists(options.slug, options.runCommand);
+    const paths: string[] = [];
+    for (const job of jobs) {
+      const plistPath = launchdPlistPath(options.slug, job.name);
+      paths.push(plistPath);
+      await fs.mkdir(path.dirname(plistPath), { recursive: true });
+      await fs.writeFile(plistPath, launchdPlist(options.slug, job));
+      await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath], {
+        rejectOnNonZero: false
+      });
+    }
+    return { type: 'launchd', path: paths[0], paths, jobs };
   }
 
   await fs.mkdir(projectStateDir(options.slug), { recursive: true });
   const current = await options.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
   const marker = cronMarker(options.slug);
-  const lines = current.stdout
-    .split('\n')
-    .filter((line) => line.trim() && !line.includes(marker));
-  lines.push(`# ${marker}`);
-  lines.push(`${cronTime(options.schedule)} ${process.execPath} ${cliPath()} run --project ${options.slug} --scheduled >> ${path.join(projectStateDir(options.slug), 'cron.log')} 2>&1`);
+  const lines = removeManagedCronLines(current.stdout, options.slug).filter((line) => line.trim());
+  for (const job of jobs) {
+    lines.push(`# ${marker} ${job.name}`);
+    lines.push(`${cronTime(job)} ${commandLine(options.slug, job)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+  }
   await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
-  return { type: 'cron' };
+  return { type: 'cron', jobs };
 }
 
 export async function disableScheduler(options: {
@@ -40,40 +47,55 @@ export async function disableScheduler(options: {
   runCommand: CommandRunner;
   terminateRunning?: boolean;
   platform?: NodeJS.Platform;
-}): Promise<{ type: 'launchd' | 'cron'; path?: string }> {
+}): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[] }> {
   if (options.terminateRunning) await terminateLockPid(options.slug);
 
   if ((options.platform ?? process.platform) === 'darwin') {
-    const plistPath = launchdPlistPath(options.slug);
-    await options.runCommand('launchctl', ['bootout', `gui/${process.getuid?.() ?? ''}`, plistPath], {
-      rejectOnNonZero: false
-    });
-    await fs.rm(plistPath, { force: true });
-    return { type: 'launchd', path: plistPath };
+    const paths = await removeLaunchdPlists(options.slug, options.runCommand);
+    return { type: 'launchd', path: paths[0], paths };
   }
 
   const current = await options.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
-  const marker = cronMarker(options.slug);
-  const lines = current.stdout
-    .split('\n')
-    .filter((line) => !line.includes(marker) && !line.includes(`run --project ${options.slug} --scheduled`));
+  const lines = removeManagedCronLines(current.stdout, options.slug);
   await options.runCommand('crontab', ['-'], { input: `${lines.filter(Boolean).join('\n')}\n` });
   return { type: 'cron' };
 }
 
-function launchdPlistPath(slug: string): string {
+export interface SchedulerJob {
+  name: 'nightly' | 'poll';
+  trigger: 'scheduled' | 'watch';
+  time?: string;
+  intervalMinutes?: number;
+}
+
+function schedulerJobs(config: KaizenConfig, scheduleOverride?: string): SchedulerJob[] {
+  const jobs: SchedulerJob[] = [];
+  if (config.scheduler.nightly.enabled) {
+    jobs.push({ name: 'nightly', trigger: 'scheduled', time: scheduleOverride ?? config.scheduler.nightly.time });
+  }
+  if (config.scheduler.poll.enabled) {
+    jobs.push({ name: 'poll', trigger: 'watch', intervalMinutes: config.scheduler.poll.intervalMinutes });
+  }
+  return jobs;
+}
+
+function legacyLaunchdPlistPath(slug: string): string {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.plist`);
 }
 
-function launchdPlist(slug: string, schedule: string): string {
-  const [hour, minute] = schedule.split(':').map(Number);
+function launchdPlistPath(slug: string, jobName: string): string {
+  return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.${jobName}.plist`);
+}
+
+function launchdPlist(slug: string, job: SchedulerJob): string {
   const stateDir = projectStateDir(slug);
+  const schedule = job.time ? launchdCalendar(job.time) : launchdInterval(job.intervalMinutes ?? 5);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.kaizen-loop.${slug}</string>
+  <key>Label</key><string>com.kaizen-loop.${slug}.${job.name}</string>
   <key>ProgramArguments</key>
   <array>
     <string>${escapeXml(process.execPath)}</string>
@@ -81,13 +103,13 @@ function launchdPlist(slug: string, schedule: string): string {
     <string>run</string>
     <string>--project</string><string>${escapeXml(slug)}</string>
     <string>--scheduled</string>
+    <string>--trigger</string><string>${job.trigger}</string>
   </array>
-  <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>
+${schedule}
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string></dict>
-  <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, 'launchd.out.log'))}</string>
-  <key>StandardErrorPath</key><string>${escapeXml(path.join(stateDir, 'launchd.err.log'))}</string>
+  <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.out.log`))}</string>
+  <key>StandardErrorPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.err.log`))}</string>
 </dict>
 </plist>
 `;
@@ -97,9 +119,65 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function cronTime(schedule: string): string {
-  const [hour, minute] = schedule.split(':');
+function legacyCronMarker(slug: string): string {
+  return `KAIZEN-LOOP ${slug}`;
+}
+
+function cronTime(job: SchedulerJob): string {
+  if (job.name === 'poll') return `*/${job.intervalMinutes ?? 5} * * * *`;
+  const [hour, minute] = (job.time ?? '02:00').split(':');
   return `${Number(minute)} ${Number(hour)} * * *`;
+}
+
+function commandLine(slug: string, job: SchedulerJob): string {
+  return `${shQuote(process.execPath)} ${shQuote(cliPath())} run --project ${shQuote(slug)} --scheduled --trigger ${shQuote(job.trigger)}`;
+}
+
+async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Promise<string[]> {
+  const paths = [legacyLaunchdPlistPath(slug), launchdPlistPath(slug, 'nightly'), launchdPlistPath(slug, 'poll')];
+  for (const plistPath of paths) {
+    await runCommand('launchctl', ['bootout', `gui/${process.getuid?.() ?? ''}`, plistPath], {
+      rejectOnNonZero: false
+    });
+    await fs.rm(plistPath, { force: true });
+  }
+  return paths;
+}
+
+function removeManagedCronLines(crontab: string, slug: string): string[] {
+  const marker = cronMarker(slug);
+  const legacyMarker = legacyCronMarker(slug);
+  const lines: string[] = [];
+  let skipNextCommand = false;
+
+  for (const line of crontab.split('\n')) {
+    const trimmed = line.trim();
+    if (skipNextCommand && trimmed && !trimmed.startsWith('#')) {
+      skipNextCommand = false;
+      continue;
+    }
+    if (line.includes(marker) || line.includes(legacyMarker)) {
+      skipNextCommand = trimmed.startsWith('#');
+      continue;
+    }
+    lines.push(line);
+  }
+
+  return lines;
+}
+
+function shQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function launchdCalendar(time: string): string {
+  const [hour, minute] = time.split(':').map(Number);
+  return `  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`;
+}
+
+function launchdInterval(intervalMinutes: number): string {
+  return `  <key>StartInterval</key><integer>${intervalMinutes * 60}</integer>`;
 }
 
 function cliPath(): string {

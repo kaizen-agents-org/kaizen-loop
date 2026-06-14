@@ -25,6 +25,10 @@ export class RunLock {
     }
   }
 
+  static isActiveError(error: unknown): boolean {
+    return error instanceof ConfigError && error.message.startsWith('Kaizen run is already active:');
+  }
+
   async release(): Promise<void> {
     await fs.rm(this.lockPath, { force: true });
   }

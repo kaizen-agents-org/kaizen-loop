@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline/promises';
 import { initProject } from './init/init.js';
 import { type DirectCommitConfirmation, runKaizen } from './orchestrator/run.js';
 import { loadRegistry, resolveProject, saveRegistry } from './config/registry.js';
+import { loadConfig } from './config/config.js';
 import { runCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
 import { reportIssue } from './commands/report.js';
@@ -49,6 +50,7 @@ program
   .option('--project <slug>', 'target project slug')
   .option('--json', 'print machine-readable output')
   .option('--scheduled', 'scheduled unattended mode', false)
+  .option('--trigger <trigger>', 'trigger override: manual, scheduled, instant, or watch')
   .option('--issue <number>', 'process only one issue')
   .option('--dry-run', 'select issues without modifying workspaces or GitHub', false)
   .option('--max-issues <number>', 'override max issues for this run')
@@ -60,6 +62,7 @@ program
       cwd: process.cwd(),
       project: options.project ?? globals.project,
       scheduled: Boolean(options.scheduled),
+      trigger: parseTrigger(options.trigger),
       issue: options.issue ? Number(options.issue) : undefined,
       dryRun: Boolean(options.dryRun),
       maxIssues: options.maxIssues ? Number(options.maxIssues) : undefined,
@@ -169,8 +172,9 @@ program
     const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
-    const schedule = options.schedule ?? project.schedule;
-    const scheduler = await enableScheduler({ slug: resolved.slug, project, schedule, runCommand });
+    const config = await loadConfig(project.localPath);
+    const schedule = options.schedule ?? config.scheduler.nightly.time;
+    const scheduler = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
     project.enabled = true;
     project.schedule = schedule;
     await saveRegistry(registry);
@@ -259,6 +263,12 @@ function parseAgent(value: unknown): 'claude' | 'codex' | undefined {
   if (value === undefined) return undefined;
   if (value === 'claude' || value === 'codex') return value;
   throw new KaizenError(`Invalid agent: ${String(value)}`, 2);
+}
+
+function parseTrigger(value: unknown): 'manual' | 'scheduled' | 'instant' | 'watch' | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'manual' || value === 'scheduled' || value === 'instant' || value === 'watch') return value;
+  throw new KaizenError(`Invalid trigger: ${String(value)}`, 2);
 }
 
 function parsePriority(value: unknown): 'P0' | 'P1' | 'P2' {

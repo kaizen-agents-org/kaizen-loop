@@ -27,11 +27,20 @@ agent:
 
 run:
   maxIssuesPerNight: 3       # 1 晩に処理する Issue の上限
-  issueTimeoutMinutes: 30    # 1 Issue あたりのエージェント実行タイムアウト
+  issueTimeoutMinutes: 120   # 1 Issue あたりのエージェント実行タイムアウト
   runTimeoutMinutes: 240     # 実行全体のタイムアウト(超過時は残 Issue をスキップして終了処理)
   maxVerifyRetries: 2        # 検証失敗時、エラーを添えてエージェントに再修正させる回数
   maxAttemptsPerIssue: 3     # 夜をまたいだ累計試行回数。超えたら kaizen:needs-human へ
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
+
+scheduler:
+  nightly:
+    enabled: true
+    time: "02:00"            # `kaizen run --scheduled --trigger scheduled`
+  poll:
+    enabled: false
+    intervalMinutes: 5       # `kaizen run --scheduled --trigger watch`
+    skipIfRunning: true      # 実体は run.lock。前回run中なら次の起動は即終了
 
 commands:
   # ワークスペース reset 後、ベースライン検証前と作業ブランチ作成前に実行(依存インストール等)。null ならスキップ
@@ -189,7 +198,7 @@ issues:
 
 ## 4. スケジューラ定義(生成物)
 
-### macOS — `~/Library/LaunchAgents/com.kaizen-loop.<slug>.plist`
+### macOS — `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job>.plist`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -197,7 +206,7 @@ issues:
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp</string>
+  <key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.nightly</string>
   <key>ProgramArguments</key>
   <array>
     <string>/path/to/node</string>
@@ -205,17 +214,34 @@ issues:
     <string>run</string>
     <string>--project</string><string>s-hiraoku-myapp</string>
     <string>--scheduled</string>
+    <string>--trigger</string><string>scheduled</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string></dict>
   <key>StandardOutPath</key>
-  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/launchd.out.log</string>
+  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/nightly.launchd.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/launchd.err.log</string>
+  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/nightly.launchd.err.log</string>
 </dict>
 </plist>
+```
+
+`scheduler.poll.enabled: true` の場合は別 plist を生成する:
+
+```xml
+<key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.poll</string>
+<key>ProgramArguments</key>
+<array>
+  <string>/path/to/node</string>
+  <string>/path/to/kaizen</string>
+  <string>run</string>
+  <string>--project</string><string>s-hiraoku-myapp</string>
+  <string>--scheduled</string>
+  <string>--trigger</string><string>watch</string>
+</array>
+<key>StartInterval</key><integer>300</integer>
 ```
 
 注意点(実装時の要件):
@@ -228,11 +254,13 @@ issues:
 ### Linux — crontab エントリ
 
 ```cron
-# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit)
-0 2 * * * /path/to/node /path/to/kaizen run --project s-hiraoku-myapp --scheduled >> ~/.kaizen/projects/s-hiraoku-myapp/cron.log 2>&1
+# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) nightly
+0 2 * * * /path/to/node /path/to/kaizen run --project s-hiraoku-myapp --scheduled --trigger scheduled >> ~/.kaizen/projects/s-hiraoku-myapp/nightly.cron.log 2>&1
+# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) poll
+*/5 * * * * /path/to/node /path/to/kaizen run --project s-hiraoku-myapp --scheduled --trigger watch >> ~/.kaizen/projects/s-hiraoku-myapp/poll.cron.log 2>&1
 ```
 
-マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。
+マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。poll は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、前回 run が続いていれば `run.lock` によりスキップされる。
 
 注意点(実装時の要件):
 
