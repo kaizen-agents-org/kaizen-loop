@@ -777,7 +777,7 @@ async function reflectDirect(options: {
   const failedVerify = verifyResults.find((result) => !result.ok);
   if (failedVerify) throw new Error(`post-rebase verification failed: ${failedVerify.command}`);
   await commitLeftovers(options.workspace, options.issue, options.agentResult);
-  await git.checkout(options.config.git.defaultBranch);
+  await git.checkout(options.config.git.defaultBranch, { ignoreOtherWorktrees: true });
   await git.resetHard(`origin/${options.config.git.defaultBranch}`);
   await git.mergeFfOnly(options.branch);
   const commit = await git.revParse('HEAD');

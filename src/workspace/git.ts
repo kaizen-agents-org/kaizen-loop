@@ -34,8 +34,8 @@ export class GitClient {
     await this.git(['fetch', 'origin']);
   }
 
-  async checkout(branch: string): Promise<void> {
-    await this.git(['checkout', branch]);
+  async checkout(branch: string, options: { ignoreOtherWorktrees?: boolean } = {}): Promise<void> {
+    await this.git(['checkout', ...(options.ignoreOtherWorktrees ? ['--ignore-other-worktrees'] : []), branch]);
   }
 
   async resetHard(ref: string): Promise<void> {
@@ -60,6 +60,11 @@ export class GitClient {
 
   async worktreeAdd(target: string, branch: string, ref: string): Promise<void> {
     await this.git(['worktree', 'add', '-B', branch, target, ref]);
+  }
+
+  async worktreeList(): Promise<Array<{ path: string; branch?: string }>> {
+    const result = await this.git(['worktree', 'list', '--porcelain'], { rejectOnNonZero: false });
+    return parseWorktreeList(result.stdout);
   }
 
   async worktreeRemove(target: string): Promise<void> {
@@ -122,4 +127,29 @@ export class GitClient {
   private git(args: string[], options?: { rejectOnNonZero?: boolean }) {
     return this.run('git', args, { cwd: this.cwd, rejectOnNonZero: options?.rejectOnNonZero });
   }
+}
+
+function parseWorktreeList(output: string): Array<{ path: string; branch?: string }> {
+  const worktrees: Array<{ path: string; branch?: string }> = [];
+  let current: { path: string; branch?: string } | undefined;
+
+  for (const line of output.split('\n')) {
+    if (!line.trim()) {
+      if (current) worktrees.push(current);
+      current = undefined;
+      continue;
+    }
+    if (line.startsWith('worktree ')) {
+      if (current) worktrees.push(current);
+      current = { path: line.slice('worktree '.length) };
+      continue;
+    }
+    if (line.startsWith('branch ') && current) {
+      const branch = line.slice('branch '.length);
+      current.branch = branch.startsWith('refs/heads/') ? branch.slice('refs/heads/'.length) : branch;
+    }
+  }
+
+  if (current) worktrees.push(current);
+  return worktrees;
 }

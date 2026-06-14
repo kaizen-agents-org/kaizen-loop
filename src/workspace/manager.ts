@@ -83,10 +83,11 @@ export class WorkspaceManager {
     const branch = issueBranchName(config, issue);
     const worktreePath = issueWorktreePath(this.workspacePath, runId, issue.number);
     const git = this.git();
+    await git.worktreePrune();
     await git.worktreeRemove(worktreePath);
     await fs.rm(worktreePath, { recursive: true, force: true });
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
-    await git.worktreePrune();
+    await this.removeWorktreesForBranch(branch);
     await git.deleteLocalBranch(branch);
     await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
     return { branch, path: worktreePath };
@@ -120,6 +121,16 @@ export class WorkspaceManager {
       timeoutMs,
       rejectOnNonZero: false
     });
+  }
+
+  private async removeWorktreesForBranch(branch: string): Promise<void> {
+    const git = this.git();
+    const worktrees = await git.worktreeList();
+    for (const worktree of worktrees) {
+      if (worktree.branch !== branch || worktree.path === this.workspacePath) continue;
+      await git.worktreeRemove(worktree.path);
+      await fs.rm(worktree.path, { recursive: true, force: true });
+    }
   }
 }
 
