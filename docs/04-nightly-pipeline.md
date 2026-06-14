@@ -27,7 +27,7 @@ flowchart TB
     L --> C
 ```
 
-各 Issue は**直列**に処理する(並列にしない)。理由: 直接コミットが入った場合、次の Issue は更新後の main を起点にすべきで、修正同士のコンフリクトを構造的に回避できるため。
+選択された Issue は並列に処理する。各 Issue は base workspace から作る専用 `git worktree` 上で実行し、Issue ごとに独立したブランチと PR を作成する。複数 Issue を同時処理する場合、低リスク判定でも直接コミットへは進めず PR に寄せる。
 
 ## 1. プリフライト
 
@@ -64,12 +64,11 @@ gh issue list --label kaizen --state open \
 
 `--dry-run` はここまでを表示して終了する。修正前には diff が存在しないため、リスク判定は行わない。
 
-## 3. ワークスペース同期 + setup + ベースライン検証 + 作業ブランチ作成
+## 3. ベースライン検証 + Issue 別 worktree 作成
 
-Issue ごとに毎回:
+run 開始時に base workspace を 1 回だけ同期し、setup とベースライン検証を実行する:
 
 ```sh
-gh issue edit <N> --add-label kaizen:in-progress
 git fetch origin
 git checkout <defaultBranch>
 git reset --hard origin/<defaultBranch>
@@ -79,14 +78,22 @@ git clean -fdx
 git checkout <defaultBranch>
 git reset --hard origin/<defaultBranch>
 git clean -fdx
-<commands.setup>
-git switch -c kaizen/issue-<N>-<title-slug>
 ```
 
-- Issue に `kaizen:in-progress` ラベルを付与してからワークスペースを触る(他実行との排他)
+ベースライン検証が通ったら、選択された Issue ごとに専用 worktree を作る:
+
+```sh
+gh issue edit <N> --add-label kaizen:in-progress
+git worktree add -B kaizen/issue-<N>-<title-slug> \
+  <workspacePath>-worktrees/<runId>/issue-<N> \
+  origin/<defaultBranch>
+<commands.setup>
+```
+
+- Issue に `kaizen:in-progress` ラベルを付与してから Issue 用 worktree 上で実装を開始する
 - `commands.setup` が失敗した場合は**この夜の実行全体を中断**(環境問題であり、Issue 個別の問題ではないため)
 - ベースライン検証が失敗した場合、エージェントは起動しない。これは Issue 固有ではなく clean な default branch の問題なので、`kaizen:in-progress` を剥がし、機械可読 result marker なしの中断コメントを残して**この夜の実行全体を中断**する
-- ベースライン検証後に再度 reset + setup する。ベースライン検証の副作用を作業ブランチへ持ち込まないため
+- ベースライン検証後に base workspace を再度 reset する。ベースライン検証の副作用を Issue 用 worktree へ持ち込まないため
 - `commands.verify` が未設定の場合、ベースライン検証も修正後検証もスキップする。この場合、直接コミットは禁止される
 
 ## 4. エージェント実行
@@ -188,14 +195,14 @@ gh pr create --base <defaultBranch> --head kaizen/issue-<N>-<slug> \
 codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 ```
 
-- PR 本文: 修正サマリ、対象 Issue へのリンク(`Closes #N`)、変更概要、検証結果、リスク判定で PR になった理由
+- PR 本文: 修正サマリ、対象 Issue へのリンク(`Closes #N`)、変更概要、検証結果、リスク判定または並列実行で PR になった理由
 - PR 作成後、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を Codex で実行する。TypeScript 側は skill を起動するだけで、CI 監視、`gh run watch`、レビューコメント対応、mergeable 判定は `pr-guardian` skill の責務
 - Issue には PR へのリンクをコメント。Issue は**クローズしない**(PR マージ時に `Closes #N` で自動クローズ)
 - `kaizen:in-progress` は剥がす(PR レビュー待ちは人間のフェーズ)
 
 ### 失敗処理(検証リトライ枯渇・タイムアウト・禁止パス変更)
 
-- ワークスペースを reset(変更破棄)。作業ブランチは削除
+- Issue 用 worktree を削除する。作業ブランチは再実行時の復旧・調査用にローカルへ残す
 - Issue に失敗コメント: 試行回数、失敗理由、エージェントログ・検証ログの要約(末尾抜粋)
 - 累計試行回数が `maxAttemptsPerIssue` に達したら `kaizen:needs-human` を付与
 - `kaizen:in-progress` を剥がす

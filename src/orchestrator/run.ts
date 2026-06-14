@@ -98,46 +98,150 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     skipped: selection.skipped,
   };
 
-  let abortReason: string | undefined;
+  let runFailed = false;
   try {
-    for (let index = 0; index < selection.selected.length; index += 1) {
-      const issue = selection.selected[index];
-      try {
-        const issueSummary = await processIssue({
-          issue,
-          config,
-          runId,
-          runDir,
-          project: resolved.project,
-          github,
-          requestedAgent: options.agent,
-          trigger,
-          assumeYes: Boolean(options.assumeYes),
-          confirmDirectCommit: options.confirmDirectCommit,
-          runCommand: options.runCommand
-        });
-        summary.issues.push(issueSummary);
-      } catch (error) {
-        if (!(error instanceof RunAbortError)) throw error;
-        abortReason = error.message;
+    if (selection.selected.length > 0) {
+      const remoteUrl = await new GitClient(options.runCommand, resolved.project.localPath).remoteUrl('origin');
+      const baseWorkspace = new WorkspaceManager(options.runCommand, resolved.project.workspacePath, remoteUrl);
+      const baseline = await prepareBaseWorkspace({
+        workspace: baseWorkspace,
+        config,
+        runId,
+        runDir,
+        firstIssue: selection.selected[0],
+        github
+      });
+
+      if (!baseline.ok) {
+        runFailed = true;
         summary.skipped.push(
-          ...selection.selected.slice(index).map((skippedIssue) => ({
+          ...selection.selected.map((skippedIssue) => ({
             number: skippedIssue.number,
-            reason: `run aborted: ${abortReason}`
+            reason: `run aborted: ${baseline.reason}`
           }))
         );
-        break;
+      } else {
+        const forcePullRequest = selection.selected.length > 1;
+        const worktrees: Array<{ issue: GitHubIssue; branch: string; path: string }> = [];
+        try {
+          for (const issue of selection.selected) {
+            const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId);
+            worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
+          }
+          const issueResults = await Promise.allSettled(
+            worktrees.map((worktree) =>
+              processIssueInWorktree({
+                issue: worktree.issue,
+                config,
+                runId,
+                runDir,
+                project: resolved.project,
+                worktree,
+                github,
+                requestedAgent: options.agent,
+                trigger,
+                assumeYes: Boolean(options.assumeYes),
+                confirmDirectCommit: options.confirmDirectCommit,
+                runCommand: options.runCommand,
+                forcePullRequest
+              })
+            )
+          );
+          for (let index = 0; index < issueResults.length; index += 1) {
+            const result = issueResults[index];
+            if (result.status === 'fulfilled') {
+              summary.issues.push(result.value);
+              continue;
+            }
+            const issue = worktrees[index].issue;
+            summary.issues.push({
+              number: issue.number,
+              title: issue.title,
+              priority: priorityLabel(issue, config),
+              outcome: 'failed',
+              reason: String(result.reason)
+            });
+          }
+        } finally {
+          for (const worktree of worktrees) {
+            await baseWorkspace.removeIssueWorktree(worktree.path);
+          }
+        }
       }
     }
+  } catch (error) {
+    runFailed = true;
+    throw error;
   } finally {
     summary.finishedAt = new Date().toISOString();
-    summary.result = abortReason ? 'failed' : resultFor(summary.issues);
+    summary.result = runFailed ? 'failed' : resultFor(summary.issues);
     await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     await updateLastRun(resolved.slug, summary);
     await lock.release();
   }
 
   return summary;
+}
+
+async function prepareBaseWorkspace(options: {
+  workspace: WorkspaceManager;
+  config: KaizenConfig;
+  runId: string;
+  runDir: string;
+  firstIssue: GitHubIssue;
+  github: GitHubClient;
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
+  await options.workspace.ensure();
+  await options.workspace.sync(options.config.git.defaultBranch);
+  await options.workspace.runSetup(options.config);
+  const baselineVerify = await options.workspace.runVerify(options.config);
+  const failedBaseline = baselineVerify.find((item) => !item.ok);
+  if (!failedBaseline) {
+    await options.workspace.sync(options.config.git.defaultBranch);
+    return { ok: true };
+  }
+
+  const issueDir = path.join(options.runDir, `issue-${options.firstIssue.number}`);
+  await fs.mkdir(issueDir, { recursive: true });
+  const reason = `Baseline verification failed: ${failedBaseline.command}`;
+  await fs.writeFile(path.join(issueDir, 'verify.log'), baselineVerify.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
+  await options.github.comment(options.firstIssue.number, buildRunAbortComment(options.runId, reason, baselineVerify));
+  return { ok: false, reason };
+}
+
+async function processIssueInWorktree(options: {
+  issue: GitHubIssue;
+  config: KaizenConfig;
+  runId: string;
+  runDir: string;
+  project: { repo: string; localPath: string; workspacePath: string };
+  worktree: { branch: string; path: string };
+  github: GitHubClient;
+  requestedAgent?: 'claude' | 'codex';
+  trigger: RunSummary['trigger'];
+  assumeYes: boolean;
+  confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
+  runCommand: CommandRunner;
+  forcePullRequest: boolean;
+}): Promise<RunIssueSummary> {
+  return await processIssue({
+    issue: options.issue,
+    config: options.config,
+    runId: options.runId,
+    runDir: options.runDir,
+    project: {
+      ...options.project,
+      workspacePath: options.worktree.path
+    },
+    github: options.github,
+    requestedAgent: options.requestedAgent,
+    trigger: options.trigger,
+    assumeYes: options.assumeYes,
+    confirmDirectCommit: options.confirmDirectCommit,
+    runCommand: options.runCommand,
+    branch: options.worktree.branch,
+    forcePullRequest: options.forcePullRequest
+  });
 }
 
 async function processIssue(options: {
@@ -152,6 +256,8 @@ async function processIssue(options: {
   assumeYes: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
   runCommand: CommandRunner;
+  branch: string;
+  forcePullRequest: boolean;
 }): Promise<RunIssueSummary> {
   const started = Date.now();
   const issueDir = path.join(options.runDir, `issue-${options.issue.number}`);
@@ -160,26 +266,12 @@ async function processIssue(options: {
   const preferredBackend = selectPreferredBackend(options.config, options.issue, options.requestedAgent);
   const agent = await selectAgent(options.config, options.runCommand);
   const verifier = options.config.verifier.enabled ? new VerifierAgentAdapter(options.runCommand, options.config.verifier) : undefined;
-  const remoteUrl = await new GitClient(options.runCommand, options.project.localPath).remoteUrl('origin');
-  const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath, remoteUrl);
+  const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
 
   try {
     await options.github.addLabels(options.issue.number, ['kaizen:in-progress']);
-    await workspace.ensure();
-    await workspace.sync(options.config.git.defaultBranch);
     await workspace.runSetup(options.config);
-    const baselineVerify = await workspace.runVerify(options.config);
-    const failedBaseline = baselineVerify.find((item) => !item.ok);
-    if (failedBaseline) {
-      const reason = `Baseline verification failed: ${failedBaseline.command}`;
-      await fs.writeFile(path.join(issueDir, 'verify.log'), baselineVerify.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
-      await options.github.comment(options.issue.number, buildRunAbortComment(options.runId, reason, baselineVerify));
-      await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
-      throw new RunAbortError(reason);
-    }
-    await workspace.sync(options.config.git.defaultBranch);
-    await workspace.runSetup(options.config);
-    const branch = await workspace.createIssueBranch(options.config, options.issue);
+    const branch = options.branch;
 
     let agentResult: AgentResult | undefined;
     let verifierResult: VerifierResult | undefined;
@@ -304,6 +396,21 @@ async function processIssue(options: {
       diff: finalDiff,
       verifyConfigured: options.config.commands.verify.length > 0
     });
+    if (decision.action === 'direct' && options.forcePullRequest) {
+      const pr = await reflectPullRequest({
+        workspace,
+        branch,
+        issue: options.issue,
+        config: options.config,
+        agentResult,
+        verifyResults,
+        diff: finalDiff,
+        github: options.github,
+        reason: `Parallel issue run requires PR isolation: ${decision.reason}`
+      });
+      return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
+    }
+
     if (decision.action === 'direct') {
       const directChoice = await resolveDirectCommitChoice({
         issue: options.issue,
@@ -406,15 +513,7 @@ async function processIssue(options: {
     });
     return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
   } catch (error) {
-    if (error instanceof RunAbortError) throw error;
     return await finishFailed(options, agent, attempts, String(error), started);
-  }
-}
-
-class RunAbortError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'RunAbortError';
   }
 }
 
@@ -695,7 +794,7 @@ async function reflectDirect(options: {
   const failedVerify = verifyResults.find((result) => !result.ok);
   if (failedVerify) throw new Error(`post-rebase verification failed: ${failedVerify.command}`);
   await commitLeftovers(options.workspace, options.issue, options.agentResult);
-  await git.checkout(options.config.git.defaultBranch);
+  await git.checkout(options.config.git.defaultBranch, { ignoreOtherWorktrees: true });
   await git.resetHard(`origin/${options.config.git.defaultBranch}`);
   await git.mergeFfOnly(options.branch);
   const commit = await git.revParse('HEAD');

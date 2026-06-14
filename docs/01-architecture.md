@@ -116,12 +116,13 @@ Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `agent
 
 ### ワークスペースの不変条件
 
-- 毎 Issue の処理開始前に `git fetch origin && git checkout main && git reset --hard origin/main && git clean -fdx` で**完全に origin と同期**させる(夜間に人間が push していても追従する)
+- run 開始時に base workspace を `git fetch origin && git checkout main && git reset --hard origin/main && git clean -fdx` で**完全に origin と同期**させる(夜間に人間が push していても追従する)
+- 各 Issue は base workspace から作成した専用 `git worktree` で処理する。builder-agent、verifier、pr-guardian はその Issue 用 worktree だけを作業ディレクトリとして受け取る
 - 作業ブランチは `kaizen/issue-<番号>-<slug化したタイトル>` 形式
-- 依存インストール(`npm ci` 等)は設定の `commands.setup` で定義し、reset 後に毎回実行する
+- 依存インストール(`npm ci` 等)は設定の `commands.setup` で定義し、base workspace のベースライン検証前と各 Issue 用 worktree の処理開始時に実行する
 - ワークスペースが壊れた場合(fetch 失敗が続く等)は削除して再クローンする(`kaizen doctor --repair`)
 
-> **git worktree ではなく独立クローンを選ぶ理由**: worktree は開発者リポジトリと refs・index を共有するため、開発者側の操作(branch 削除、gc、rebase 中の状態)と干渉しうる。独立クローンはディスクを余分に使うが、隔離が完全で実装も単純。
+> **worktree の責務**: `workspacePath` は同期済み base clone として扱い、Issue 実装は `<workspacePath>-worktrees/<runId>/issue-<N>` で行う。これにより複数 Issue を並列に走らせても、builder-agent が同じ working tree に同時変更を書き込まない。
 
 ## 4. 状態の置き場所
 
