@@ -44,7 +44,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
 }
 
 function requiredLabels(config: KaizenConfig): string[] {
-  return [
+  return [...new Set([
     config.issues.label,
     ...config.issues.priorityOrder,
     config.issues.selection.includeLabel,
@@ -52,9 +52,10 @@ function requiredLabels(config: KaizenConfig): string[] {
     'kaizen:direct',
     'kaizen:pr-only',
     'kaizen:in-progress',
+    'kaizen:needs-human',
     'kaizen:agent:claude',
     'kaizen:agent:codex'
-  ];
+  ])];
 }
 
 async function check(checks: Array<{ name: string; ok: boolean; message?: string }>, name: string, fn: () => Promise<void>) {
