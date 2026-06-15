@@ -186,7 +186,6 @@ program
       maxIssues,
       agent: parseAgent(options.agent),
       json,
-      assumeYes,
       runCommand
     };
     const plan = await planImprove(improveOptions);

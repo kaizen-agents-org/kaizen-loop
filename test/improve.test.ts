@@ -83,15 +83,58 @@ describe('runImprove', () => {
 
     expect('selected' in output && output.selected[0].number).toBe(7);
   });
+
+  it('does not treat plan confirmation as direct-commit approval', async () => {
+    const { repo, workspace } = await setupProject({
+      config: defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+        .replace('verifier:\n  enabled: true', 'verifier:\n  enabled: false')
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(issue(Number(args[2]), `Issue ${args[2]}`, 'kaizen:P2')));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'fixed', notes: '' });
+        return result(command, args, options?.cwd, 'built');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, options?.cwd, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, options?.cwd, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, options?.cwd, '1\t0\tsrc/file.ts\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, options?.cwd, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const output = await runImprove({
+      cwd: repo,
+      project: 'o-r',
+      issueNumbers: [8],
+      dryRun: false,
+      json: true,
+      runCommand: runner,
+      assumeYes: true
+    } as Parameters<typeof runImprove>[0] & { assumeYes: boolean });
+
+    expect('issues' in output && output.issues[0].outcome).toBe('pr-created');
+    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    expect(gitCommands.some((command) => command === 'push -u origin main')).toBe(false);
+    expect(gitCommands.some((command) => command === 'push -u --force-with-lease origin kaizen/issue-8-issue-8')).toBe(true);
+  });
 });
 
-async function setupProject() {
+async function setupProject(options: { config?: string } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
   vi.stubEnv('KAIZEN_HOME', home);
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
-  await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+  await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+  await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), options.config ?? defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
   await saveRegistry({
     version: 1,
     projects: {
@@ -129,4 +172,9 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
     stderr: '',
     durationMs: 1
   };
+}
+
+async function writeJsonResult(filePath: unknown, payload: unknown) {
+  if (typeof filePath !== 'string') throw new Error('missing result path');
+  await fs.writeFile(filePath, JSON.stringify(payload));
 }

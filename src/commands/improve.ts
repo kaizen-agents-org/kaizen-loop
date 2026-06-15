@@ -11,7 +11,6 @@ export interface ImproveOptions {
   maxIssues?: number;
   agent?: 'claude' | 'codex';
   json: boolean;
-  assumeYes?: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<'direct' | 'pr' | 'reject'>;
   runCommand: CommandRunner;
 }
@@ -46,7 +45,6 @@ export async function runImprove(options: ImproveOptions): Promise<RunSummary | 
     maxIssues: maxIssuesFor(options),
     agent: options.agent,
     json: options.json,
-    assumeYes: options.assumeYes,
     confirmDirectCommit: options.confirmDirectCommit,
     runCommand: options.runCommand
   });
