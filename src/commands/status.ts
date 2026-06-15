@@ -21,6 +21,8 @@ export async function statusProject(options: { cwd: string; project?: string; me
     lastRun: resolved.project.lastRun ?? lastSummary,
     issues: {
       open: issues.length,
+      selectionMode: config.issues.selection.mode,
+      queued: countLabel(issues, config.issues.selection.includeLabel),
       p0: countLabel(issues, 'kaizen:P0'),
       p1: countLabel(issues, 'kaizen:P1'),
       p2: countLabel(issues, 'kaizen:P2'),

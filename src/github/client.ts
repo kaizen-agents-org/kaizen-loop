@@ -7,6 +7,7 @@ export const KAIZEN_LABELS = [
   'kaizen:P0',
   'kaizen:P1',
   'kaizen:P2',
+  'kaizen:ready',
   'kaizen:direct',
   'kaizen:pr-only',
   'kaizen:in-progress',
@@ -184,9 +185,10 @@ function isMissingLabelError(error: unknown): boolean {
 function labelsAfterMissingLabelError(labels: string[], error: unknown): string[] {
   if (labels.length === 0 || !isMissingLabelError(error)) return labels;
   const message = String(error).toLowerCase();
-  const missingOptional = labels.find((label) => label !== 'kaizen' && message.includes(label.toLowerCase()));
+  const baseLabel = labels[0];
+  const missingOptional = labels.slice(1).find((label) => message.includes(label.toLowerCase()));
   if (missingOptional) return labels.filter((label) => label !== missingOptional);
-  if (labels.includes('kaizen') && labels.length > 1) return ['kaizen'];
+  if (baseLabel && labels.length > 1) return [baseLabel];
   return [];
 }
 
@@ -198,6 +200,7 @@ function colorForLabel(label: string): string {
   if (label.includes(':P0')) return 'b60205';
   if (label.includes(':P1')) return 'd93f0b';
   if (label.includes(':P2')) return 'fbca04';
+  if (label.includes('ready')) return '0e8a16';
   if (label.includes('needs-human')) return '5319e7';
   if (label.includes('in-progress')) return '1d76db';
   return '0e8a16';
@@ -209,6 +212,7 @@ function descriptionForLabel(label: string): string {
     'kaizen:P0': 'Kaizen priority P0',
     'kaizen:P1': 'Kaizen priority P1',
     'kaizen:P2': 'Kaizen priority P2',
+    'kaizen:ready': 'Approved for Kaizen Loop execution',
     'kaizen:direct': 'Allow direct commit when policy permits',
     'kaizen:pr-only': 'Force pull request reflection',
     'kaizen:in-progress': 'Currently being processed by Kaizen Loop',

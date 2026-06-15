@@ -73,11 +73,27 @@ describe('kaizen report CLI', () => {
     expect(output.fix.issues[0].prUrl).toBe('https://github.com/o/r/pull/4');
     const calls = await readCalls(logPath);
     const issueCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('issue create'));
-    expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2');
+    expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready');
     expect(calls.some((call) => call.command === 'builder-agent' && call.args.length === 0)).toBe(true);
     const prCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('pr create'));
     expect(prCreate).toBeDefined();
     expect(prCreate?.args).not.toContain('--draft');
+  });
+
+  it('keeps report --now unqueued when --no-queue is provided', async () => {
+    const { repo } = await setupProject({ verify: ['npm test'], guardianEnabled: false });
+    const { binDir, logPath } = await setupFakeBins();
+
+    await runCli({
+      cwd: repo,
+      binDir,
+      args: ['report', 'CLI no queue', '--project', 'o-r', '--body', 'Dogfooding failure', '--now', '--no-queue', '--json']
+    });
+
+    const calls = await readCalls(logPath);
+    const issueCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('issue create'));
+    expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2');
+    expect(calls.some((call) => call.command === 'builder-agent' && call.args.length === 0)).toBe(true);
   });
 
   it('rejects --yes without --now', async () => {
@@ -126,6 +142,37 @@ describe('reportIssue', () => {
     expect(createArgs).toContain('--label');
     expect(createArgs?.[createArgs.indexOf('--label') + 1]).toBe('kaizen,kaizen:P1,customer-impact,kaizen:direct,kaizen:agent:codex');
     expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
+  });
+
+  it('adds the configured queue label when requested', async () => {
+    const { repo } = await setupProject();
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+        return result(command, args, repo, 'https://github.com/o/r/issues/14\n');
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(issue(14, 'Queued report')));
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    await reportIssue({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Queued report',
+      body: 'Ready for loop',
+      priority: 'P2',
+      direct: false,
+      prOnly: false,
+      queue: true,
+      extraLabels: [],
+      runCommand: runner
+    });
+
+    const labelCreates = runner.mock.calls.filter(([, args]) => args.join(' ').startsWith('label create'));
+    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:ready']);
+    const createArgs = runner.mock.calls.find(([, args]) => args.join(' ').startsWith('issue create'))?.[1];
+    expect(createArgs?.[createArgs.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready');
   });
 });
 

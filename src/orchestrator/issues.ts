@@ -12,6 +12,7 @@ export function selectIssues(options: {
   config: KaizenConfig;
   maxIssues: number;
   onlyIssue?: number;
+  explicit?: boolean;
   now?: Date;
 }): IssueSelection {
   const now = options.now ?? new Date();
@@ -20,8 +21,28 @@ export function selectIssues(options: {
     if (options.onlyIssue && issue.number !== options.onlyIssue) return false;
 
     const labels = labelNames(issue);
-    if (labels.includes('kaizen:needs-human')) {
-      skipped.push({ number: issue.number, reason: 'needs-human' });
+    if (!labels.includes(options.config.issues.label)) {
+      skipped.push({ number: issue.number, reason: `missing required label: ${options.config.issues.label}` });
+      return false;
+    }
+
+    if (!options.explicit && options.config.issues.selection.mode === 'manual-only') {
+      skipped.push({ number: issue.number, reason: 'manual-only selection mode' });
+      return false;
+    }
+
+    if (
+      !options.explicit &&
+      options.config.issues.selection.mode === 'opt-in' &&
+      !labels.includes(options.config.issues.selection.includeLabel)
+    ) {
+      skipped.push({ number: issue.number, reason: `missing selection label: ${options.config.issues.selection.includeLabel}` });
+      return false;
+    }
+
+    const excludedLabel = options.config.issues.selection.excludeLabels.find((label) => labels.includes(label));
+    if (excludedLabel) {
+      skipped.push({ number: issue.number, reason: excludedLabel === 'kaizen:needs-human' ? 'needs-human' : `excluded label: ${excludedLabel}` });
       return false;
     }
 

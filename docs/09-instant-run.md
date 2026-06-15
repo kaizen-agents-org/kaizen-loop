@@ -65,13 +65,14 @@ flowchart TB
 kaizen report "<タイトル>" --now [--json] [--yes] [既存オプション]
 ```
 
-`kaizen report` + `kaizen fix` の合成。利用側 AI エージェントの主経路を想定:
+`kaizen report` + `kaizen fix` の合成。登録した Issue 番号だけを即時処理する。利用側 AI エージェントの主経路を想定:
 
 ```sh
 # AI エージェント: 遭遇した問題を起票し、その場で修正させ、結果を JSON で受け取る
 echo "$BODY" | kaizen report "config 再読込で古い値が残る" --body-file - --now --json
 ```
 
+- `--now` はデフォルトで queued 実行許可ラベルも付ける。即時実行だけにして queued 実行候補へ残したくない場合は `--now --no-queue`
 - 非 TTY(AI からの実行)では確認プロンプトが出せないため、直接コミット判定時は `instant.unattendedMode` に従う(§5)。デフォルトは PR への切り替え。AI に main を直接動かさせたい場合は `--yes` または `instant.unattendedMode: direct` を明示する
 
 ### 3.3 `kaizen improve` — backlog の即時改善

@@ -110,7 +110,12 @@ report:
   issueComments: true
 
 issues:
-  label: "kaizen"            # 処理対象を示すラベル
+  label: "kaizen"            # Kaizen 管理対象を示す base ラベル
+  selection:
+    mode: auto               # auto | opt-in | manual-only
+    includeLabel: "kaizen:ready"
+    excludeLabels:
+      - "kaizen:needs-human"
   # 優先度順(先頭が最優先)。同優先度は古い順
   priorityOrder: ["kaizen:P0", "kaizen:P1", "kaizen:P2"]
 ```
@@ -123,6 +128,10 @@ issues:
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
 - `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、レビューコメントへの返信は skill 側の責務
+- `issues.selection.mode: auto` は既存互換で、`issues.label` 付きの open Issue を自動選択候補にする
+- `issues.selection.mode: opt-in` は `issues.label` と `issues.selection.includeLabel` の両方を持つ Issue だけを scheduled / backlog 実行候補にする
+- `issues.selection.mode: manual-only` は scheduled / backlog 実行で Issue を自動選択しない。`kaizen fix <Issue番号>` などの明示実行は可能
+- `issues.selection.excludeLabels` は selection mode より後の除外条件。デフォルトでは `kaizen:needs-human` を実行しない
 
 ## 2. ローカル登録簿 `~/.kaizen/registry.json`
 

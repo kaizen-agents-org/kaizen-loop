@@ -36,7 +36,15 @@ Use `kaizen-loop` as the fallback when symptoms span multiple projects or the av
    gh issue create --repo kaizen-agents-org/<repo> --title "<title>" --body-file <body-file> --label kaizen
    ```
 
-Only pass `--label` values that exist. Prefer `kaizen` so the issue can enter the Issue-to-PR MVP; also add `bug` if that label exists. If no useful labels exist, create the issue without labels rather than blocking.
+Only pass `--label` values that exist. Prefer `kaizen` so the issue is visible to Kaizen tooling; also add `bug` if that label exists. If no useful labels exist, create the issue without labels rather than blocking.
+
+Issue creation and execution authorization are separate:
+
+- Add the base `kaizen` label when available.
+- Do not add `kaizen:ready` by default. In opt-in selection mode, `kaizen:ready` means the user explicitly approved queued Kaizen Loop execution.
+- Add `kaizen:ready` only when the user asks to queue, approve, run, execute, or put the issue on the Kaizen Loop.
+- If the user asks for immediate execution, file the issue, add `kaizen:ready` when available, then report the explicit command that should run next, such as `kaizen fix <issue>`.
+- If the issue needs human clarification before automation, prefer `kaizen:needs-human` instead of `kaizen:ready`.
 
 ## Issue Body
 

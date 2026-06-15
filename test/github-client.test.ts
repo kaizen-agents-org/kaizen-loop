@@ -59,6 +59,35 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[1][1]).toContain('kaizen-agents-org/verifier');
   });
 
+  it('preserves a custom base label when optional labels are missing', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      const labelValue = String(args.at(args.indexOf('--label') + 1));
+      if (labelValue.includes('custom:P2')) {
+        throw new Error('GraphQL: Could not resolve to a Label with the name custom:P2');
+      }
+      return {
+        command,
+        args,
+        exitCode: 0,
+        stdout: 'https://github.com/o/r/issues/78\n',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    const issue = await client.createIssue({
+      repo: 'o/r',
+      title: 'follow-up',
+      body: 'details',
+      labels: ['custom:kaizen', 'custom:P2']
+    });
+
+    expect(issue.labels).toEqual([{ name: 'custom:kaizen' }]);
+    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner.mock.calls[1][1]).toContain('custom:kaizen');
+  });
+
   it('searches a broad candidate set before exact-title duplicate matching', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,

@@ -8,6 +8,7 @@ import { loadConfig } from './config/config.js';
 import { runCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
 import { reportIssue, reportIssueNow } from './commands/report.js';
+import { listQueuedIssues, queueIssues, unqueueIssues } from './commands/queue.js';
 import { planImprove, runImprove } from './commands/improve.js';
 import { statusProject } from './commands/status.js';
 import { readLogs } from './commands/logs.js';
@@ -95,6 +96,8 @@ program
   .option('--direct', 'add kaizen:direct label', false)
   .option('--pr-only', 'add kaizen:pr-only label', false)
   .option('--agent <agent>', 'agent label: claude or codex')
+  .option('--queue', 'mark the issue as approved for queued Kaizen execution')
+  .option('--no-queue', 'create the issue without the queued execution label')
   .option('--label <label...>', 'extra label')
   .option('--now', 'process the created issue immediately', false)
   .option('--yes', 'skip direct commit confirmation when used with --now', false)
@@ -115,6 +118,7 @@ program
       direct: Boolean(options.direct),
       prOnly: Boolean(options.prOnly),
       agent: parseAgent(options.agent),
+      queue: queueForReport(options.queue, Boolean(options.now)),
       extraLabels: options.label ?? [],
       runCommand
     };
@@ -160,6 +164,50 @@ program
       runCommand
     });
     print(result, json);
+  });
+
+program
+  .command('queue')
+  .description('mark existing Kaizen issues as approved for queued execution')
+  .argument('[issues...]', 'issue numbers')
+  .option('--project <slug>', 'target project slug')
+  .option('--list', 'list queued issues instead of changing labels', false)
+  .option('--json', 'print machine-readable output')
+  .action(async (issues, options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const json = Boolean(options.json ?? globals.json);
+    if (options.list) {
+      print(await listQueuedIssues({
+        cwd: process.cwd(),
+        project: options.project ?? globals.project,
+        runCommand
+      }), json);
+      return;
+    }
+    const result = await queueIssues({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      issues: parseIssueArguments(issues),
+      runCommand
+    });
+    print(result, json);
+  });
+
+program
+  .command('unqueue')
+  .description('remove queued execution approval from existing Kaizen issues')
+  .argument('<issues...>', 'issue numbers')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (issues, options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await unqueueIssues({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      issues: parseIssueArguments(issues),
+      runCommand
+    });
+    print(result, Boolean(options.json ?? globals.json));
   });
 
 program
@@ -373,6 +421,20 @@ function parsePositiveInteger(value: string, name: string): number {
 function parsePriority(value: unknown): 'P0' | 'P1' | 'P2' {
   if (value === 'P0' || value === 'P1' || value === 'P2') return value;
   throw new KaizenError(`Invalid priority: ${String(value)}`, 2);
+}
+
+function queueForReport(value: unknown, now: boolean): boolean | undefined {
+  if (value === true || value === false) return value;
+  return now ? true : undefined;
+}
+
+function parseIssueArguments(values: unknown): number[] {
+  if (!Array.isArray(values) || values.length === 0) throw new KaizenError('At least one issue number is required', 2);
+  return values.map((value) => {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed > 0) return parsed;
+    throw new KaizenError(`Invalid issue number: ${String(value)}`, 2);
+  });
 }
 
 async function resolveBody(body: string, bodyFile: string | undefined): Promise<string> {

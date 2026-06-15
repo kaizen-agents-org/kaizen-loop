@@ -127,10 +127,12 @@ Kaizen Issue を素早く登録する。**人間と AI エージェント(利用
 kaizen report "<タイトル>" [--body <本文>] [--body-file <path|->]
               [--priority P0|P1|P2] [--direct|--pr-only]
               [--agent claude|codex] [--label <追加ラベル>...]
-              [--now]
+              [--queue|--no-queue] [--now]
 ```
 
 - `--now`: 登録後そのまま即時修正を実行する(`report` + `fix` の合成。→ [09-instant-run.md](./09-instant-run.md) §3.2)
+- `--queue`: `issues.selection.includeLabel`(デフォルト `kaizen:ready`)を付け、queued 実行の対象にする
+- `--no-queue`: Issue は登録するが queued 実行許可ラベルを付けない。`--now` でも明示実行のみ行う
 
 ### 例
 
@@ -144,8 +146,26 @@ echo "$BODY" | kaizen report "起動時に config 検証エラーの行番号が
 
 - `--priority` 省略時は P2
 - `--direct` は `kaizen:direct`、`--pr-only` は `kaizen:pr-only` ラベルを付与
+- `--now` は未指定時の `--queue` と同じく実行許可ラベルを付ける。即時実行だけにしたい場合は `--now --no-queue`
 - `--json` 時は作成された Issue の番号と URL を JSON で返す(AI が後続処理に使える)
 - 本文が Issue テンプレートの必須セクション(再現手順 / 期待動作)を欠く場合は警告を出すが登録は通す(夜間エージェントが「情報不足」と判断した場合の挙動は [04-nightly-pipeline.md](./04-nightly-pipeline.md) §6)
+
+---
+
+## `kaizen queue` / `kaizen unqueue`
+
+既存 Issue を queued 実行対象に出し入れする。
+
+```
+kaizen queue <Issue番号...> [--project <slug>]
+kaizen unqueue <Issue番号...> [--project <slug>]
+kaizen queue --list [--project <slug>]
+```
+
+- `queue` は `issues.label` と `issues.selection.includeLabel` を付ける
+- `unqueue` は `issues.selection.includeLabel` だけを外す
+- `queue --list` は queued 実行許可ラベル付きの open Issue を表示する
+- `issues.selection.mode: opt-in` では `queue` された Issue だけが scheduled / backlog 実行候補になる
 
 ---
 

@@ -46,6 +46,8 @@ gh issue list --label kaizen --state open \
   --json number,title,body,labels,createdAt,comments --limit 100
 ```
 
+取得後、`issues.selection` を適用する。`auto` は既存互換で `kaizen` ラベル付き Issue を候補にする。`opt-in` は `kaizen:ready` などの `includeLabel` がある Issue だけを候補にする。`manual-only` は scheduled / backlog 実行では自動選択しない。
+
 ### 除外フィルタ
 
 | 条件 | 理由 |

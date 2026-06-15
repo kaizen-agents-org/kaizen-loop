@@ -80,17 +80,13 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const requestedIssues = requestedIssueNumbers
     ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
     : undefined;
-  const issues = requestedIssues
-    ? requestedIssues.filter((issue) => hasRequiredIssueLabel(issue, config))
-    : await github.listIssues(config.issues.label);
-  const selection = selectIssues({ issues, config, maxIssues });
-  if (requestedIssues) {
-    selection.skipped.push(
-      ...requestedIssues
-        .filter((issue) => !hasRequiredIssueLabel(issue, config))
-        .map((issue) => ({ number: issue.number, reason: `missing required label: ${config.issues.label}` }))
-    );
-  }
+  const issues = requestedIssues ?? await github.listIssues(config.issues.label);
+  const selection = selectIssues({
+    issues,
+    config,
+    maxIssues,
+    explicit: requestedIssues !== undefined
+  });
 
   if (options.dryRun) return selection;
 
@@ -220,10 +216,6 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 
 function uniqueIssueNumbers(issueNumbers: number[]): number[] {
   return [...new Set(issueNumbers)];
-}
-
-function hasRequiredIssueLabel(issue: GitHubIssue, config: KaizenConfig): boolean {
-  return labelNames(issue).includes(config.issues.label);
 }
 
 async function prepareBaseWorkspace(options: {
