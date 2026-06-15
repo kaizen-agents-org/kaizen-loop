@@ -98,6 +98,27 @@ Phase 2 で実装する範囲は `kaizen fix <Issue番号>`、`--agent`、`--yes
 
 ---
 
+## `kaizen improve`
+
+溜まっている Kaizen Issue を、ユーザの意思で今すぐ改善ループに流す。内部的には `run` と同じ Issue 選択、worktree 分離、PR 作成、pr-guardian を使い、実行契機は即時実行(`instant`)として記録する。
+
+```
+kaizen improve [--project <slug>] [--issue <番号[,番号...]>] [--dry-run]
+               [--max-issues <N>] [--agent claude|codex] [--yes] [--json]
+```
+
+| オプション | 意味 |
+|---|---|
+| `--issue <番号[,番号...]>` | 指定した Issue だけを対象にする。省略時は `kaizen` label の open issue から通常の優先順位で選ぶ |
+| `--dry-run` | 対象 Issue と skip 理由だけを表示し、実装・検証・PR 作成は行わない |
+| `--max-issues <N>` | この実行に限り処理上限を上書き。`--issue` 指定時は省略すると指定数を上限にする |
+| `--agent <agent>` | builder-agent へ渡す希望バックエンドを上書き(`claude` または `codex`) |
+| `--yes` | 実行計画の確認を省略する。非 TTY / `--json` で実行する場合は必須 |
+
+TTY では実行前に対象 Issue の計画を表示して確認する。`--json` や自動化から使う場合は `--dry-run` で計画を確認するか、`--yes` で明示的に実行する。
+
+---
+
 ## `kaizen report`
 
 Kaizen Issue を素早く登録する。**人間と AI エージェント(利用側)の共用インターフェース**。内部は `gh issue create`。
