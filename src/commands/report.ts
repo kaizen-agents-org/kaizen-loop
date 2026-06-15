@@ -29,7 +29,11 @@ export async function reportIssue(options: ReportIssueOptions) {
   const config = await loadConfig(resolved.project.localPath);
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const labels = [config.issues.label, `kaizen:${options.priority ?? 'P2'}`, ...options.extraLabels];
-  if (options.queue) labels.push(config.issues.selection.includeLabel);
+  if (options.queue) {
+    const queueLabels = [config.issues.label, config.issues.selection.includeLabel];
+    await github.createLabels(queueLabels);
+    labels.push(config.issues.selection.includeLabel);
+  }
   if (options.direct) labels.push('kaizen:direct');
   if (options.prOnly) labels.push('kaizen:pr-only');
   if (options.agent) labels.push(`kaizen:agent:${options.agent}`);

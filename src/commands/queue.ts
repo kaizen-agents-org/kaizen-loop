@@ -22,6 +22,7 @@ export async function queueIssues(options: QueueOptions): Promise<{ queued: numb
   const config = await loadConfig(resolved.project.localPath);
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const labels = uniqueLabels([config.issues.label, config.issues.selection.includeLabel]);
+  await github.createLabels(labels);
   for (const issue of uniqueIssues(options.issues)) {
     await github.addLabels(issue, labels);
   }

@@ -169,6 +169,8 @@ describe('reportIssue', () => {
       runCommand: runner
     });
 
+    const labelCreates = runner.mock.calls.filter(([, args]) => args.join(' ').startsWith('label create'));
+    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:ready']);
     const createArgs = runner.mock.calls.find(([, args]) => args.join(' ').startsWith('issue create'))?.[1];
     expect(createArgs?.[createArgs.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready');
   });

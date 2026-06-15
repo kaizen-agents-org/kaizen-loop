@@ -24,6 +24,8 @@ describe('queueIssues', () => {
     });
 
     expect(output).toEqual({ queued: [3, 4], labels: ['kaizen', 'kaizen:ready'] });
+    const labelCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('label create'));
+    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:ready']);
     const edits = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue edit'));
     expect(edits.map(([, args]) => [args[2], args.at(-1)])).toEqual([
       ['3', 'kaizen,kaizen:ready'],
