@@ -75,10 +75,11 @@ guardian:
   maxAttempts: 5
 
 policy:
-  # 反映方法: hybrid | pr-only | direct-only
+  # 反映方法: pr-only | hybrid | direct-only
+  # 既定は PR-first。hybrid / direct-only は明示 opt-in
   # direct-only でも verify / protectedPaths / forbiddenPaths / pr-only ラベルの安全ゲートはバイパスしない
-  mode: hybrid
-  # hybrid 時の直接コミット許可条件(すべて満たす必要がある。→ 04-nightly-pipeline.md §6)
+  mode: pr-only
+  # hybrid / direct-only 時の直接コミット許可条件(すべて満たす必要がある。→ 04-nightly-pipeline.md §6)
   directCommit:
     maxChangedLines: 150     # 追加+削除の合計
     maxChangedFiles: 5
@@ -125,6 +126,7 @@ issues:
 - 未知のキーはエラー(タイポによるサイレント無効化を防ぐ)
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
+- `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
 - `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、レビューコメントへの返信は skill 側の責務

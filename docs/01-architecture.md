@@ -124,6 +124,15 @@ Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `agent
 
 > **worktree の責務**: `workspacePath` は同期済み base clone として扱い、Issue 実装は `<workspacePath>-worktrees/<runId>/issue-<N>` で行う。これにより複数 Issue を並列に走らせても、builder-agent が同じ working tree に同時変更を書き込まない。
 
+### ソースオブトゥルースのリモート
+
+Kaizen Agents 組織で運用する `kaizen-loop` と `verifier` は、GitHub Issues / Pull Requests のソースオブトゥルースを org リポジトリに置く。
+
+- `kaizen-loop`: `https://github.com/kaizen-agents-org/kaizen-loop.git`
+- `verifier`: `https://github.com/kaizen-agents-org/verifier.git`
+
+ローカルの `origin` は原則として上記 org リポジトリを指す。個人 fork は contributor remote として追加してよいが、監視・Issue 起票・PR 作成は org リポジトリを基準にする。
+
 ## 4. 状態の置き場所
 
 | 種別 | 場所 | コミット | 内容 |

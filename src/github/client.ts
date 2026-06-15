@@ -76,14 +76,12 @@ export class GitHubClient {
     await this.gh(['issue', 'comment', String(issue), '--body', body]);
   }
 
-  async findOpenIssueByTitle(options: { repo?: string; title: string }): Promise<GitHubIssue | undefined> {
+  async findOpenIssueByTitle(options: { repo?: string; title: string; body?: string }): Promise<GitHubIssue | undefined> {
     const args = [
       'issue',
       'list',
       '--state',
       'open',
-      '--search',
-      options.title,
       '--json',
       'number,title,body,labels,createdAt,comments,url',
       '--limit',
@@ -92,7 +90,8 @@ export class GitHubClient {
     if (options.repo) args.push('--repo', options.repo);
     const result = await this.gh(args);
     const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
-    return issues.find((issue) => issue.title.trim().toLowerCase() === options.title.trim().toLowerCase());
+    return issues.find((issue) => normalizedTitle(issue.title) === normalizedTitle(options.title))
+      ?? issues.find((issue) => isEquivalentOpenIssue(issue, options));
   }
 
   async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {
@@ -194,6 +193,79 @@ function labelsAfterMissingLabelError(labels: string[], error: unknown): string[
 
 function emptyResult(args: string[], cwd: string) {
   return { command: 'gh', args, cwd, exitCode: 0, stdout: '', stderr: '', durationMs: 0 };
+}
+
+function normalizedTitle(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isEquivalentOpenIssue(issue: GitHubIssue, target: { title: string; body?: string }): boolean {
+  const issueIsMonitor = isMonitorTitle(issue.title);
+  const targetIsMonitor = isMonitorTitle(target.title);
+  if (!issueIsMonitor && !targetIsMonitor) return false;
+
+  const existingTokens = duplicateTokens(`${issue.title}\n${issue.body ?? ''}`);
+  const targetTokens = duplicateTokens(`${target.title}\n${target.body ?? ''}`);
+  const overlap = [...targetTokens].filter((token) => existingTokens.has(token));
+  const smallerSetSize = Math.min(existingTokens.size, targetTokens.size);
+  if (smallerSetSize === 0) return false;
+
+  if (overlap.length >= 4) return true;
+  return overlap.length >= 2 && overlap.includes('ci') && (targetTokens.has('pr') || targetTokens.has('workflow') || targetTokens.has('build'));
+}
+
+function isMonitorTitle(title: string): boolean {
+  return /^\s*\[monitor\]/i.test(title);
+}
+
+function duplicateTokens(input: string): Set<string> {
+  const normalized = input
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/github actions?/g, ' ci ')
+    .replace(/\bpull requests?\b/g, ' pr ')
+    .replace(/\bprs?\b/g, ' pr ')
+    .replace(/\bchecks?\b/g, ' ci ')
+    .replace(/\bvalidation\b/g, ' ci ')
+    .replace(/\bworkflows?\b/g, ' workflow ')
+    .replace(/\btests?\b/g, ' test ');
+  const stopwords = new Set([
+    'a',
+    'an',
+    'and',
+    'are',
+    'as',
+    'at',
+    'be',
+    'by',
+    'for',
+    'from',
+    'in',
+    'is',
+    'it',
+    'of',
+    'on',
+    'or',
+    'the',
+    'to',
+    'with',
+    'add',
+    'baseline',
+    'monitor',
+    'observed',
+    'recommended',
+    'action',
+    'affected',
+    'repository',
+    'repositories',
+    'relevant',
+    'links'
+  ]);
+  return new Set(
+    normalized
+      .match(/[a-z0-9][a-z0-9._-]*/g)
+      ?.filter((token) => token.length > 1 && !stopwords.has(token)) ?? []
+  );
 }
 
 function colorForLabel(label: string): string {

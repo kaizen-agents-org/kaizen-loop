@@ -103,5 +103,72 @@ describe('GitHubClient', () => {
 
     const args = runner.mock.calls[0][1];
     expect(args.at(args.indexOf('--limit') + 1)).toBe('100');
+    expect(args).not.toContain('--search');
+  });
+
+  it('matches equivalent open monitor issues when wording differs', async () => {
+    const existingIssue = {
+      number: 20,
+      title: '[monitor] Add baseline CI for kaizen-loop pull requests',
+      body: 'Run npm test, npm run typecheck, and npm run build for PRs.',
+      labels: [],
+      createdAt: '2026-06-12T00:00:00Z',
+      comments: [],
+      url: 'https://github.com/kaizen-agents-org/kaizen-loop/issues/20'
+    };
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: JSON.stringify([
+        existingIssue,
+        {
+          number: 26,
+          title: '[monitor] Clarify source-of-truth remotes for kaizen-loop and verifier',
+          body: 'Document canonical remotes.',
+          labels: [],
+          createdAt: '2026-06-12T00:00:00Z',
+          comments: []
+        }
+      ]),
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    const issue = await client.findOpenIssueByTitle({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      title: '[monitor] Add GitHub CI checks for PR validation'
+    });
+
+    expect(issue?.number).toBe(20);
+  });
+
+  it('does not match unrelated open monitor issues', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: JSON.stringify([
+        {
+          number: 26,
+          title: '[monitor] Clarify source-of-truth remotes for kaizen-loop and verifier',
+          body: 'Document canonical remotes.',
+          labels: [],
+          createdAt: '2026-06-12T00:00:00Z',
+          comments: []
+        }
+      ]),
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    const issue = await client.findOpenIssueByTitle({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      title: '[monitor] Add GitHub CI checks for PR validation'
+    });
+
+    expect(issue).toBeUndefined();
   });
 });

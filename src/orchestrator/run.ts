@@ -9,7 +9,7 @@ import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.j
 import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import type { GitHubIssue } from '../github/types.js';
-import { agentSummary, buildResultComment, countAttempts } from '../report/comments.js';
+import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts } from '../report/comments.js';
 import type { CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -570,57 +570,67 @@ async function finishPr(
   pr: PullRequestReflection,
   started: number
 ): Promise<RunIssueSummary> {
-    const guardian = await runPrGuardianAfterPullRequest({
-      issue: options.issue,
-      config: options.config,
-      project: options.project,
-      github: options.github,
-      runCommand: options.runCommand,
-      pr
-    });
-    const guardianFailed = guardian.status === 'failed';
-    const reason = guardianFailed ? `${pr.reason}\n\nPR guardian failed: ${guardian.summary}` : `${pr.reason}\n\nPR guardian: ${guardian.summary}`;
-    await options.github.comment(
-      options.issue.number,
-      buildResultComment({
-        runId: options.runId,
-        issue: options.issue.number,
-        attempt: attempts,
-        outcome: 'pr-created',
-        agent: agent.name,
-        summary: agentSummary(agentResult),
-        notes: withGuardianNotes(agentResult.notes, guardian),
-        verifyResults,
-        prUrl: pr.url,
-        reason,
-        trigger: options.trigger,
-        maxAttempts: options.config.run.maxAttemptsPerIssue
-      })
-    );
-    if (guardianFailed) {
-      await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
-    }
-    await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
-
-    return {
-      number: options.issue.number,
-      title: options.issue.title,
-      priority: priorityLabel(options.issue, options.config),
-      agent: agent.name,
+  await options.github.comment(
+    options.issue.number,
+    buildPrProgressComment({
+      runId: options.runId,
+      issue: options.issue.number,
+      attempt: attempts,
+      prUrl: pr.url,
+      trigger: options.trigger
+    })
+  );
+  const guardian = await runPrGuardianAfterPullRequest({
+    issue: options.issue,
+    config: options.config,
+    project: options.project,
+    github: options.github,
+    runCommand: options.runCommand,
+    pr
+  });
+  const guardianFailed = guardian.status === 'failed';
+  const reason = guardianFailed ? `${pr.reason}\n\nPR guardian failed: ${guardian.summary}` : `${pr.reason}\n\nPR guardian: ${guardian.summary}`;
+  await options.github.comment(
+    options.issue.number,
+    buildResultComment({
+      runId: options.runId,
+      issue: options.issue.number,
       attempt: attempts,
       outcome: 'pr-created',
-      pr: pr.number,
+      agent: agent.name,
+      summary: agentSummary(agentResult),
+      notes: withGuardianNotes(agentResult.notes, guardian),
+      verifyResults,
       prUrl: pr.url,
-      guardian: {
-        status: guardian.status,
-        summary: guardian.summary
-      },
       reason,
-      changedFiles: finalDiff.changedFiles,
-      changedLines: finalDiff.changedLines,
-      verifyRetries: 0,
-      durationMs: Date.now() - started
-    };
+      trigger: options.trigger,
+      maxAttempts: options.config.run.maxAttemptsPerIssue
+    })
+  );
+  if (guardianFailed) {
+    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  }
+  await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+
+  return {
+    number: options.issue.number,
+    title: options.issue.title,
+    priority: priorityLabel(options.issue, options.config),
+    agent: agent.name,
+    attempt: attempts,
+    outcome: 'pr-created',
+    pr: pr.number,
+    prUrl: pr.url,
+    guardian: {
+      status: guardian.status,
+      summary: guardian.summary
+    },
+    reason,
+    changedFiles: finalDiff.changedFiles,
+    changedLines: finalDiff.changedLines,
+    verifyRetries: 0,
+    durationMs: Date.now() - started
+  };
 }
 
 async function selectAgent(config: KaizenConfig, runCommand: CommandRunner): Promise<AgentAdapter> {
@@ -924,7 +934,11 @@ async function fileDiscoveredIssues(options: {
     if (options.filedKeys.has(key)) continue;
 
     try {
-      const existing = await options.github.findOpenIssueByTitle({ repo, title: issue.title });
+      const existing = await options.github.findOpenIssueByTitle({
+        repo,
+        title: issue.title,
+        body: [issue.body, issue.expected, issue.evidence].filter(Boolean).join('\n\n')
+      });
       if (existing) {
         filed.push({ title: issue.title, repo, url: existing.url, duplicate: true });
         options.filedKeys.add(key);
@@ -1011,7 +1025,10 @@ function resolveDiscoveredIssueRepo(repo: string | undefined, fallbackRepo: stri
     'builder-agent': 'kaizen-agents-org/builder-agent',
     verifier: 'kaizen-agents-org/verifier',
     '.github': 'kaizen-agents-org/.github',
-    github: 'kaizen-agents-org/.github'
+    github: 'kaizen-agents-org/.github',
+    coderabbit: 'kaizen-agents-org/coderabbit',
+    'renovate-config': 'kaizen-agents-org/renovate-config',
+    renovate: 'kaizen-agents-org/renovate-config'
   };
   return aliases[key] ?? fallbackRepo;
 }

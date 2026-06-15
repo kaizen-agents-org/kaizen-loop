@@ -77,7 +77,7 @@ export function defaultConfigYaml(options: {
       maxAttempts: 5
     },
     policy: {
-      mode: 'hybrid',
+      mode: 'pr-only',
       directCommit: {
         maxChangedLines: 150,
         maxChangedFiles: 5

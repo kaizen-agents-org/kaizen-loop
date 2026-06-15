@@ -15,6 +15,8 @@ When a Kaizen Agents bug is reported, investigate where the bug originates befor
 - `kaizen-agents-org/verifier`: verifier execution, verdict schemas, approval/rejection logic, verification prompts, risk evaluation, or verifier result artifacts.
 - `kaizen-agents-org/kaizen-loop`: issue selection, labels, scheduling, registry/config loading, orchestration, retry loops, workspace/git handling, GitHub issue/PR operations, reflection policy, protected path handling, comments, or cross-agent handoff.
 - `kaizen-agents-org/.github`: org-level shared docs, issue templates, reusable skills, PR/issue linking guidance, or org configuration.
+- `kaizen-agents-org/coderabbit`: CodeRabbit review policy, rules, configuration, prompts, or repo-specific automated review behavior.
+- `kaizen-agents-org/renovate-config`: Renovate presets, dependency update policy, shared Renovate configuration, package rules, or update scheduling.
 
 Use `kaizen-loop` as the fallback when symptoms span multiple projects or the available evidence does not isolate a clearer owner.
 
