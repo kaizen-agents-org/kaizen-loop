@@ -8,6 +8,7 @@ import { loadConfig } from './config/config.js';
 import { runCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
 import { reportIssue, reportIssueNow } from './commands/report.js';
+import { planImprove, runImprove } from './commands/improve.js';
 import { statusProject } from './commands/status.js';
 import { readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
@@ -162,6 +163,62 @@ program
   });
 
 program
+  .command('improve')
+  .description('plan and run the improvement loop over queued Kaizen issues')
+  .option('--project <slug>', 'target project slug')
+  .option('--issue <numbers>', 'comma-separated issue numbers to process')
+  .option('--dry-run', 'show the improvement plan without modifying workspaces or GitHub', false)
+  .option('--max-issues <number>', 'override max issues for this run')
+  .option('--agent <agent>', 'agent override: claude or codex')
+  .option('--yes', 'run without the improvement plan confirmation', false)
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const json = Boolean(options.json ?? globals.json);
+    const assumeYes = Boolean(options.yes);
+    const issueNumbers = parseIssueNumbers(options.issue);
+    const maxIssues = parseOptionalPositiveInteger(options.maxIssues, 'max-issues');
+    const improveOptions = {
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      issueNumbers,
+      dryRun: Boolean(options.dryRun),
+      maxIssues,
+      agent: parseAgent(options.agent),
+      json,
+      runCommand
+    };
+    const plan = await planImprove(improveOptions);
+    if (options.dryRun) {
+      print(plan, json);
+      return;
+    }
+    if (plan.selected.length === 0) {
+      print(plan, json);
+      return;
+    }
+    if (!assumeYes) {
+      if (json || !process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new KaizenError('Use --yes to run improve non-interactively', 2);
+      }
+      printImprovePlan(plan);
+      const confirmed = await promptImprove(plan);
+      if (!confirmed) {
+        console.error('Improvement cancelled.');
+        return;
+      }
+    }
+    const result = await runImprove({
+      ...improveOptions,
+      dryRun: false,
+      confirmDirectCommit: !assumeYes && !json && process.stdin.isTTY && process.stdout.isTTY
+        ? promptDirectCommit
+        : undefined
+    });
+    print(result, json);
+  });
+
+program
   .command('status')
   .description('show loop status')
   .option('--project <slug>', 'target project slug')
@@ -293,6 +350,26 @@ function parseSchedule(value: unknown): string {
   throw new KaizenError(`Invalid schedule: ${String(value)}`, 2);
 }
 
+function parseIssueNumbers(value: unknown): number[] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new KaizenError(`Invalid issue list: ${String(value)}`, 2);
+  const issueNumbers = value.split(',').map((item) => item.trim()).filter(Boolean).map((item) => parsePositiveInteger(item, 'issue'));
+  if (issueNumbers.length === 0) throw new KaizenError('Invalid issue list: no issue numbers provided', 2);
+  return [...new Set(issueNumbers)];
+}
+
+function parseOptionalPositiveInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new KaizenError(`Invalid ${name}: ${String(value)}`, 2);
+  return parsePositiveInteger(value, name);
+}
+
+function parsePositiveInteger(value: string, name: string): number {
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  throw new KaizenError(`Invalid ${name}: ${value}`, 2);
+}
+
 function parsePriority(value: unknown): 'P0' | 'P1' | 'P2' {
   if (value === 'P0' || value === 'P1' || value === 'P2') return value;
   throw new KaizenError(`Invalid priority: ${String(value)}`, 2);
@@ -329,6 +406,25 @@ async function promptDirectCommit(context: DirectCommitConfirmation): Promise<'d
     return 'reject';
   } finally {
     rl.close();
+  }
+}
+
+async function promptImprove(plan: { selected: Array<{ number: number; title: string }> }): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await rl.question(`Run improvement for ${plan.selected.length} issue(s)? [y/N] `)).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
+function printImprovePlan(plan: { selected: Array<{ number: number; title: string }>; skipped: Array<{ number: number; reason: string }> }): void {
+  console.error('Improvement plan:');
+  for (const issue of plan.selected) console.error(`- #${issue.number} ${issue.title}`);
+  if (plan.skipped.length > 0) {
+    console.error('Skipped issues:');
+    for (const issue of plan.skipped) console.error(`- #${issue.number}: ${issue.reason}`);
   }
 }
 

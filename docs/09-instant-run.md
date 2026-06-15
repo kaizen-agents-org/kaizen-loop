@@ -10,7 +10,8 @@
 | U2 | 既存の Kaizen Issue を夜まで待たず処理したい | `kaizen fix <Issue番号>` |
 | U3 | 夜間実行が失敗した Issue を、情報を追記したうえですぐ再試行したい | `kaizen fix <Issue番号>` |
 | U4 | 利用側 AI エージェントが、遭遇した問題の修正をその場で依頼したい | `kaizen report --now --json` |
-| U5 | 別マシン・別メンバーが付けた `kaizen:now` ラベルに反応してほしい | `kaizen watch`(常駐ポーリング、Phase 4) |
+| U5 | Kaizen Issue が溜まっており、ユーザの意思で今すぐ複数件を処理したい | `kaizen improve --max-issues 5 --yes` |
+| U6 | 別マシン・別メンバーが付けた `kaizen:now` ラベルに反応してほしい | `kaizen watch`(常駐ポーリング、Phase 4) |
 
 ## 2. 設計原則
 
@@ -73,7 +74,22 @@ echo "$BODY" | kaizen report "config 再読込で古い値が残る" --body-file
 
 - 非 TTY(AI からの実行)では確認プロンプトが出せないため、直接コミット判定時は `instant.unattendedMode` に従う(§5)。デフォルトは PR への切り替え。AI に main を直接動かさせたい場合は `--yes` または `instant.unattendedMode: direct` を明示する
 
-### 3.3 `kaizen watch` — ラベル駆動の常駐モード(Phase 4)
+### 3.3 `kaizen improve` — backlog の即時改善
+
+既に存在する Kaizen Issue を、ユーザの明示操作でまとめて処理する。`run` と同じ選択・検証・PR 作成・pr-guardian の流れを使うが、実行契機は即時実行(`instant`)として扱う。
+
+```sh
+kaizen improve --dry-run
+kaizen improve --max-issues 5 --yes
+kaizen improve --issue 12,18,24 --yes
+```
+
+- `--dry-run` は対象 Issue と skip 理由だけを表示し、作業ツリーや GitHub は変更しない
+- TTY では実行計画を表示して確認する。非 TTY / `--json` では `--yes` を必須にする
+- `--issue` で複数 Issue を明示した場合、`--max-issues` 省略時は指定数を処理上限にする
+- 実行中の direct commit 判定は `fix` と同じ確認プロンプト / `instant.unattendedMode` に従う
+
+### 3.4 `kaizen watch` — ラベル駆動の常駐モード(Phase 4)
 
 ```
 kaizen watch [--project <slug>] [--interval 5m]
