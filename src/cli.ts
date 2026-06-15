@@ -7,7 +7,7 @@ import { loadRegistry, resolveProject, saveRegistry } from './config/registry.js
 import { loadConfig } from './config/config.js';
 import { runCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
-import { reportIssue } from './commands/report.js';
+import { reportIssue, reportIssueNow } from './commands/report.js';
 import { statusProject } from './commands/status.js';
 import { readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
@@ -95,10 +95,17 @@ program
   .option('--pr-only', 'add kaizen:pr-only label', false)
   .option('--agent <agent>', 'agent label: claude or codex')
   .option('--label <label...>', 'extra label')
+  .option('--now', 'process the created issue immediately', false)
+  .option('--yes', 'skip direct commit confirmation when used with --now', false)
   .option('--json', 'print machine-readable output')
   .action(async (title, options) => {
     const globals = program.opts<{ project?: string; json?: boolean }>();
-    const issue = await reportIssue({
+    const json = Boolean(options.json ?? globals.json);
+    const assumeYes = Boolean(options.yes);
+    if (assumeYes && !options.now) {
+      throw new KaizenError('--yes can only be used with --now', 2);
+    }
+    const reportOptions = {
       cwd: process.cwd(),
       project: options.project ?? globals.project,
       title,
@@ -109,8 +116,18 @@ program
       agent: parseAgent(options.agent),
       extraLabels: options.label ?? [],
       runCommand
-    });
-    print(issue, Boolean(options.json ?? globals.json));
+    };
+    const result = options.now
+      ? await reportIssueNow({
+        ...reportOptions,
+        json,
+        assumeYes,
+        confirmDirectCommit: !assumeYes && !json && process.stdin.isTTY && process.stdout.isTTY
+          ? promptDirectCommit
+          : undefined
+      })
+      : await reportIssue(reportOptions);
+    print(result, json);
   });
 
 program

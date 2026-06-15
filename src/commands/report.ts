@@ -1,8 +1,9 @@
 import { resolveProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
+import { type DirectCommitConfirmation, runKaizen } from '../orchestrator/run.js';
 import type { CommandRunner } from '../utils/command.js';
 
-export async function reportIssue(options: {
+export interface ReportIssueOptions {
   cwd: string;
   project?: string;
   title: string;
@@ -13,7 +14,15 @@ export async function reportIssue(options: {
   agent?: 'claude' | 'codex';
   extraLabels: string[];
   runCommand: CommandRunner;
-}) {
+}
+
+export interface ReportIssueNowOptions extends ReportIssueOptions {
+  json: boolean;
+  assumeYes?: boolean;
+  confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<'direct' | 'pr' | 'reject'>;
+}
+
+export async function reportIssue(options: ReportIssueOptions) {
   const resolved = await resolveProject(options.project, options.cwd);
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const labels = ['kaizen', `kaizen:${options.priority ?? 'P2'}`, ...options.extraLabels];
@@ -25,4 +34,23 @@ export async function reportIssue(options: {
     body: options.body,
     labels
   });
+}
+
+export async function reportIssueNow(options: ReportIssueNowOptions) {
+  const issue = await reportIssue(options);
+  const fix = await runKaizen({
+    cwd: options.cwd,
+    project: options.project,
+    scheduled: false,
+    trigger: 'instant',
+    issue: issue.number,
+    dryRun: false,
+    maxIssues: 1,
+    agent: options.agent,
+    json: options.json,
+    assumeYes: Boolean(options.assumeYes),
+    confirmDirectCommit: options.confirmDirectCommit,
+    runCommand: options.runCommand
+  });
+  return { issue, fix };
 }
