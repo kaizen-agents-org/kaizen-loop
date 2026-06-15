@@ -110,7 +110,7 @@ describe('runImprove', () => {
     expect('selected' in output && output.selected[0].number).toBe(7);
   });
 
-  it('does not treat plan confirmation as direct-commit approval', async () => {
+  it('uses the unattended instant policy when no direct-commit confirmation is provided', async () => {
     const { repo, workspace } = await setupProject({
       config: defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
         .replace('verifier:\n  enabled: true', 'verifier:\n  enabled: false')
@@ -142,9 +142,8 @@ describe('runImprove', () => {
       issueNumbers: [8],
       dryRun: false,
       json: true,
-      runCommand: runner,
-      assumeYes: true
-    } as Parameters<typeof runImprove>[0] & { assumeYes: boolean });
+      runCommand: runner
+    });
 
     expect('issues' in output && output.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
