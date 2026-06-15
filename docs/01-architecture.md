@@ -20,7 +20,7 @@ flowchart TB
     ADAPT -->|"headless 実行"| EXT1["builder-agent / verifier"]
     GHC -->|"issue / pr / label"| EXT2["GitHub"]
     WSM -->|"clone / fetch / branch"| EXT3["~/.kaizen/workspaces/&lt;slug&gt;/"]
-    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt;"| CMD
+    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt; --scheduled --trigger scheduled&#124;watch"| CMD
 ```
 
 ### 設計原則
@@ -140,16 +140,17 @@ Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `agent
 
 | OS | 機構 | 特性 |
 |---|---|---|
-| macOS | launchd (LaunchAgent, `StartCalendarInterval`) | **スリープ中に時刻を過ぎた場合、次回起床時に実行される**(取りこぼしに強い)。`kaizen enable` で plist を生成・ロード |
-| Linux | cron | スリープ中の実行は取りこぼす。常時稼働マシン向け |
+| macOS | launchd (LaunchAgent, `StartCalendarInterval` / `StartInterval`) | nightly は時刻指定、poll は `StartInterval`。`kaizen enable` で job ごとの plist を生成・ロード |
+| Linux | cron | nightly は時刻指定、poll は `*/N` 分。常時稼働マシン向け |
 
-スケジューラが実行するのは固定で以下のコマンド:
+スケジューラが実行するコマンド:
 
 ```sh
-kaizen run --project <slug> --scheduled
+kaizen run --project <slug> --scheduled --trigger scheduled
+kaizen run --project <slug> --scheduled --trigger watch
 ```
 
-`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さず、失敗時は終了コードとログ・通知([02-cli-spec.md](./02-cli-spec.md) §run)で報告する。
+`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さない。`watch` trigger の poll は 5 分間隔などで軽く起動し、対象 Issue がなければ即終了する。前回 run が続いていれば `run.lock` でスキップされる。
 
 ## 6. 複数プロジェクト対応
 

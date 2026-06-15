@@ -35,7 +35,7 @@ export async function initProject(options: InitOptions): Promise<{ slug: string;
   const configPath = path.join(repoDir, '.kaizen', 'config.yml');
   const templatePath = path.join(repoDir, '.github', 'ISSUE_TEMPLATE', 'kaizen.yml');
 
-  await writeFileOnce(configPath, defaultConfigYaml({ agent, ...commands }), options.yes);
+  await writeFileOnce(configPath, defaultConfigYaml({ agent, schedule: options.schedule, ...commands }), options.yes);
   await writeFileOnce(templatePath, issueTemplateYaml(), options.yes);
   await github.createLabels();
 

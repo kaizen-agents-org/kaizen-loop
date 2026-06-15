@@ -56,14 +56,18 @@ interface PullRequestReflection {
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
-  if (options.scheduled && new Date().getHours() > config.run.latestStartHour) {
+  const trigger = options.trigger ?? (options.scheduled ? 'scheduled' : 'manual');
+  const nowDate = new Date();
+  const cutoff = new Date(nowDate);
+  cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
+  if (options.scheduled && trigger !== 'watch' && nowDate > cutoff) {
     const now = new Date().toISOString();
     return {
       version: 1,
       project: resolved.slug,
       startedAt: now,
       finishedAt: now,
-      trigger: 'scheduled',
+      trigger,
       result: 'success',
       issues: [],
       skipped: [{ number: 0, reason: `latestStartHour(${config.run.latestStartHour}) passed` }]
@@ -79,14 +83,31 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const stateDir = projectStateDir(resolved.slug);
   await fs.mkdir(stateDir, { recursive: true });
   await ensureNotPaused(stateDir);
-  const lock = await RunLock.acquire(stateDir);
+  let lock: RunLock;
+  try {
+    lock = await RunLock.acquire(stateDir);
+  } catch (error) {
+    if (options.scheduled && trigger === 'watch' && config.scheduler.poll.skipIfRunning && RunLock.isActiveError(error)) {
+      const now = new Date().toISOString();
+      return {
+        version: 1,
+        project: resolved.slug,
+        startedAt: now,
+        finishedAt: now,
+        trigger,
+        result: 'success',
+        issues: [],
+        skipped: [{ number: 0, reason: 'run already in progress' }]
+      };
+    }
+    throw error;
+  }
 
   const startedAt = new Date();
   const runId = toRunId(startedAt);
   const runDir = path.join(stateDir, 'runs', runId);
   await fs.mkdir(runDir, { recursive: true });
 
-  const trigger = options.trigger ?? (options.scheduled ? 'scheduled' : 'manual');
   const summary: RunSummary = {
     version: 1,
     project: resolved.slug,

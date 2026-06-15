@@ -15,6 +15,15 @@ run:
   maxAttemptsPerIssue: 3
   latestStartHour: 7
 
+scheduler:
+  nightly:
+    enabled: true
+    time: "02:00"
+  poll:
+    enabled: true
+    intervalMinutes: 5
+    skipIfRunning: true
+
 commands:
   setup: "npm ci"
   verify:

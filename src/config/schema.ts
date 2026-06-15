@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const nullableString = z.string().nullable().optional();
+const timeString = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 
 export const configSchema = z
   .object({
@@ -36,6 +37,29 @@ export const configSchema = z
         maxVerifyRetries: 2,
         maxAttemptsPerIssue: 3,
         latestStartHour: 7
+      }),
+    scheduler: z
+      .object({
+        nightly: z
+          .object({
+            enabled: z.boolean().default(true),
+            time: timeString.default('02:00')
+          })
+          .strict()
+          .default({ enabled: true, time: '02:00' }),
+        poll: z
+          .object({
+            enabled: z.boolean().default(false),
+            intervalMinutes: z.number().int().min(1).max(59).default(5),
+            skipIfRunning: z.boolean().default(true)
+          })
+          .strict()
+          .default({ enabled: false, intervalMinutes: 5, skipIfRunning: true })
+      })
+      .strict()
+      .default({
+        nightly: { enabled: true, time: '02:00' },
+        poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
       }),
     commands: z
       .object({

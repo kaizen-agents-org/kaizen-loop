@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { parse, stringify } from 'yaml';
 import { defaultConfigYaml } from '../../src/config/config.js';
 import { saveRegistry } from '../../src/config/registry.js';
 import { runKaizen } from '../../src/orchestrator/run.js';
@@ -70,6 +71,56 @@ describe('runKaizen dry-run', () => {
 });
 
 describe('runKaizen PR flow', () => {
+  it('skips overlapping scheduled poll runs when skipIfRunning is enabled', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ scheduler: { poll: { enabled: true } } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const stateDir = path.join(home, 'projects', 'o-r');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'run.lock'), JSON.stringify({ pid: process.pid }));
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue()]));
+      }
+      return result(command, args, repo, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'watch',
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.trigger).toBe('watch');
+    expect('issues' in summary && summary.result).toBe('success');
+    expect('issues' in summary && summary.issues).toHaveLength(0);
+    expect('issues' in summary && summary.skipped).toEqual([{ number: 0, reason: 'run already in progress' }]);
+  });
+
   it('aborts the run when baseline verification fails', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
@@ -220,10 +271,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }).replace(
-        'verifier:\n  enabled: true',
-        'verifier:\n  enabled: false'
-      )
+      defaultConfigWith({ verifier: { enabled: false } }, { agent: 'claude', setup: null, verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,
@@ -534,10 +582,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }).replace(
-        'verifier:\n  enabled: true',
-        'verifier:\n  enabled: false'
-      )
+      defaultConfigWith({ verifier: { enabled: false } }, { agent: 'claude', setup: null, verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,
@@ -836,4 +881,27 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
 async function writeJsonResult(filePath: unknown, payload: unknown) {
   if (typeof filePath !== 'string') throw new Error('missing result path');
   await fs.writeFile(filePath, JSON.stringify(payload));
+}
+
+function defaultConfigWith(
+  overrides: Record<string, unknown>,
+  options: { agent: 'claude' | 'codex'; setup: string | null; verify: string[] }
+): string {
+  const config = parse(defaultConfigYaml(options)) as Record<string, unknown>;
+  mergeConfig(config, overrides);
+  return stringify(config);
+}
+
+function mergeConfig(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (isPlainObject(value) && isPlainObject(target[key])) {
+      mergeConfig(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
