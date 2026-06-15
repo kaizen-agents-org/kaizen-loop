@@ -8,7 +8,7 @@ agent:
     codex: null
 
 run:
-  maxIssuesPerNight: 1
+  maxIssuesPerNight: 2
   issueTimeoutMinutes: 120
   runTimeoutMinutes: 180
   maxVerifyRetries: 1
@@ -18,7 +18,7 @@ run:
 scheduler:
   nightly:
     enabled: true
-    time: "02:00"
+    time: "02:45"
   poll:
     enabled: true
     intervalMinutes: 5
@@ -46,6 +46,12 @@ verifier:
   command: "verifier"
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
+
+guardian:
+  enabled: true
+  command: "codex"
+  timeoutMinutes: 90
+  maxAttempts: 5
 
 policy:
   mode: pr-only
