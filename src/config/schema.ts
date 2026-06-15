@@ -154,10 +154,22 @@ export const configSchema = z
     issues: z
       .object({
         label: z.string().default('kaizen'),
+        selection: z
+          .object({
+            mode: z.enum(['auto', 'opt-in', 'manual-only']).default('auto'),
+            includeLabel: z.string().default('kaizen:ready'),
+            excludeLabels: z.array(z.string()).default(['kaizen:needs-human'])
+          })
+          .strict()
+          .default({ mode: 'auto', includeLabel: 'kaizen:ready', excludeLabels: ['kaizen:needs-human'] }),
         priorityOrder: z.array(z.string()).default(['kaizen:P0', 'kaizen:P1', 'kaizen:P2'])
       })
       .strict()
-      .default({ label: 'kaizen', priorityOrder: ['kaizen:P0', 'kaizen:P1', 'kaizen:P2'] })
+      .default({
+        label: 'kaizen',
+        selection: { mode: 'auto', includeLabel: 'kaizen:ready', excludeLabels: ['kaizen:needs-human'] },
+        priorityOrder: ['kaizen:P0', 'kaizen:P1', 'kaizen:P2']
+      })
   })
   .strict();
 

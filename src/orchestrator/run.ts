@@ -76,7 +76,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const maxIssues = options.maxIssues ?? config.run.maxIssuesPerNight;
   const issues = options.issue ? [await github.getIssue(options.issue)] : await github.listIssues(config.issues.label);
-  const selection = selectIssues({ issues, config, maxIssues, onlyIssue: options.issue });
+  const selection = selectIssues({ issues, config, maxIssues, onlyIssue: options.issue, explicit: Boolean(options.issue) });
 
   if (options.dryRun) return selection;
 

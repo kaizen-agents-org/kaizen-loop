@@ -1,4 +1,5 @@
 import { resolveProject } from '../config/registry.js';
+import { loadConfig } from '../config/config.js';
 import { GitHubClient } from '../github/client.js';
 import { type DirectCommitConfirmation, runKaizen } from '../orchestrator/run.js';
 import type { CommandRunner } from '../utils/command.js';
@@ -12,6 +13,7 @@ export interface ReportIssueOptions {
   direct?: boolean;
   prOnly?: boolean;
   agent?: 'claude' | 'codex';
+  queue?: boolean;
   extraLabels: string[];
   runCommand: CommandRunner;
 }
@@ -24,8 +26,10 @@ export interface ReportIssueNowOptions extends ReportIssueOptions {
 
 export async function reportIssue(options: ReportIssueOptions) {
   const resolved = await resolveProject(options.project, options.cwd);
+  const config = await loadConfig(resolved.project.localPath);
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
-  const labels = ['kaizen', `kaizen:${options.priority ?? 'P2'}`, ...options.extraLabels];
+  const labels = [config.issues.label, `kaizen:${options.priority ?? 'P2'}`, ...options.extraLabels];
+  if (options.queue) labels.push(config.issues.selection.includeLabel);
   if (options.direct) labels.push('kaizen:direct');
   if (options.prOnly) labels.push('kaizen:pr-only');
   if (options.agent) labels.push(`kaizen:agent:${options.agent}`);

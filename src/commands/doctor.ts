@@ -16,6 +16,12 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     config = await loadConfig(resolved.project.localPath);
   });
   await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, resolved.project.localPath).authStatus()));
+  await check(checks, 'github labels', async () => {
+    const loaded = config;
+    if (!loaded) throw new Error('config unavailable');
+    if (!options.repair) return;
+    await new GitHubClient(options.runCommand, resolved.project.localPath).createLabels(requiredLabels(loaded));
+  });
   await check(checks, 'builder agent', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
@@ -35,6 +41,20 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   });
   await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
   return { slug: resolved.slug, checks, ok: checks.every((item) => item.ok) };
+}
+
+function requiredLabels(config: KaizenConfig): string[] {
+  return [
+    config.issues.label,
+    ...config.issues.priorityOrder,
+    config.issues.selection.includeLabel,
+    ...config.issues.selection.excludeLabels,
+    'kaizen:direct',
+    'kaizen:pr-only',
+    'kaizen:in-progress',
+    'kaizen:agent:claude',
+    'kaizen:agent:codex'
+  ];
 }
 
 async function check(checks: Array<{ name: string; ok: boolean; message?: string }>, name: string, fn: () => Promise<void>) {

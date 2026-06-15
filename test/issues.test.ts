@@ -4,6 +4,20 @@ import { selectIssues } from '../src/orchestrator/issues.js';
 import type { GitHubIssue } from '../src/github/types.js';
 
 const config = configSchema.parse({ version: 1, run: { maxAttemptsPerIssue: 2 } });
+const optInConfig = configSchema.parse({
+  version: 1,
+  run: { maxAttemptsPerIssue: 2 },
+  issues: {
+    selection: { mode: 'opt-in', includeLabel: 'kaizen:ready' }
+  }
+});
+const manualOnlyConfig = configSchema.parse({
+  version: 1,
+  run: { maxAttemptsPerIssue: 2 },
+  issues: {
+    selection: { mode: 'manual-only' }
+  }
+});
 
 describe('selectIssues', () => {
   it('sorts by priority then age and caps max issues', () => {
@@ -43,6 +57,61 @@ describe('selectIssues', () => {
       { number: 1, reason: 'needs-human' },
       { number: 2, reason: 'max attempts reached' }
     ]);
+  });
+
+  it('requires the selection label in opt-in mode for automatic selection', () => {
+    const selection = selectIssues({
+      config: optInConfig,
+      maxIssues: 10,
+      issues: [
+        issue(1, 'not queued', '2026-06-12T01:00:00Z', ['kaizen']),
+        issue(2, 'queued', '2026-06-12T02:00:00Z', ['kaizen', 'kaizen:ready'])
+      ]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([2]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'missing selection label: kaizen:ready' }]);
+  });
+
+  it('allows explicit issue processing in opt-in mode without the selection label', () => {
+    const selection = selectIssues({
+      config: optInConfig,
+      maxIssues: 1,
+      explicit: true,
+      onlyIssue: 1,
+      issues: [
+        issue(1, 'explicit', '2026-06-12T01:00:00Z', ['kaizen'])
+      ]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
+  });
+
+  it('selects nothing automatically in manual-only mode', () => {
+    const selection = selectIssues({
+      config: manualOnlyConfig,
+      maxIssues: 10,
+      issues: [
+        issue(1, 'queued', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:ready'])
+      ]
+    });
+
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'manual-only selection mode' }]);
+  });
+
+  it('skips issues without the base kaizen label', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [
+        issue(1, 'plain issue', '2026-06-12T01:00:00Z', ['bug'])
+      ]
+    });
+
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'missing required label: kaizen' }]);
   });
 });
 

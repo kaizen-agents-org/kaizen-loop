@@ -132,9 +132,14 @@ stateDiagram-v2
 ## 5. AI(利用側)からの登録経路
 
 ```sh
-# 推奨: kaizen report(ラベル・書式が保証される)
+# 推奨: kaizen report(ラベル・書式が保証される)。登録だけなら queued 実行許可は付けない
 echo "$STRUCTURED_BODY" | kaizen report "<タイトル>" --body-file - --priority P1 --json
 
-# 代替: gh CLI 直接(kaizen ラベルを必ず付けること)
+# queued 実行に載せる場合は明示する
+kaizen queue <Issue番号>
+
+# 代替: gh CLI 直接(kaizen ラベルを必ず付けること。opt-in 運用で実行許可するなら kaizen:ready も付ける)
 gh issue create --label kaizen --title "..." --body "..."
 ```
+
+`kaizen` は Kaizen 管理対象であることを示す。`issues.selection.mode: opt-in` の場合、scheduled / backlog 実行に載せるには `issues.selection.includeLabel`(デフォルト `kaizen:ready`)が別途必要。Issue 登録 skill は、ユーザが「queue」「実行して」「kaizen-loop に載せて」と明示した場合だけ ready label を付ける。

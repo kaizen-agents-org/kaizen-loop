@@ -99,6 +99,11 @@ export function defaultConfigYaml(options: {
     },
     issues: {
       label: 'kaizen',
+      selection: {
+        mode: 'auto',
+        includeLabel: 'kaizen:ready',
+        excludeLabels: ['kaizen:needs-human']
+      },
       priorityOrder: ['kaizen:P0', 'kaizen:P1', 'kaizen:P2']
     }
   });
