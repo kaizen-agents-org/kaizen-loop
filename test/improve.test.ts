@@ -60,6 +60,32 @@ describe('planImprove', () => {
     const issueViewCalls = runner.mock.calls.filter(([, args]) => args[0] === 'issue' && args[1] === 'view');
     expect(issueViewCalls).toHaveLength(2);
   });
+
+  it('skips explicit issue numbers that do not have the required kaizen label', async () => {
+    const { repo } = await setupProject();
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        const number = Number(args[2]);
+        const payload = number === 5
+          ? issueWithoutKaizen(number, `Issue ${number}`)
+          : issue(number, `Issue ${number}`, 'kaizen:P2');
+        return result(command, args, repo, JSON.stringify(payload));
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const plan = await planImprove({
+      cwd: repo,
+      project: 'o-r',
+      issueNumbers: [4, 5],
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect(plan.selected.map((item) => item.number)).toEqual([4]);
+    expect(plan.skipped).toEqual([{ number: 5, reason: 'missing required label: kaizen' }]);
+  });
 });
 
 describe('runImprove', () => {
@@ -158,6 +184,17 @@ function issue(number: number, title: string, priority: string, createdAt = '202
     body: '',
     labels: [{ name: 'kaizen' }, { name: priority }],
     createdAt,
+    comments: []
+  };
+}
+
+function issueWithoutKaizen(number: number, title: string) {
+  return {
+    number,
+    title,
+    body: '',
+    labels: [{ name: 'bug' }],
+    createdAt: '2026-06-12T00:00:00Z',
     comments: []
   };
 }

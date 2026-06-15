@@ -204,7 +204,7 @@ program
       printImprovePlan(plan);
       const confirmed = await promptImprove(plan);
       if (!confirmed) {
-        print({ cancelled: true, ...plan }, json);
+        console.error('Improvement cancelled.');
         return;
       }
     }
