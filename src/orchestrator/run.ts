@@ -27,6 +27,7 @@ export interface RunOptions {
   scheduled: boolean;
   trigger?: 'manual' | 'scheduled' | 'instant' | 'watch';
   issue?: number;
+  issueNumbers?: number[];
   dryRun: boolean;
   maxIssues?: number;
   agent?: 'claude' | 'codex';
@@ -74,9 +75,12 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     };
   }
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
-  const maxIssues = options.maxIssues ?? config.run.maxIssuesPerNight;
-  const issues = options.issue ? [await github.getIssue(options.issue)] : await github.listIssues(config.issues.label);
-  const selection = selectIssues({ issues, config, maxIssues, onlyIssue: options.issue });
+  const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
+  const maxIssues = options.maxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
+  const issues = requestedIssueNumbers
+    ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
+    : await github.listIssues(config.issues.label);
+  const selection = selectIssues({ issues, config, maxIssues });
 
   if (options.dryRun) return selection;
 
@@ -202,6 +206,10 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 
   return summary;
+}
+
+function uniqueIssueNumbers(issueNumbers: number[]): number[] {
+  return [...new Set(issueNumbers)];
 }
 
 async function prepareBaseWorkspace(options: {
