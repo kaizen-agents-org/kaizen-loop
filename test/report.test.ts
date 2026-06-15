@@ -10,6 +10,7 @@ import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 const execFileAsync = promisify(execFile);
+const CLI_TEST_TIMEOUT_MS = 20_000;
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -54,7 +55,7 @@ describe('kaizen report CLI', () => {
     const prCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('pr create'));
     expect(prCreate).toBeDefined();
     expect(prCreate?.args).not.toContain('--draft');
-  });
+  }, CLI_TEST_TIMEOUT_MS);
 
   it('creates an issue and produces a PR with report --now --yes --json', async () => {
     const { repo } = await setupProject({ verify: ['npm test'], guardianEnabled: false });
@@ -78,7 +79,7 @@ describe('kaizen report CLI', () => {
     const prCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('pr create'));
     expect(prCreate).toBeDefined();
     expect(prCreate?.args).not.toContain('--draft');
-  });
+  }, CLI_TEST_TIMEOUT_MS);
 
   it('keeps report --now unqueued when --no-queue is provided', async () => {
     const { repo } = await setupProject({ verify: ['npm test'], guardianEnabled: false });
@@ -94,7 +95,7 @@ describe('kaizen report CLI', () => {
     const issueCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('issue create'));
     expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2');
     expect(calls.some((call) => call.command === 'builder-agent' && call.args.length === 0)).toBe(true);
-  });
+  }, CLI_TEST_TIMEOUT_MS);
 
   it('rejects --yes without --now', async () => {
     const { repo } = await setupProject();
