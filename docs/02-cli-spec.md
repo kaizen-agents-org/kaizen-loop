@@ -40,7 +40,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 
 1. **前提検査**: Git リポジトリであること、GitHub リモート(origin)があること、`gh auth status` が通ること。失敗時は是正方法を表示して終了コード 2
 2. **対話セットアップ**(`--yes` で全デフォルト採用):
-   - builder-agent へ渡す希望バックエンド(デフォルト: claude)
+   - builder-agent へ渡す希望バックエンド(生成時のデフォルト: claude)。このリポジトリのコミット済み `.kaizen/config.yml` は `agent.default: codex` を設定するため、通常の Issue 処理は Codex を希望バックエンドとして渡す
    - 起動時刻(デフォルト: 02:00。登録済みプロジェクトと重複しない時刻を提案)
    - 検証コマンド(`package.json` 等から `test` / `lint` / `build` を自動検出して提案)
 3. **ファイル生成**(リポジトリ内 → 要コミット):
