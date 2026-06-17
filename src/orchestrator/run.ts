@@ -62,8 +62,8 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const cutoff = new Date(nowDate);
   cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
   if (options.scheduled && trigger !== 'watch' && nowDate > cutoff) {
-    const now = new Date().toISOString();
-    return {
+    const now = nowDate.toISOString();
+    return persistRunSummary(resolved.slug, {
       version: 1,
       project: resolved.slug,
       startedAt: now,
@@ -72,7 +72,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       result: 'success',
       issues: [],
       skipped: [{ number: 0, reason: `latestStartHour(${config.run.latestStartHour}) passed` }]
-    };
+    });
   }
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
@@ -1065,6 +1065,14 @@ function toRunId(date: Date): string {
 
 function tail(output: string, lines: number): string {
   return output.split('\n').slice(-lines).join('\n');
+}
+
+async function persistRunSummary(slug: string, summary: RunSummary): Promise<RunSummary> {
+  const runDir = path.join(projectStateDir(slug), 'runs', toRunId(new Date(summary.startedAt)));
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+  await updateLastRun(slug, summary);
+  return summary;
 }
 
 async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {

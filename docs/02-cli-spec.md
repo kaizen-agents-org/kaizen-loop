@@ -210,7 +210,7 @@ kaizen disable [--project <slug>] [--all]
 kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--follow]
 ```
 
-- 引数なし: 直近の実行の `run.log` を表示
+- 引数なし: 直近の実行の `summary.json` を表示
 - `--issue`: その Issue のエージェントログ・検証ログを表示
 - `--follow`: 実行中の run をテイルする(夜間実行を手動で見守る場合)
 
@@ -224,9 +224,9 @@ kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--follow]
 kaizen doctor [--project <slug>] [--repair]
 ```
 
-検査項目: git / gh / builder-agent / verifier の存在、Node バージョン、設定ファイルのスキーマ妥当性、ワークスペースの整合性(origin 一致、fetch 可能か)、ロックファイルの stale 検知、スケジューラ登録と registry の整合。
+検査項目: gh 認証、設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。
 
-`--repair`: 壊れたワークスペースの再クローン、stale ロックの削除、スケジューラ定義の再生成。
+`--repair`: 設定から必要な GitHub ラベルを再作成する。壊れたワークスペースの再クローン、stale ロックの削除、スケジューラ定義の再生成は今後の拡張対象。
 
 ---
 

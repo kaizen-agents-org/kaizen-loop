@@ -71,6 +71,59 @@ describe('runKaizen dry-run', () => {
 });
 
 describe('runKaizen PR flow', () => {
+  it('persists scheduled skips caused by latestStartHour', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ run: { latestStartHour: 0 } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => result(command, args, repo, ''));
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'scheduled',
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.skipped).toEqual([{ number: 0, reason: 'latestStartHour(0) passed' }]);
+    expect(runner).not.toHaveBeenCalled();
+    const runsDir = path.join(home, 'projects', 'o-r', 'runs');
+    const runIds = await fs.readdir(runsDir);
+    expect(runIds).toHaveLength(1);
+    const persisted = JSON.parse(await fs.readFile(path.join(runsDir, runIds[0], 'summary.json'), 'utf8'));
+    expect(persisted.skipped).toEqual([{ number: 0, reason: 'latestStartHour(0) passed' }]);
+    const registry = JSON.parse(await fs.readFile(path.join(home, 'registry.json'), 'utf8'));
+    expect(registry.projects['o-r'].lastRun).toMatchObject({
+      result: 'success',
+      processed: 0,
+      fixed: 0,
+      prCreated: 0,
+      failed: 0
+    });
+  });
+
   it('skips overlapping scheduled poll runs when skipIfRunning is enabled', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
