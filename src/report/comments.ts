@@ -46,6 +46,29 @@ ${formatNotes(options.notes)}
 <!-- kaizen-loop:result ${JSON.stringify(marker)} -->`;
 }
 
+export function buildPrProgressComment(options: {
+  runId: string;
+  issue: number;
+  attempt: number;
+  prUrl: string;
+  trigger?: 'manual' | 'scheduled' | 'instant' | 'watch';
+}): string {
+  const marker = {
+    run: options.runId,
+    issue: options.issue,
+    attempt: options.attempt,
+    outcome: 'pr-monitoring',
+    trigger: options.trigger,
+    pr: options.prUrl
+  };
+
+  return `## Kaizen Loop progress
+
+PR created (${options.prUrl}); monitoring CI and review feedback with pr-guardian.
+
+<!-- kaizen-loop:progress ${JSON.stringify(marker)} -->`;
+}
+
 export function countAttempts(comments: Array<{ body: string }>): number {
   return comments.filter((comment) => /<!--\s*kaizen-loop:result\s+{/.test(comment.body)).length;
 }

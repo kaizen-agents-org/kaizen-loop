@@ -82,8 +82,8 @@ launchd は取りこぼしたスケジュールを起床時に実行するため
 導入直後から全自動 push は推奨しない。推奨ステップ:
 
 1. **週 1〜2 回、`kaizen run --dry-run`** で選択・除外理由だけ確認
-2. **`policy.mode: pr-only`** で数日運用し、PR の品質を観察
+2. 既定の **`policy.mode: pr-only`** で数日運用し、PR の品質を観察
 3. 品質に納得したら **`hybrid`** に切り替え、`maxChangedLines` を小さめ(例: 50)から始める
 4. メトリクス(revert 率)を見ながら上限を緩める
 
-`kaizen init` はデフォルトで `hybrid` を生成するが、init 時の対話でこの推奨ステップを提示する。
+`kaizen init` はデフォルトで `pr-only` を生成する。直接コミットは `hybrid` または `direct-only` への明示変更後にだけ候補になる。

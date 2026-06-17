@@ -257,6 +257,8 @@ describe('runKaizen PR flow', () => {
     expect(String(guardian?.[1].at(-1))).toContain('gh run watch --exit-status');
     expect(String(guardian?.[1].at(-1))).toContain('https://github.com/o/r/pull/4');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
+    expect(comments[0][1].at(-1)).toContain('PR created (https://github.com/o/r/pull/4); monitoring CI and review feedback');
+    expect(String(comments[0][1].at(-1))).toContain('kaizen-loop:progress');
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('"trigger":"instant"');
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('### Notes');
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('PR guardian: success');
@@ -511,6 +513,90 @@ describe('runKaizen PR flow', () => {
     expect(issueCreates.at(-1)?.[1]).toContain('external/project');
   });
 
+  it('routes builder-discovered policy repository aliases to their owning repos', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+        const targetRepo = String(args.at(args.indexOf('--repo') + 1));
+        return result(command, args, repo, `https://github.com/${targetRepo}/issues/77\n`);
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: '直した',
+          notes: '',
+          discoveredIssues: [
+            {
+              title: 'CodeRabbit rule regression',
+              repo: 'coderabbit',
+              body: 'CodeRabbit configuration missed a project rule.',
+              evidence: 'coderabbit.yml'
+            },
+            {
+              title: 'Renovate preset regression',
+              repo: 'renovate-config',
+              body: 'Renovate configuration missed a preset.',
+              evidence: 'renovate.json'
+            }
+          ]
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
+    const targetRepos = issueCreates.map(([, args]) => String(args.at(args.indexOf('--repo') + 1)));
+    expect(targetRepos).toEqual(['kaizen-agents-org/coderabbit', 'kaizen-agents-org/renovate-config']);
+  });
+
   it('rejects instant direct commits when unattended mode is reject', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
@@ -521,6 +607,7 @@ describe('runKaizen PR flow', () => {
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
       defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+        .replace('mode: pr-only', 'mode: hybrid')
         .replace('unattendedMode: pr', 'unattendedMode: reject')
         .replace('verifier:\n  enabled: true', 'verifier:\n  enabled: false')
     );
@@ -582,7 +669,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigWith({ verifier: { enabled: false } }, { agent: 'claude', setup: null, verify: ['npm test'] })
+      defaultConfigWith({ verifier: { enabled: false }, policy: { mode: 'hybrid' } }, { agent: 'claude', setup: null, verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,
@@ -781,7 +868,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] }).replace('mode: hybrid', 'mode: pr-only')
+      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,

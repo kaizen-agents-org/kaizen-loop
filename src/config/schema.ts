@@ -106,7 +106,7 @@ export const configSchema = z
       }),
     policy: z
       .object({
-        mode: z.enum(['hybrid', 'pr-only', 'direct-only']).default('hybrid'),
+        mode: z.enum(['hybrid', 'pr-only', 'direct-only']).default('pr-only'),
         directCommit: z
           .object({
             maxChangedLines: z.number().int().nonnegative().default(150),
@@ -121,7 +121,7 @@ export const configSchema = z
       })
       .strict()
       .default({
-        mode: 'hybrid',
+        mode: 'pr-only',
         directCommit: { maxChangedLines: 150, maxChangedFiles: 5 },
         protectedPaths: ['.github/**', '**/.env*', '**/secrets/**', '**/*migration*/**', 'Dockerfile', '.kaizen/**'],
         forbiddenPaths: ['**/.git/**']

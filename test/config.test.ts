@@ -16,7 +16,7 @@ describe('configSchema', () => {
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.scheduler.nightly).toEqual({ enabled: true, time: '02:00' });
     expect(config.scheduler.poll).toEqual({ enabled: false, intervalMinutes: 5, skipIfRunning: true });
-    expect(config.policy.mode).toBe('hybrid');
+    expect(config.policy.mode).toBe('pr-only');
     expect(config.issues.priorityOrder).toEqual(['kaizen:P0', 'kaizen:P1', 'kaizen:P2']);
   });
 

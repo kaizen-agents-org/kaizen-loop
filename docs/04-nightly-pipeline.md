@@ -198,8 +198,9 @@ codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 ```
 
 - PR 本文: 修正サマリ、対象 Issue へのリンク(`Closes #N`)、変更概要、検証結果、リスク判定または並列実行で PR になった理由
-- PR 作成後、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を Codex で実行する。TypeScript 側は skill を起動するだけで、CI 監視、`gh run watch`、レビューコメント対応、mergeable 判定は `pr-guardian` skill の責務
-- Issue には PR へのリンクをコメント。Issue は**クローズしない**(PR マージ時に `Closes #N` で自動クローズ)
+- PR 作成直後、Kaizen Loop は Issue に PR リンクと「monitoring CI and review feedback」をコメントする
+- その後、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を Codex で実行する。TypeScript 側は skill を起動するだけで、CI 監視、`gh run watch`、レビューコメント対応、mergeable 判定は `pr-guardian` skill の責務
+- guardian 完了後、Issue には最終結果コメントを残す。Issue は**クローズしない**(PR マージ時に `Closes #N` で自動クローズ)
 - `kaizen:in-progress` は剥がす(PR レビュー待ちは人間のフェーズ)
 
 ### 失敗処理(検証リトライ枯渇・タイムアウト・禁止パス変更)
