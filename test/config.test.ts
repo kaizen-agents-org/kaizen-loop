@@ -55,7 +55,9 @@ commands:
     const configSpec = fs.readFileSync('docs/03-config-spec.md', 'utf8');
 
     expect(repoConfig.agent.default).toBe('codex');
-    expect(cliSpec).toContain('コミット済み `.kaizen/config.yml` は `agent.default: codex`');
-    expect(configSpec).toContain('コミット済み `.kaizen/config.yml` は運用ポリシーとして `agent.default: codex`');
+    expect(cliSpec).toMatch(/agent\.default:\s*codex/);
+    expect(cliSpec).toMatch(/生成時のデフォルト:\s*claude/);
+    expect(configSpec).toMatch(/agent\.default:\s*codex/);
+    expect(configSpec).toMatch(/生成時のデフォルト値/);
   });
 });
