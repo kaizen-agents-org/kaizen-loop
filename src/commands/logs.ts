@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { resolveProject } from '../config/registry.js';
 import { projectStateDir } from '../utils/paths.js';
 
@@ -27,17 +28,15 @@ export async function followLogs(
   if (files.length === 0) return;
   const write = options.write ?? ((chunk: string) => process.stdout.write(chunk));
   const positions = new Map<string, number>();
+  const decoders = new Map<string, StringDecoder>();
   const intervalMs = options.intervalMs ?? 1000;
 
   while (!options.signal?.aborted) {
     for (const file of files) {
-      const content = await readOptional(file);
       const previous = positions.get(file) ?? 0;
-      const offset = content.length < previous ? 0 : previous;
-      if (content.length > offset) {
-        write(content.slice(offset));
-        positions.set(file, content.length);
-      }
+      const decoder = decoders.get(file) ?? new StringDecoder('utf8');
+      decoders.set(file, decoder);
+      positions.set(file, await readAppended(file, previous, decoder, write));
     }
     await delay(intervalMs, options.signal);
   }
@@ -59,6 +58,35 @@ async function readOptional(file: string): Promise<string> {
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
     throw error;
+  }
+}
+
+async function readAppended(
+  file: string,
+  previous: number,
+  decoder: StringDecoder,
+  write: (chunk: string) => void
+): Promise<number> {
+  let stat;
+  try {
+    stat = await fs.stat(file);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return previous;
+    throw error;
+  }
+  const offset = stat.size < previous ? 0 : previous;
+  if (offset === 0 && previous > 0) decoder.end();
+  if (stat.size <= offset) return offset;
+
+  const length = stat.size - offset;
+  const handle = await fs.open(file, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, offset);
+    if (bytesRead > 0) write(decoder.write(buffer.subarray(0, bytesRead)));
+    return offset + bytesRead;
+  } finally {
+    await handle.close();
   }
 }
 

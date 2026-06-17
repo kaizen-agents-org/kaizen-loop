@@ -338,7 +338,7 @@ program
       cwd: process.cwd(),
       project: options.project ?? globals.project,
       run: options.run,
-      issue: options.issue ? Number(options.issue) : undefined
+      issue: parseOptionalPositiveInteger(options.issue, 'issue')
     };
     if (options.follow) {
       const controller = new AbortController();

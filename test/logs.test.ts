@@ -1,9 +1,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { followLogs, readLogs } from '../src/commands/logs.js';
 import { saveRegistry } from '../src/config/registry.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('readLogs', () => {
   it('reads the latest run summary by default', async () => {
