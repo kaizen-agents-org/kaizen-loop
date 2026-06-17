@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { configSchema } from '../src/config/schema.js';
@@ -46,5 +47,17 @@ commands:
 
     expect(config.commands.setup).toBe('npm ci');
     expect(config.commands.verify).toEqual(['npm test']);
+  });
+
+  it('documents that this repository overrides generated agent defaults to codex', () => {
+    const repoConfig = parse(fs.readFileSync('.kaizen/config.yml', 'utf8'));
+    const cliSpec = fs.readFileSync('docs/02-cli-spec.md', 'utf8');
+    const configSpec = fs.readFileSync('docs/03-config-spec.md', 'utf8');
+
+    expect(repoConfig.agent.default).toBe('codex');
+    expect(cliSpec).toMatch(/agent\.default:\s*codex/);
+    expect(cliSpec).toMatch(/生成時のデフォルト:\s*claude/);
+    expect(configSpec).toMatch(/agent\.default:\s*codex/);
+    expect(configSpec).toMatch(/生成時のデフォルト値/);
   });
 });

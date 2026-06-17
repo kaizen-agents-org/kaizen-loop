@@ -9,7 +9,9 @@
 
 `kaizen init` が生成する。起動時に JSON Schema で厳格に検証し、不正な場合は**実行せず**終了コード 2(夜間の無人実行で誤った設定のまま動くことを防ぐ)。
 
-### フルサンプル(デフォルト値つき)
+### フルサンプル(生成時のデフォルト値つき)
+
+以下は `kaizen init` が生成するデフォルト値のサンプル。このリポジトリのコミット済み `.kaizen/config.yml` は運用ポリシーとして `agent.default: codex` を設定しているため、通常の Issue 処理では Codex を希望バックエンドとして builder-agent へ渡す。
 
 ```yaml
 # .kaizen/config.yml
