@@ -77,6 +77,24 @@ export class GitHubClient {
   }
 
   async findOpenIssueByTitle(options: { repo?: string; title: string; body?: string }): Promise<GitHubIssue | undefined> {
+    const exactArgs = [
+      'issue',
+      'list',
+      '--state',
+      'open',
+      '--json',
+      'number,title,body,labels,createdAt,comments,url',
+      '--search',
+      exactTitleSearch(options.title),
+      '--limit',
+      '100'
+    ];
+    if (options.repo) exactArgs.push('--repo', options.repo);
+    const exactResult = await this.gh(exactArgs);
+    const exactIssues = JSON.parse(exactResult.stdout || '[]') as GitHubIssue[];
+    const exactMatch = exactIssues.find((issue) => normalizedTitle(issue.title) === normalizedTitle(options.title));
+    if (exactMatch) return exactMatch;
+
     const args = [
       'issue',
       'list',
@@ -90,8 +108,7 @@ export class GitHubClient {
     if (options.repo) args.push('--repo', options.repo);
     const result = await this.gh(args);
     const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
-    return issues.find((issue) => normalizedTitle(issue.title) === normalizedTitle(options.title))
-      ?? issues.find((issue) => isEquivalentOpenIssue(issue, options));
+    return issues.find((issue) => isEquivalentOpenIssue(issue, options));
   }
 
   async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {
@@ -199,10 +216,14 @@ function normalizedTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+function exactTitleSearch(title: string): string {
+  return `in:title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 function isEquivalentOpenIssue(issue: GitHubIssue, target: { title: string; body?: string }): boolean {
   const issueIsMonitor = isMonitorTitle(issue.title);
   const targetIsMonitor = isMonitorTitle(target.title);
-  if (!issueIsMonitor && !targetIsMonitor) return false;
+  if (!issueIsMonitor || !targetIsMonitor) return false;
 
   const existingTokens = duplicateTokens(`${issue.title}\n${issue.body ?? ''}`);
   const targetTokens = duplicateTokens(`${target.title}\n${target.body ?? ''}`);

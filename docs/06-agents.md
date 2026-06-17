@@ -96,7 +96,7 @@ cd <workspaceDir> && verifier < prompt
   "discoveredIssues": [
     {
       "title": "<別Issueとして起票すべきバグ名>",
-      "repo": "kaizen-loop | builder-agent | verifier | .github | owner/repo",
+      "repo": "kaizen-loop | builder-agent | verifier | .github | coderabbit | renovate-config | github | renovate | owner/repo",
       "body": "<何が起きたか>",
       "expected": "<期待動作>",
       "evidence": "<コマンド、ログ抜粋、ファイルパス、観測事実>",
