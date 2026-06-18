@@ -311,6 +311,7 @@ function descriptionForLabel(label: string): string {
     'kaizen:pr-only': 'Force pull request reflection',
     'kaizen:in-progress': 'Currently being processed by Kaizen Loop',
     'kaizen:needs-human': 'Needs human input before retry',
+    'kaizen:goal': 'Goal-linked iteration issue',
     'kaizen:agent:claude': 'Prefer Claude through builder-agent for this issue',
     'kaizen:agent:codex': 'Prefer Codex through builder-agent for this issue'
   };

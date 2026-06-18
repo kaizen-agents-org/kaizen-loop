@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -114,7 +115,15 @@ export async function loadGoalState(projectSlug: string, goalId: string): Promis
 export async function saveGoalState(projectSlug: string, goal: GoalState): Promise<void> {
   const dir = goalDir(projectSlug, goal.id);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(goalPath(projectSlug, goal.id), `${JSON.stringify(goal, null, 2)}\n`);
+  const destination = goalPath(projectSlug, goal.id);
+  const temporary = path.join(dir, `.goal.json.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(goal, null, 2)}\n`);
+    await fs.rename(temporary, destination);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 export async function listGoalStates(projectSlug: string): Promise<GoalState[]> {
@@ -145,6 +154,6 @@ export function touchGoal(goal: GoalState, now = new Date()): GoalState {
 }
 
 function goalId(title: string, now: Date): string {
-  const timestamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const timestamp = now.toISOString().replace(/[-:]/g, '').replace('.', '');
   return `goal-${timestamp}-${slugify(title).slice(0, 32) || 'untitled'}`;
 }

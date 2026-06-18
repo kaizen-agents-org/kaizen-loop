@@ -28,7 +28,10 @@ export interface GoalRunOptions {
 }
 
 export async function createGoal(options: CreateGoalOptions) {
-  if (options.successCriteria.length === 0) {
+  if (
+    options.successCriteria.length === 0 ||
+    options.successCriteria.some((criterion) => criterion.trim().length === 0)
+  ) {
     throw new KaizenError('At least one --success criterion is required.', 2);
   }
   const resolved = await resolveProject(options.project, options.cwd);

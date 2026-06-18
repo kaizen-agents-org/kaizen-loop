@@ -12,8 +12,11 @@ export class GoalLock {
 
     try {
       const handle = await fs.open(lockPath, 'wx');
-      await handle.writeFile(content);
-      await handle.close();
+      try {
+        await handle.writeFile(content);
+      } finally {
+        await handle.close();
+      }
       return new GoalLock(lockPath);
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;

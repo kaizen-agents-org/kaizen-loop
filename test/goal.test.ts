@@ -6,7 +6,7 @@ import { parse, stringify } from 'yaml';
 import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from '../src/commands/goal.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
-import { goalDir } from '../src/goals/state.js';
+import { createGoalState, goalDir } from '../src/goals/state.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 afterEach(() => {
@@ -14,6 +14,24 @@ afterEach(() => {
 });
 
 describe('goal commands', () => {
+  it('rejects missing or blank success criteria', async () => {
+    const { repo } = await setupProject();
+    const base = {
+      cwd: repo,
+      project: 'o-r',
+      title: 'Improve onboarding',
+      description: 'Make first-run setup reliable.',
+      constraints: []
+    };
+
+    await expect(createGoal({ ...base, successCriteria: [] })).rejects.toThrow(
+      /At least one --success criterion is required/
+    );
+    await expect(createGoal({ ...base, successCriteria: ['  '] })).rejects.toThrow(
+      /At least one --success criterion is required/
+    );
+  });
+
   it('creates, lists, reads, and stops a goal', async () => {
     const { repo } = await setupProject();
 
@@ -76,6 +94,33 @@ describe('goal commands', () => {
     const evaluatorCalls = runner.mock.calls.filter(([command, , options]) => command === 'goal-agent' && options?.env?.KAIZEN_GOAL_MODE === 'evaluator');
     expect(plannerCalls).toHaveLength(1);
     expect(evaluatorCalls).toHaveLength(1);
+  });
+
+  it('preserves milliseconds in generated goal ids', async () => {
+    await setupProject();
+
+    const first = await createGoalState({
+      projectSlug: 'o-r',
+      title: 'Improve onboarding',
+      description: 'Make first-run setup reliable.',
+      successCriteria: ['npm test passes'],
+      constraints: [],
+      maxIterations: 3,
+      now: new Date('2026-06-18T00:00:00.001Z')
+    });
+    const second = await createGoalState({
+      projectSlug: 'o-r',
+      title: 'Improve onboarding',
+      description: 'Make first-run setup reliable.',
+      successCriteria: ['npm test passes'],
+      constraints: [],
+      maxIterations: 3,
+      now: new Date('2026-06-18T00:00:00.002Z')
+    });
+
+    expect(first.id).toContain('20260618T000000001Z');
+    expect(second.id).toContain('20260618T000000002Z');
+    expect(first.id).not.toBe(second.id);
   });
 
   it('blocks an active goal when maxIterations is reached', async () => {
