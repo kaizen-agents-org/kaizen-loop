@@ -53,6 +53,7 @@ function requiredLabels(config: KaizenConfig): string[] {
     'kaizen:pr-only',
     'kaizen:in-progress',
     'kaizen:needs-human',
+    config.goal.issueLabel,
     'kaizen:agent:claude',
     'kaizen:agent:codex'
   ])];

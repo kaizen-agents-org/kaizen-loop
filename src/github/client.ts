@@ -12,6 +12,7 @@ export const KAIZEN_LABELS = [
   'kaizen:pr-only',
   'kaizen:in-progress',
   'kaizen:needs-human',
+  'kaizen:goal',
   'kaizen:agent:claude',
   'kaizen:agent:codex'
 ];

@@ -76,6 +76,20 @@ export function defaultConfigYaml(options: {
       timeoutMinutes: 60,
       maxAttempts: 5
     },
+    goal: {
+      maxIterations: 5,
+      issueLabel: 'kaizen:goal',
+      evaluation: {
+        command: null,
+        timeoutMinutes: 15
+      },
+      agent: {
+        command: 'codex',
+        args: ['exec', '--sandbox', 'read-only', '-'],
+        resultPath: 'goal-result.json',
+        timeoutMinutes: 20
+      }
+    },
     policy: {
       mode: 'pr-only',
       directCommit: {

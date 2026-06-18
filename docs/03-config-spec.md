@@ -74,6 +74,23 @@ guardian:
   timeoutMinutes: 60
   maxAttempts: 5
 
+goal:
+  # 1 Goal あたりの最大自動 iteration 数
+  maxIterations: 5
+  # Goal runner が作る Issue に追加するラベル
+  issueLabel: "kaizen:goal"
+  evaluation:
+    # Goal 固有の機械評価。設定すると AI evaluator が succeeded を返しても、このコマンドが失敗していれば Goal は成功扱いにしない
+    command: null             # 例: "npm test && npm run coverage"
+    timeoutMinutes: 15
+  agent:
+    # Planner / evaluator 用 agent。stdin で prompt を受け取り、JSON を返す
+    command: "codex"
+    args: ["exec", "--sandbox", "read-only", "-"]
+    # 相対パスの場合はローカル Goal 状態ディレクトリ相対
+    resultPath: "goal-result.json"
+    timeoutMinutes: 20
+
 policy:
   # 反映方法: pr-only | hybrid | direct-only
   # 既定は PR-first。hybrid / direct-only は明示 opt-in
@@ -130,6 +147,9 @@ issues:
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
 - `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、レビューコメントへの返信は skill 側の責務
+- `goal.agent` は Goal planner / evaluator の呼び出し設定。`KAIZEN_GOAL_RESULT_PATH` に JSON を書くか、stdout の最後に JSON を出す。Goal runner はこの agent に実装や GitHub 操作をさせず、Issue 作成と既存 pipeline の呼び出しを自分で行う
+- `goal.issueLabel` は `kaizen goal run` が生成する Issue に付けるラベル。実行対象の判定は通常の `issues.label` と queued label に従う
+- `goal.evaluation.command` は Goal 達成の機械的な追加ゲート。設定されている場合、各 iteration 後に登録プロジェクトの checkout で実行し、失敗時は AI evaluator の `succeeded` を `continue` に降格する
 - `issues.selection.mode: auto` は既存互換で、`issues.label` 付きの open Issue を自動選択候補にする
 - `issues.selection.mode: opt-in` は `issues.label` と `issues.selection.includeLabel` の両方を持つ Issue だけを scheduled / backlog 実行候補にする
 - `issues.selection.mode: manual-only` は scheduled / backlog 実行で Issue を自動選択しない。`kaizen fix <Issue番号>` などの明示実行は可能

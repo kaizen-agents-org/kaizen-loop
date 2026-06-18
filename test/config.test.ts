@@ -13,6 +13,15 @@ describe('configSchema', () => {
     expect(config.verifier.command).toBe('verifier');
     expect(config.guardian.enabled).toBe(true);
     expect(config.guardian.command).toBe('codex');
+    expect(config.goal.maxIterations).toBe(5);
+    expect(config.goal.issueLabel).toBe('kaizen:goal');
+    expect(config.goal.evaluation).toEqual({ command: null, timeoutMinutes: 15 });
+    expect(config.goal.agent).toEqual({
+      command: 'codex',
+      args: ['exec', '--sandbox', 'read-only', '-'],
+      resultPath: 'goal-result.json',
+      timeoutMinutes: 20
+    });
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.scheduler.nightly).toEqual({ enabled: true, time: '02:00' });
     expect(config.scheduler.poll).toEqual({ enabled: false, intervalMinutes: 5, skipIfRunning: true });

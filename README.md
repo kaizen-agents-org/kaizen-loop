@@ -61,6 +61,7 @@ flowchart TB
 | `kaizen report <title>` | Create a Kaizen issue; `--now` creates and immediately processes it. |
 | `kaizen queue` / `kaizen unqueue` | Add or remove queued execution approval labels for opt-in selection mode. |
 | `kaizen improve` | Plan and run an immediate improvement pass over selected or queued issues. |
+| `kaizen goal` | Create and run a multi-iteration goal that plans scoped issues, processes them, evaluates progress, and stops when done or blocked. |
 | `kaizen status` | Show registry state and latest run summary. Use `--metrics` for aggregate counters. |
 | `kaizen enable` / `kaizen disable` | Manage scheduled launchd/cron jobs. |
 | `kaizen logs` | Print latest or selected run logs from `~/.kaizen`. |
@@ -94,6 +95,8 @@ kaizen doctor
 kaizen report "Fix stale config reload" --body "Observed during local dogfooding" --priority P2 --queue
 kaizen run --dry-run
 kaizen fix 42 --json
+kaizen goal create "Improve onboarding reliability" --success "npm test and npm run typecheck pass" --json
+kaizen goal run <goal-id> --yes --json
 ```
 
 ## Runtime Requirements
@@ -142,3 +145,4 @@ Start with [docs/README.md](./docs/README.md). The most useful implementation-fa
 - [docs/07-safety.md](./docs/07-safety.md): guardrails, locks, protected paths, and failure modes.
 - [docs/09-instant-run.md](./docs/09-instant-run.md): `fix`, `report --now`, and `improve`.
 - [docs/10-skills.md](./docs/10-skills.md): shared Kaizen skills vendored into target repositories.
+- [docs/11-goals.md](./docs/11-goals.md): Goal runner behavior and agent-facing contract.

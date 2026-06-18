@@ -7,6 +7,7 @@ Kaizen Agents repositories can vendor shared skills under `skills/`. These skill
 | Skill | Responsibility |
 |---|---|
 | `kaizen-bug-router` | Investigate a Kaizen Agents bug, choose the owning repository, and file one GitHub issue with evidence and routing rationale |
+| `kaizen-goal` | Decide when to use Goal mode and operate `kaizen goal` without manually creating iteration issues |
 | `gh-link-issue-pr` | Ensure implementation PRs link their source issue with GitHub closing keywords |
 | `pr-guardian` | Monitor an opened PR, address CI/review feedback, and leave it merge-ready or report a blocker |
 
