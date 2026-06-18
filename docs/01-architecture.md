@@ -120,7 +120,7 @@ Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `agent
 - 各 Issue は base workspace から作成した専用 `git worktree` で処理する。builder-agent、verifier、pr-guardian はその Issue 用 worktree だけを作業ディレクトリとして受け取る
 - 作業ブランチは `kaizen/issue-<番号>-<slug化したタイトル>` 形式
 - 依存インストール(`npm ci` 等)は設定の `commands.setup` で定義し、base workspace のベースライン検証前と各 Issue 用 worktree の処理開始時に実行する
-- ワークスペースが壊れた場合(fetch 失敗が続く等)は削除して再クローンする(`kaizen doctor --repair`)
+- ワークスペースが壊れた場合(fetch 失敗が続く等)は実行を中止し、手動の再クローンで復旧する。`kaizen doctor --repair` は現時点では GitHub ラベル修復を担当する
 
 > **worktree の責務**: `workspacePath` は同期済み base clone として扱い、Issue 実装は `<workspacePath>-worktrees/<runId>/issue-<N>` で行う。これにより複数 Issue を並列に走らせても、builder-agent が同じ working tree に同時変更を書き込まない。
 

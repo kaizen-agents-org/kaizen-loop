@@ -61,34 +61,24 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const nowDate = new Date();
   const cutoff = new Date(nowDate);
   cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
-  if (options.scheduled && trigger !== 'watch' && nowDate > cutoff) {
-    const now = new Date().toISOString();
-    return {
-      version: 1,
-      project: resolved.slug,
-      startedAt: now,
-      finishedAt: now,
-      trigger,
-      result: 'success',
-      issues: [],
-      skipped: [{ number: 0, reason: `latestStartHour(${config.run.latestStartHour}) passed` }]
-    };
-  }
+  const skipLatestStart = options.scheduled && trigger !== 'watch' && nowDate > cutoff;
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
-  const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
-  const maxIssues = options.maxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
-  const requestedIssues = requestedIssueNumbers
-    ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
-    : undefined;
-  const issues = requestedIssues ?? await github.listIssues(config.issues.label);
-  const selection = selectIssues({
-    issues,
-    config,
-    maxIssues,
-    explicit: requestedIssues !== undefined
-  });
+  const selectRunIssues = async () => {
+    const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
+    const maxIssues = options.maxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
+    const requestedIssues = requestedIssueNumbers
+      ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
+      : undefined;
+    const issues = requestedIssues ?? await github.listIssues(config.issues.label);
+    return selectIssues({
+      issues,
+      config,
+      maxIssues,
+      explicit: requestedIssues !== undefined
+    });
+  };
 
-  if (options.dryRun) return selection;
+  if (options.dryRun) return selectRunIssues();
 
   const stateDir = projectStateDir(resolved.slug);
   await fs.mkdir(stateDir, { recursive: true });
@@ -113,6 +103,24 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     throw error;
   }
 
+  if (skipLatestStart) {
+    const now = nowDate.toISOString();
+    try {
+      return await persistRunSummary(resolved.slug, {
+        version: 1,
+        project: resolved.slug,
+        startedAt: now,
+        finishedAt: now,
+        trigger,
+        result: 'success',
+        issues: [],
+        skipped: [{ number: 0, reason: `latestStartHour(${config.run.latestStartHour}) passed` }]
+      });
+    } finally {
+      await lock.release();
+    }
+  }
+
   const startedAt = new Date();
   const runId = toRunId(startedAt);
   const runDir = path.join(stateDir, 'runs', runId);
@@ -126,11 +134,13 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     trigger,
     result: 'success',
     issues: [],
-    skipped: selection.skipped,
+    skipped: [],
   };
 
   let runFailed = false;
   try {
+    const selection = await selectRunIssues();
+    summary.skipped = selection.skipped;
     if (selection.selected.length > 0) {
       const remoteUrl = await new GitClient(options.runCommand, resolved.project.localPath).remoteUrl('origin');
       const baseWorkspace = new WorkspaceManager(options.runCommand, resolved.project.workspacePath, remoteUrl);
@@ -1065,6 +1075,14 @@ function toRunId(date: Date): string {
 
 function tail(output: string, lines: number): string {
   return output.split('\n').slice(-lines).join('\n');
+}
+
+async function persistRunSummary(slug: string, summary: RunSummary): Promise<RunSummary> {
+  const runDir = path.join(projectStateDir(slug), 'runs', toRunId(new Date(summary.startedAt)));
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+  await updateLastRun(slug, summary);
+  return summary;
 }
 
 async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {

@@ -11,7 +11,7 @@ import { reportIssue, reportIssueNow } from './commands/report.js';
 import { listQueuedIssues, queueIssues, unqueueIssues } from './commands/queue.js';
 import { planImprove, runImprove } from './commands/improve.js';
 import { statusProject } from './commands/status.js';
-import { readLogs } from './commands/logs.js';
+import { followLogs, readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
 import { disableScheduler, enableScheduler } from './scheduler/scheduler.js';
 
@@ -331,14 +331,23 @@ program
   .option('--project <slug>', 'target project slug')
   .option('--run <timestamp>', 'run timestamp')
   .option('--issue <number>', 'issue number')
+  .option('--follow', 'follow log output until interrupted', false)
   .action(async (options) => {
     const globals = program.opts<{ project?: string }>();
-    console.log(await readLogs({
+    const logOptions = {
       cwd: process.cwd(),
       project: options.project ?? globals.project,
       run: options.run,
-      issue: options.issue ? Number(options.issue) : undefined
-    }));
+      issue: parseOptionalPositiveInteger(options.issue, 'issue')
+    };
+    if (options.follow) {
+      const controller = new AbortController();
+      process.once('SIGINT', () => controller.abort());
+      process.once('SIGTERM', () => controller.abort());
+      await followLogs({ ...logOptions, signal: controller.signal });
+      return;
+    }
+    console.log(await readLogs(logOptions));
   });
 
 program
