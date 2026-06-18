@@ -162,6 +162,37 @@ describe('goal commands', () => {
     });
   });
 
+  it('does not call the evaluator when runKaizen returns a failed issue summary', async () => {
+    const { repo, workspace } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Improve onboarding',
+      description: 'Make first-run setup reliable.',
+      successCriteria: ['npm test passes'],
+      constraints: []
+    });
+    const runner = goalRunner({ repo, workspace, evaluationStatus: 'succeeded', noDiff: true });
+
+    const result = await runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.finalReason).toContain('Agent produced no changes');
+    expect(result.iterations[0]).toMatchObject({
+      issue: 42,
+      outcome: 'failed'
+    });
+    const evaluatorCalls = runner.mock.calls.filter(([command, , options]) => command === 'goal-agent' && options?.env?.KAIZEN_GOAL_MODE === 'evaluator');
+    expect(evaluatorCalls).toHaveLength(0);
+  });
+
   it('marks the goal failed when planner output is invalid before an issue is created', async () => {
     const { repo, workspace } = await setupProject();
     const goal = await createGoal({
@@ -271,6 +302,11 @@ describe('goal commands', () => {
       status: 'continue',
       reason: 'Goal evaluation command failed: npm run goal-check'
     });
+    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    expect(gitCommands).toContain('checkout --ignore-other-worktrees kaizen/issue-42-add-onboarding-smoke-test');
+    expect(gitCommands).toContain('checkout --ignore-other-worktrees main');
+    const mechanicalCall = runner.mock.calls.find(([command, args]) => command === 'sh' && args.join(' ') === '-lc npm run goal-check');
+    expect(mechanicalCall?.[2]?.cwd).toBe(workspace);
   });
 });
 
@@ -314,6 +350,7 @@ function goalRunner(options: {
   workspace: string;
   evaluationStatus: 'succeeded' | 'continue';
   failRunPipeline?: boolean;
+  noDiff?: boolean;
   invalidPlanner?: boolean;
   invalidEvaluator?: boolean;
   failMechanicalEvaluation?: boolean;
@@ -367,8 +404,8 @@ function goalRunner(options: {
       return result(command, args, options.repo, 'https://github.com/o/r.git\n');
     }
     if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, runOptions?.cwd, '');
-    if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, runOptions?.cwd, 'src/file.ts\n');
-    if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, runOptions?.cwd, '1\t0\tsrc/file.ts\n');
+    if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, runOptions?.cwd, options.noDiff ? '' : 'src/file.ts\n');
+    if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, runOptions?.cwd, options.noDiff ? '' : '1\t0\tsrc/file.ts\n');
     if (command === 'sh' && args.join(' ') === '-lc npm run goal-check') {
       return {
         ...result(command, args, runOptions?.cwd, options.failMechanicalEvaluation ? 'goal check failed' : 'goal check passed'),

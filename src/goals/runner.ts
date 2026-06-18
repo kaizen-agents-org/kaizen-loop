@@ -7,6 +7,7 @@ import { runKaizen, type DirectCommitConfirmation } from '../orchestrator/run.js
 import type { RunSummary } from '../orchestrator/summary.js';
 import type { CommandRunner } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
+import { GitClient } from '../workspace/git.js';
 import { goalDir, loadGoalState, saveGoalState, touchGoal } from './state.js';
 import { GoalAgentAdapter } from './agent.js';
 import { GoalLock } from './lock.js';
@@ -114,23 +115,30 @@ export async function runGoal(options: RunGoalOptions): Promise<GoalState> {
           confirmDirectCommit: options.confirmDirectCommit,
           runCommand: options.runCommand
         });
-        mechanicalEvaluation = await runMechanicalEvaluation({
-          config,
-          cwd: resolved.project.localPath,
-          runCommand: options.runCommand
-        });
-        evaluation = enforceMechanicalEvaluation(
-          await evaluateIteration({
-            goal,
+        const unsuccessfulRun = evaluationForUnsuccessfulRun(runSummary, issue.number);
+        if (unsuccessfulRun) {
+          evaluation = unsuccessfulRun;
+        } else {
+          mechanicalEvaluation = await runMechanicalEvaluation({
+            config,
+            workspacePath: resolved.project.workspacePath,
             runSummary,
+            issueNumber: issue.number,
+            runCommand: options.runCommand
+          });
+          evaluation = enforceMechanicalEvaluation(
+            await evaluateIteration({
+              goal,
+              runSummary,
+              mechanicalEvaluation,
+              agent,
+              cwd: resolved.project.localPath,
+              stateDir
+            }),
             mechanicalEvaluation,
-            agent,
-            cwd: resolved.project.localPath,
-            stateDir
-          }),
-          mechanicalEvaluation,
-          goal
-        );
+            goal
+          );
+        }
       } catch (error) {
         goal = await failCurrentIteration({
           projectSlug: resolved.slug,
@@ -210,21 +218,71 @@ async function evaluateIteration(options: {
 
 async function runMechanicalEvaluation(options: {
   config: KaizenConfig;
-  cwd: string;
+  workspacePath: string;
+  runSummary: RunSummary;
+  issueNumber: number;
   runCommand: CommandRunner;
 }): Promise<GoalMechanicalEvaluation | undefined> {
   const command = options.config.goal.evaluation.command;
   if (!command) return undefined;
-  const result = await options.runCommand(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
-    cwd: options.cwd,
-    timeoutMs: options.config.goal.evaluation.timeoutMinutes * 60_000,
-    rejectOnNonZero: false
-  });
-  return {
-    command,
-    ok: result.exitCode === 0,
-    output: `${result.stdout}${result.stderr}`
-  };
+  const issue = options.runSummary.issues.find((item) => item.number === options.issueNumber);
+  if (!issue?.branch) {
+    return {
+      command,
+      ok: false,
+      output: `Goal evaluation command could not run because issue #${options.issueNumber} has no produced branch.`
+    };
+  }
+  const git = new GitClient(options.runCommand, options.workspacePath);
+  await git.fetch();
+  await git.checkout(issue.branch, { ignoreOtherWorktrees: true });
+  try {
+    const result = await options.runCommand(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
+      cwd: options.workspacePath,
+      timeoutMs: options.config.goal.evaluation.timeoutMinutes * 60_000,
+      rejectOnNonZero: false
+    });
+    return {
+      command,
+      ok: result.exitCode === 0,
+      output: `${result.stdout}${result.stderr}`
+    };
+  } finally {
+    await git.checkout(options.config.git.defaultBranch, { ignoreOtherWorktrees: true });
+    await git.resetHard(`origin/${options.config.git.defaultBranch}`);
+  }
+}
+
+function evaluationForUnsuccessfulRun(runSummary: RunSummary, issueNumber: number): GoalEvaluation | undefined {
+  const issue = runSummary.issues.find((item) => item.number === issueNumber);
+  if (!issue) {
+    return {
+      status: 'failed',
+      confidence: 1,
+      reason: `Goal issue #${issueNumber} did not appear in the run summary.`,
+      satisfiedCriteria: [],
+      missingCriteria: ['Issue was not processed']
+    };
+  }
+  if (issue.outcome === 'blocked') {
+    return {
+      status: 'blocked',
+      confidence: 1,
+      reason: issue.reason ?? `Goal issue #${issueNumber} was blocked.`,
+      satisfiedCriteria: [],
+      missingCriteria: ['Issue blocked before Goal completion']
+    };
+  }
+  if (issue.outcome === 'failed' || runSummary.result === 'failed') {
+    return {
+      status: 'failed',
+      confidence: 1,
+      reason: issue.reason ?? `Goal issue #${issueNumber} failed.`,
+      satisfiedCriteria: [],
+      missingCriteria: ['Issue pipeline failed']
+    };
+  }
+  return undefined;
 }
 
 function enforceMechanicalEvaluation(
