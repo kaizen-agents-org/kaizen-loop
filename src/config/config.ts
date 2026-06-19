@@ -49,6 +49,10 @@ export function defaultConfigYaml(options: {
         enabled: true,
         time: options.schedule ?? '02:00'
       },
+      afternoon: {
+        enabled: false,
+        time: '14:00'
+      },
       poll: {
         enabled: false,
         intervalMinutes: 5,
@@ -58,8 +62,7 @@ export function defaultConfigYaml(options: {
     commands: {
       setup: options.setup,
       verify: options.verify,
-      verifyTimeoutMinutes: 15,
-      goalEvaluate: null
+      verifyTimeoutMinutes: 15
     },
     builder: {
       command: 'builder-agent',
@@ -76,6 +79,20 @@ export function defaultConfigYaml(options: {
       command: 'codex',
       timeoutMinutes: 60,
       maxAttempts: 5
+    },
+    goal: {
+      maxIterations: 5,
+      issueLabel: 'kaizen:goal',
+      evaluation: {
+        command: null,
+        timeoutMinutes: 15
+      },
+      agent: {
+        command: 'codex',
+        args: ['exec', '--sandbox', 'read-only', '-'],
+        resultPath: 'goal-result.json',
+        timeoutMinutes: 20
+      }
     },
     policy: {
       mode: 'pr-only',

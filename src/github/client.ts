@@ -8,11 +8,11 @@ export const KAIZEN_LABELS = [
   'kaizen:P1',
   'kaizen:P2',
   'kaizen:ready',
-  'kaizen:goal',
   'kaizen:direct',
   'kaizen:pr-only',
   'kaizen:in-progress',
   'kaizen:needs-human',
+  'kaizen:goal',
   'kaizen:agent:claude',
   'kaizen:agent:codex'
 ];
@@ -307,11 +307,11 @@ function descriptionForLabel(label: string): string {
     'kaizen:P1': 'Kaizen priority P1',
     'kaizen:P2': 'Kaizen priority P2',
     'kaizen:ready': 'Approved for Kaizen Loop execution',
-    'kaizen:goal': 'Issue created for a multi-iteration Kaizen Goal',
     'kaizen:direct': 'Allow direct commit when policy permits',
     'kaizen:pr-only': 'Force pull request reflection',
     'kaizen:in-progress': 'Currently being processed by Kaizen Loop',
     'kaizen:needs-human': 'Needs human input before retry',
+    'kaizen:goal': 'Goal-linked iteration issue',
     'kaizen:agent:claude': 'Prefer Claude through builder-agent for this issue',
     'kaizen:agent:codex': 'Prefer Codex through builder-agent for this issue'
   };

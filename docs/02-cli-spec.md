@@ -10,7 +10,7 @@ Commands:
   run         夜間メンテナンスパイプラインを実行する(スケジューラからも呼ばれる)
   fix         Issue を即時修正する(夜間を待たない。→ 09-instant-run.md)
   report      Kaizen Issue を素早く登録する(人間・AI 共用)
-  goal        複数 Issue にまたがる Goal を作成・実行・停止する
+  goal        複数 iteration の Goal を作成・実行・評価する
   watch       kaizen:now ラベルを監視して即時修正する常駐モード(→ 09-instant-run.md)
   status      ループの状態・直近の実行結果を表示する
   enable      スケジューラを有効化する
@@ -47,7 +47,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 3. **ファイル生成**(リポジトリ内 → 要コミット):
    - `.kaizen/config.yml`(→ [03-config-spec.md](./03-config-spec.md))
    - `.github/ISSUE_TEMPLATE/kaizen.yml`(→ [05-issue-conventions.md](./05-issue-conventions.md))
-4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:ready`, `kaizen:goal`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:agent:claude`, `kaizen:agent:codex`
+4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:goal`, `kaizen:agent:claude`, `kaizen:agent:codex`
 5. **ローカル登録**: `~/.kaizen/registry.json` にプロジェクト追加、専用クローン作成(`~/.kaizen/workspaces/<slug>/`)
 6. **スケジューラ登録**: `kaizen enable` 相当を実行(`--no-schedule` でスキップ可)
 7. 完了サマリと「次のステップ」(生成ファイルのコミット、最初の Issue 登録方法)を表示
@@ -60,14 +60,14 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 
 ```
 kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
-           [--trigger manual|scheduled|instant|watch]
+           [--trigger manual|scheduled|afternoon|instant|watch]
            [--max-issues <N>] [--agent claude|codex]
 ```
 
 | オプション | 意味 |
 |---|---|
 | `--scheduled` | 無人実行モード。対話なし。スケジューラからの呼び出し専用 |
-| `--trigger <trigger>` | 実行契機を明示する。`scheduled` は nightly job、`watch` は poll job、`instant` は即時実行、`manual` は手動実行 |
+| `--trigger <trigger>` | 実行契機を明示する。`scheduled` は nightly job、`afternoon` は afternoon job、`watch` は poll job、`instant` は即時実行、`manual` は手動実行 |
 | `--issue <番号>` | 指定 Issue のみ処理(優先度選択をスキップ)。デバッグ・即時修正用 |
 | `--dry-run` | Issue 取得・除外フィルタ・優先順位による選択までを実行し、**ワークスペース変更・push・コメントは行わない**。リスク判定は実 diff が必要なため実行しない |
 | `--max-issues <N>` | この実行に限り処理上限を上書き |
@@ -120,6 +120,32 @@ TTY では実行前に対象 Issue の計画を表示して確認する。`--jso
 
 ---
 
+## `kaizen goal`
+
+複数の設計・実装・テスト・評価サイクルが必要な目的を Goal として管理する。Goal は Issue の代替ではなく、Goal runner が小さな `kaizen` Issue を 1 件ずつ作成し、既存の Issue-to-PR pipeline に流してから達成度を評価する上位ループである。詳細は [11-goals.md](./11-goals.md)。
+
+```
+kaizen goal create "<title>" --success "<criteria>" [--success "<criteria>"]
+                   [--description <body>] [--description-file <path|->]
+                   [--constraint <constraint>] [--max-iterations <N>] [--json]
+
+kaizen goal run <goal-id> [--agent claude|codex] [--yes] [--json]
+kaizen goal status <goal-id> [--json]
+kaizen goal list [--json]
+kaizen goal stop <goal-id> [--reason <reason>] [--json]
+```
+
+| オプション | 意味 |
+|---|---|
+| `--success <criteria>` | Goal の達成条件。少なくとも 1 つ必須。複数回指定できる |
+| `--constraint <constraint>` | Goal 全体に適用する制約。複数回指定できる |
+| `--max-iterations <N>` | この Goal の最大自動 iteration 数。省略時は `goal.maxIterations` |
+| `--yes` | `goal run` を非対話で実行する。非 TTY / `--json` では必須 |
+
+Goal が作成する Issue には `kaizen:goal` と queued 実行許可ラベルを付け、本文に `<!-- kaizen-loop:goal ... -->` marker を残す。
+
+---
+
 ## `kaizen report`
 
 Kaizen Issue を素早く登録する。**人間と AI エージェント(利用側)の共用インターフェース**。内部は `gh issue create`。
@@ -150,26 +176,6 @@ echo "$BODY" | kaizen report "起動時に config 検証エラーの行番号が
 - `--now` は未指定時の `--queue` と同じく実行許可ラベルを付ける。即時実行だけにしたい場合は `--now --no-queue`
 - `--json` 時は作成された Issue の番号と URL を JSON で返す(AI が後続処理に使える)
 - 本文が Issue テンプレートの必須セクション(再現手順 / 期待動作)を欠く場合は警告を出すが登録は通す(夜間エージェントが「情報不足」と判断した場合の挙動は [04-nightly-pipeline.md](./04-nightly-pipeline.md) §6)
-
----
-
-## `kaizen goal`
-
-Goal は、1 つの大きな目的をローカル状態として保持し、必要な scoped Issue を作って既存の Issue-to-PR パイプラインへ流し、評価結果に応じて継続・成功・ブロックを判断する。詳細なエージェント契約は [11-goals.md](./11-goals.md)。
-
-```
-kaizen goal create "<目的>" [--project <slug>] [--max-iterations <N>] [--json]
-kaizen goal run <Goal ID> [--project <slug>] [--max-iterations <N>] [--agent claude|codex] [--json]
-kaizen goal status [Goal ID] [--project <slug>] [--json]
-kaizen goal list [--project <slug>] [--json]
-kaizen goal stop <Goal ID> [--project <slug>] [--reason <理由>] [--json]
-```
-
-- `create`: `KAIZEN_HOME/projects/<slug>/goals/<Goal ID>.json` に Goal state を作る
-- `run`: Goal lock を取り、Goal-linked Issue を作成し、`kaizen run --issue` と同じ処理で PR-first に実行する
-- `status` / `list`: ローカル Goal state を表示する。`status` は Goal ID 省略時に一覧を返す
-- `stop`: state を `stopped` にし、以降の `run` 対象から外す
-- `commands.goalEvaluate` が設定されている場合、各 iteration の前後で評価コマンドを呼び、`continue` / `succeeded` / `blocked` を判断する
 
 ---
 
@@ -219,7 +225,7 @@ kaizen disable [--project <slug>] [--all]
 
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
-- `enable` は `.kaizen/config.yml` の `scheduler.nightly` / `scheduler.poll` を読み、nightly と poll をそれぞれ登録する。`--schedule` は nightly の時刻だけを一時上書きする
+- `enable` は `.kaizen/config.yml` の `scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` を読み、nightly、afternoon、poll をそれぞれ登録する。`--schedule` は nightly の時刻だけを一時上書きする
 - `disable --all`: 登録済み全プロジェクトを無効化
 - `disable` は実行中の run があれば、ロックファイルの PID に SIGTERM を送って中断させる(中断時の安全性は [07-safety.md](./07-safety.md) §4)
 

@@ -25,7 +25,7 @@ export interface RunOptions {
   cwd: string;
   project?: string;
   scheduled: boolean;
-  trigger?: 'manual' | 'scheduled' | 'instant' | 'watch';
+  trigger?: 'manual' | 'scheduled' | 'afternoon' | 'instant' | 'watch';
   issue?: number;
   issueNumbers?: number[];
   dryRun: boolean;
@@ -61,7 +61,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const nowDate = new Date();
   const cutoff = new Date(nowDate);
   cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
-  const skipLatestStart = options.scheduled && trigger !== 'watch' && nowDate > cutoff;
+  const skipLatestStart = options.scheduled && trigger === 'scheduled' && nowDate > cutoff;
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const selectRunIssues = async () => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
@@ -534,6 +534,7 @@ async function processIssue(options: {
           agent: agent.name,
           attempt: attempts,
           outcome: 'direct-commit',
+          branch,
           commit: direct.commit,
           reason: decision.reason,
           changedFiles: finalDiff.changedFiles,
@@ -629,6 +630,7 @@ async function finishPr(
     agent: agent.name,
     attempt: attempts,
     outcome: 'pr-created',
+    branch: pr.branch,
     pr: pr.number,
     prUrl: pr.url,
     guardian: {

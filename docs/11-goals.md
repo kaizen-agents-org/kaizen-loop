@@ -1,79 +1,105 @@
-# 11. Goal mode
+# 11. Goal 機能
 
-Goal mode は、1 回の Issue 修正では終わらない目的を `KAIZEN_HOME` 配下のローカル状態として管理し、必要な scoped Issue を作りながら既存の Issue-to-PR パイプラインを繰り返す。
+Goal は、単発 Issue では終わらない目的を「計画 → 実装 → テスト → 評価」の小さな iteration に分けて進める上位ループである。既存の Issue-to-PR pipeline を置き換えず、Goal runner が次の小さな Issue を作り、`runKaizen` と同じ安全装置で処理する。
 
-## コマンド
+## 使い分け
+
+| 状況 | コマンド |
+|---|---|
+| 1 つの明確なバグや改善を今すぐ直す | `kaizen report --now` / `kaizen fix <issue>` |
+| 既存の queued Issue をまとめて処理する | `kaizen improve` |
+| 達成条件に向けて複数 iteration を回す | `kaizen goal` |
+
+Goal を使う場合も、実装単位は常に GitHub Issue と PR / direct commit で記録される。
+
+## CLI
 
 ```sh
-kaizen goal create "Goal objective" --json
-kaizen goal run <Goal ID> --max-iterations 1 --json
-kaizen goal status <Goal ID> --json
+kaizen goal create "Improve onboarding reliability" \
+  --description "First-run setup should be reliable for new projects." \
+  --success "npm test and npm run typecheck pass" \
+  --success "README quickstart covers init, report, fix, and goal" \
+  --max-iterations 5 \
+  --json
+
+kaizen goal run <goal-id> --yes --json
+kaizen goal status <goal-id> --json
 kaizen goal list --json
-kaizen goal stop <Goal ID> --reason "superseded"
+kaizen goal stop <goal-id> --reason "No longer needed" --json
 ```
 
-状態は `KAIZEN_HOME/projects/<slug>/goals/<Goal ID>.json` に保存する。`run` 中は同じディレクトリに `<Goal ID>.lock` を作り、同一 Goal の重複実行を防ぐ。通常の Issue 処理は既存の `run.lock` も使うため、Goal run と nightly run も同時には進まない。
+`goal run --json` と非 TTY 実行では `--yes` が必須。これは Goal runner が複数 Issue を自動作成しうるため、利用側エージェントに明示的な実行承認を要求するためである。
 
 ## 状態
 
-Goal state の `status` は次のいずれか。
+Goal 状態はローカル状態として保存し、対象リポジトリにはコミットしない。
 
-| status | 意味 |
-|---|---|
-| `active` | 次の `goal run` で継続できる |
-| `running` | Goal lock を保持して iteration 実行中 |
-| `succeeded` | 評価が成功と判断した |
-| `blocked` | 評価が人間対応待ちと判断した |
-| `stopped` | `goal stop` で停止された |
-| `failed` | Issue 作成、pipeline 実行、評価コマンドなどの機械的失敗 |
-
-`failed` は再実行可能。`succeeded` / `blocked` / `stopped` は再実行しない。
-
-## Goal-linked Issue
-
-`goal run` は evaluator の `nextIssue`、または既定テンプレートから Issue を作る。Issue には以下を付与する。
-
-- `kaizen` と priority label
-- `kaizen:ready`
-- `kaizen:pr-only`
-- `kaizen:goal`
-- 本文末尾の `<!-- kaizen-goal {"id":"...","project":"..."} -->` marker
-
-作成後は `kaizen run --issue <番号> --trigger instant` 相当で既存の builder-agent / verifier / pr-guardian パイプラインを使う。
-
-## 評価コマンド
-
-`.kaizen/config.yml` の `commands.goalEvaluate` を設定すると、各 iteration の前後で機械的評価を実行する。
-
-```yaml
-commands:
-  goalEvaluate: "node scripts/evaluate-goal.mjs"
+```text
+~/.kaizen/projects/<slug>/goals/<goal-id>/goal.json
 ```
 
-呼び出し時の契約:
+`goal.json` には Goal の達成条件、制約、iteration 履歴、各 iteration の Issue 番号、run summary、評価結果を保存する。終了状態は `succeeded` / `blocked` / `failed` / `stopped` のいずれか。
 
-- cwd は対象リポジトリ
-- stdin は `{ "phase": "before"|"after", "goal": <GoalState> }`
-- `KAIZEN_GOAL_PHASE` は `before` または `after`
-- `KAIZEN_GOAL_STATE_PATH` は現在の Goal state JSON
-- `KAIZEN_GOAL_RESULT_PATH` に結果 JSON を書ける。stdout JSON も受け付ける
+## Iteration
 
-結果 JSON:
+1. Goal planner が次の小さな Issue を 1 件だけ提案する。
+2. Goal runner が `kaizen`、`kaizen:goal`、queued 実行許可ラベル付きで Issue を作成する。
+3. Issue 本文に Goal marker を残す。
+4. Goal runner がその Issue 番号を指定して既存 pipeline を実行する。
+5. Goal evaluator が run summary と Goal 履歴から達成度を評価する。
+6. 未達なら次 iteration、達成・blocked・failed なら終了する。
+
+`goal.evaluation.command` が設定されている場合、Goal runner は evaluator の前にそのコマンドを実行する。コマンドが失敗した場合、AI evaluator が誤って `succeeded` を返しても Goal は成功扱いにならず、`continue` として扱われる。これにより coverage、統合テスト、ドキュメント検査などの機械的な達成条件を Goal の終了条件に組み込める。
+
+Issue marker:
+
+```markdown
+<!-- kaizen-loop:goal {"goalId":"goal-20260618T120000Z-improve-onboarding","iteration":1} -->
+```
+
+## Agent Contract
+
+Goal planner / evaluator は `goal.agent` の command で呼ばれる。prompt は stdin、結果は `KAIZEN_GOAL_RESULT_PATH` または stdout の最後の JSON で返す。
+
+Planner result:
 
 ```json
 {
-  "status": "continue",
-  "summary": "Next scoped step is clear.",
-  "reason": "",
+  "status": "issue",
+  "reason": "Why this is the right next step.",
   "nextIssue": {
-    "title": "Implement one scoped slice",
-    "body": "Detailed issue body for the builder.",
-    "priority": "P2",
-    "labels": ["area:cli"]
+    "title": "Add onboarding smoke test",
+    "body": "Add a small smoke test for first-run setup.",
+    "priority": "P2"
   }
 }
 ```
 
-`status` は `continue` / `succeeded` / `blocked`。`continue` の場合、`nextIssue` を返すと次の Issue 作成内容を制御できる。`succeeded` は Goal 完了、`blocked` は人間対応待ちとして停止する。
+Evaluator result:
 
-`commands.goalEvaluate` が `null` の場合、既定評価は 1 iteration を作成し、その Issue-to-PR 実行が失敗・ブロックしなければ Goal を `succeeded` にする。
+```json
+{
+  "status": "continue",
+  "confidence": 0.75,
+  "reason": "Tests pass, but docs still miss the goal command.",
+  "satisfiedCriteria": ["npm test passes"],
+  "missingCriteria": ["README quickstart covers goal"],
+  "nextIssue": {
+    "title": "Document goal quickstart",
+    "body": "Add goal create/run examples to README.",
+    "priority": "P2"
+  }
+}
+```
+
+Planner status is `issue` / `succeeded` / `blocked`. Evaluator status is `succeeded` / `continue` / `blocked` / `failed`.
+
+## 利用側エージェント向けルール
+
+- 複数 cycle が必要な目的には積極的に `kaizen goal` を使う。
+- 「ゴール」「目標」「達成するまで」「改善し続ける」「評価しながら」「設計・実装・テストを回す」「品質を上げる」「カバレッジを上げる」「ドキュメントを整備する」のような依頼は、単発 Issue と断定できない限り Goal 候補として扱う。
+- 単発の明確な修正、再現条件がある 1 バグ、1 ファイル/1 挙動に閉じた改善には `kaizen report --now` または `kaizen fix` を使う。
+- Goal のために利用側エージェントが複数 Issue を手動作成しない。Issue 生成は Goal runner に任せる。
+- `kaizen goal status --json` を source of truth として読む。
+- Goal が `succeeded` / `blocked` / `failed` / `stopped` になったら停止する。
+- secrets、課金、本番インフラ、破壊的変更は Goal でも明示的な人間承認なしに進めない。

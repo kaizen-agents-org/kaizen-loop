@@ -149,17 +149,18 @@ Kaizen Agents 組織で運用する `kaizen-loop` と `verifier` は、GitHub Is
 
 | OS | 機構 | 特性 |
 |---|---|---|
-| macOS | launchd (LaunchAgent, `StartCalendarInterval` / `StartInterval`) | nightly は時刻指定、poll は `StartInterval`。`kaizen enable` で job ごとの plist を生成・ロード |
-| Linux | cron | nightly は時刻指定、poll は `*/N` 分。常時稼働マシン向け |
+| macOS | launchd (LaunchAgent, `StartCalendarInterval` / `StartInterval`) | nightly / afternoon は時刻指定、poll は `StartInterval`。`kaizen enable` で job ごとの plist を生成・ロード |
+| Linux | cron | nightly / afternoon は時刻指定、poll は `*/N` 分。常時稼働マシン向け |
 
 スケジューラが実行するコマンド:
 
 ```sh
 kaizen run --project <slug> --scheduled --trigger scheduled
+kaizen run --project <slug> --scheduled --trigger afternoon
 kaizen run --project <slug> --scheduled --trigger watch
 ```
 
-`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さない。`watch` trigger の poll は 5 分間隔などで軽く起動し、対象 Issue がなければ即終了する。前回 run が続いていれば `run.lock` でスキップされる。
+`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さない。`scheduled` trigger は朝の遅延実行ガード対象、`afternoon` trigger は午後の定時起動としてガード対象外。`watch` trigger の poll は 5 分間隔などで軽く起動し、対象 Issue がなければ即終了する。前回 run が続いていれば `run.lock` でスキップされる。
 
 ## 6. 複数プロジェクト対応
 

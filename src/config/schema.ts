@@ -47,6 +47,13 @@ export const configSchema = z
           })
           .strict()
           .default({ enabled: true, time: '02:00' }),
+        afternoon: z
+          .object({
+            enabled: z.boolean().default(false),
+            time: timeString.default('14:00')
+          })
+          .strict()
+          .default({ enabled: false, time: '14:00' }),
         poll: z
           .object({
             enabled: z.boolean().default(false),
@@ -59,17 +66,17 @@ export const configSchema = z
       .strict()
       .default({
         nightly: { enabled: true, time: '02:00' },
+        afternoon: { enabled: false, time: '14:00' },
         poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
       }),
     commands: z
       .object({
         setup: z.string().nullable().default(null),
         verify: z.array(z.string()).default([]),
-        verifyTimeoutMinutes: z.number().int().positive().default(15),
-        goalEvaluate: z.string().nullable().default(null)
+        verifyTimeoutMinutes: z.number().int().positive().default(15)
       })
       .strict()
-      .default({ setup: null, verify: [], verifyTimeoutMinutes: 15, goalEvaluate: null }),
+      .default({ setup: null, verify: [], verifyTimeoutMinutes: 15 }),
     builder: z
       .object({
         command: z.string().default('builder-agent'),
@@ -104,6 +111,44 @@ export const configSchema = z
         command: 'codex',
         timeoutMinutes: 60,
         maxAttempts: 5
+      }),
+    goal: z
+      .object({
+        maxIterations: z.number().int().positive().default(5),
+        issueLabel: z.string().default('kaizen:goal'),
+        evaluation: z
+          .object({
+            command: z.string().nullable().default(null),
+            timeoutMinutes: z.number().int().positive().default(15)
+          })
+          .strict()
+          .default({ command: null, timeoutMinutes: 15 }),
+        agent: z
+          .object({
+            command: z.string().default('codex'),
+            args: z.array(z.string()).default(['exec', '--sandbox', 'read-only', '-']),
+            resultPath: z.string().default('goal-result.json'),
+            timeoutMinutes: z.number().int().positive().default(20)
+          })
+          .strict()
+          .default({
+            command: 'codex',
+            args: ['exec', '--sandbox', 'read-only', '-'],
+            resultPath: 'goal-result.json',
+            timeoutMinutes: 20
+          })
+      })
+      .strict()
+      .default({
+        maxIterations: 5,
+        issueLabel: 'kaizen:goal',
+        evaluation: { command: null, timeoutMinutes: 15 },
+        agent: {
+          command: 'codex',
+          args: ['exec', '--sandbox', 'read-only', '-'],
+          resultPath: 'goal-result.json',
+          timeoutMinutes: 20
+        }
       }),
     policy: z
       .object({

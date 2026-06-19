@@ -5,6 +5,7 @@ export interface RunIssueSummary {
   agent?: string;
   attempt?: number;
   outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped';
+  branch?: string;
   commit?: string;
   pr?: number;
   prUrl?: string;
@@ -24,7 +25,7 @@ export interface RunSummary {
   project: string;
   startedAt: string;
   finishedAt: string;
-  trigger: 'manual' | 'scheduled' | 'instant' | 'watch';
+  trigger: 'manual' | 'scheduled' | 'afternoon' | 'instant' | 'watch';
   result: 'success' | 'failed' | 'partial';
   issues: RunIssueSummary[];
   skipped: Array<{ number: number; reason: string }>;
