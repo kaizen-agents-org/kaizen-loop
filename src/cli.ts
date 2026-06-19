@@ -52,7 +52,7 @@ program
   .option('--project <slug>', 'target project slug')
   .option('--json', 'print machine-readable output')
   .option('--scheduled', 'scheduled unattended mode', false)
-  .option('--trigger <trigger>', 'trigger override: manual, scheduled, instant, or watch')
+  .option('--trigger <trigger>', 'trigger override: manual, scheduled, afternoon, instant, or watch')
   .option('--issue <number>', 'process only one issue')
   .option('--dry-run', 'select issues without modifying workspaces or GitHub', false)
   .option('--max-issues <number>', 'override max issues for this run')
@@ -396,9 +396,9 @@ function parseAgent(value: unknown): 'claude' | 'codex' | undefined {
   throw new KaizenError(`Invalid agent: ${String(value)}`, 2);
 }
 
-function parseTrigger(value: unknown): 'manual' | 'scheduled' | 'instant' | 'watch' | undefined {
+function parseTrigger(value: unknown): 'manual' | 'scheduled' | 'afternoon' | 'instant' | 'watch' | undefined {
   if (value === undefined) return undefined;
-  if (value === 'manual' || value === 'scheduled' || value === 'instant' || value === 'watch') return value;
+  if (value === 'manual' || value === 'scheduled' || value === 'afternoon' || value === 'instant' || value === 'watch') return value;
   throw new KaizenError(`Invalid trigger: ${String(value)}`, 2);
 }
 

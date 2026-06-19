@@ -47,6 +47,13 @@ export const configSchema = z
           })
           .strict()
           .default({ enabled: true, time: '02:00' }),
+        afternoon: z
+          .object({
+            enabled: z.boolean().default(false),
+            time: timeString.default('14:00')
+          })
+          .strict()
+          .default({ enabled: false, time: '14:00' }),
         poll: z
           .object({
             enabled: z.boolean().default(false),
@@ -59,6 +66,7 @@ export const configSchema = z
       .strict()
       .default({
         nightly: { enabled: true, time: '02:00' },
+        afternoon: { enabled: false, time: '14:00' },
         poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
       }),
     commands: z

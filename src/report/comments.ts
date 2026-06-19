@@ -12,7 +12,7 @@ export interface ResultCommentOptions {
   prUrl?: string;
   commit?: string;
   reason?: string;
-  trigger?: 'manual' | 'scheduled' | 'instant' | 'watch';
+  trigger?: 'manual' | 'scheduled' | 'afternoon' | 'instant' | 'watch';
   maxAttempts: number;
 }
 
@@ -51,7 +51,7 @@ export function buildPrProgressComment(options: {
   issue: number;
   attempt: number;
   prUrl: string;
-  trigger?: 'manual' | 'scheduled' | 'instant' | 'watch';
+  trigger?: 'manual' | 'scheduled' | 'afternoon' | 'instant' | 'watch';
 }): string {
   const marker = {
     run: options.runId,

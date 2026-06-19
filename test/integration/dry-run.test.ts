@@ -178,6 +178,56 @@ describe('runKaizen PR flow', () => {
     }
   });
 
+  it('does not apply latestStartHour skips to afternoon scheduler runs', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-12T12:00:00Z'));
+    try {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+      const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+      vi.stubEnv('KAIZEN_HOME', home);
+      await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+      await fs.writeFile(
+        path.join(repo, '.kaizen', 'config.yml'),
+        defaultConfigWith({ run: { latestStartHour: 0 } }, { agent: 'claude', setup: null, verify: [] })
+      );
+      await saveRegistry({
+        version: 1,
+        projects: {
+          'o-r': {
+            repo: 'o/r',
+            localPath: repo,
+            workspacePath: workspace,
+            schedule: '02:00',
+            enabled: true,
+            createdAt: '2026-06-12T00:00:00Z'
+          }
+        }
+      });
+
+      const runner = vi.fn<CommandRunner>(async (command, args) => {
+        if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+        return result(command, args, repo, '');
+      });
+
+      const summary = await runKaizen({
+        cwd: repo,
+        project: 'o-r',
+        scheduled: true,
+        trigger: 'afternoon',
+        dryRun: false,
+        json: true,
+        runCommand: runner
+      });
+
+      expect('issues' in summary && summary.trigger).toBe('afternoon');
+      expect('issues' in summary && summary.skipped).toEqual([]);
+      expect(runner).toHaveBeenCalledWith('gh', expect.arrayContaining(['issue', 'list']), expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('skips overlapping scheduled poll runs when skipIfRunning is enabled', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

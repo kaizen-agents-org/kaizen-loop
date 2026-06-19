@@ -60,8 +60,8 @@ export async function disableScheduler(options: {
 }
 
 export interface SchedulerJob {
-  name: 'nightly' | 'poll';
-  trigger: 'scheduled' | 'watch';
+  name: 'nightly' | 'afternoon' | 'poll';
+  trigger: 'scheduled' | 'afternoon' | 'watch';
   time?: string;
   intervalMinutes?: number;
 }
@@ -70,6 +70,9 @@ function schedulerJobs(config: KaizenConfig, scheduleOverride?: string): Schedul
   const jobs: SchedulerJob[] = [];
   if (config.scheduler.nightly.enabled) {
     jobs.push({ name: 'nightly', trigger: 'scheduled', time: scheduleOverride ?? config.scheduler.nightly.time });
+  }
+  if (config.scheduler.afternoon.enabled) {
+    jobs.push({ name: 'afternoon', trigger: 'afternoon', time: config.scheduler.afternoon.time });
   }
   if (config.scheduler.poll.enabled) {
     jobs.push({ name: 'poll', trigger: 'watch', intervalMinutes: config.scheduler.poll.intervalMinutes });
@@ -128,7 +131,12 @@ function commandLine(slug: string, job: SchedulerJob): string {
 }
 
 async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Promise<string[]> {
-  const paths = [legacyLaunchdPlistPath(slug), launchdPlistPath(slug, 'nightly'), launchdPlistPath(slug, 'poll')];
+  const paths = [
+    legacyLaunchdPlistPath(slug),
+    launchdPlistPath(slug, 'nightly'),
+    launchdPlistPath(slug, 'afternoon'),
+    launchdPlistPath(slug, 'poll')
+  ];
   for (const plistPath of paths) {
     await runCommand('launchctl', ['bootout', `gui/${process.getuid?.() ?? ''}`, plistPath], {
       rejectOnNonZero: false
