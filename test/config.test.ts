@@ -9,6 +9,7 @@ describe('configSchema', () => {
 
     expect(config.agent.default).toBe('claude');
     expect(config.commands.verify).toEqual([]);
+    expect(config.commands.goalEvaluate).toBeNull();
     expect(config.builder.resultPath).toBe('.kaizen/builder/build-result.json');
     expect(config.verifier.enabled).toBe(true);
     expect(config.verifier.command).toBe('verifier');

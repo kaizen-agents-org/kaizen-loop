@@ -58,7 +58,8 @@ export function defaultConfigYaml(options: {
     commands: {
       setup: options.setup,
       verify: options.verify,
-      verifyTimeoutMinutes: 15
+      verifyTimeoutMinutes: 15,
+      goalEvaluate: null
     },
     builder: {
       command: 'builder-agent',

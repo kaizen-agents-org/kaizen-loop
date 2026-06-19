@@ -49,6 +49,7 @@ function requiredLabels(config: KaizenConfig): string[] {
     ...config.issues.priorityOrder,
     config.issues.selection.includeLabel,
     ...config.issues.selection.excludeLabels,
+    'kaizen:goal',
     'kaizen:direct',
     'kaizen:pr-only',
     'kaizen:in-progress',

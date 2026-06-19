@@ -65,10 +65,11 @@ export const configSchema = z
       .object({
         setup: z.string().nullable().default(null),
         verify: z.array(z.string()).default([]),
-        verifyTimeoutMinutes: z.number().int().positive().default(15)
+        verifyTimeoutMinutes: z.number().int().positive().default(15),
+        goalEvaluate: z.string().nullable().default(null)
       })
       .strict()
-      .default({ setup: null, verify: [], verifyTimeoutMinutes: 15 }),
+      .default({ setup: null, verify: [], verifyTimeoutMinutes: 15, goalEvaluate: null }),
     builder: z
       .object({
         command: z.string().default('builder-agent'),

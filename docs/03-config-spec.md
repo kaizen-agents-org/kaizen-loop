@@ -53,6 +53,8 @@ commands:
     - "npm run lint"
   # 検証コマンドのタイムアウト(分)
   verifyTimeoutMinutes: 15
+  # Goal mode の機械的評価コマンド。null の場合は 1 iteration 成功で Goal 成功とみなす
+  goalEvaluate: null
 
 builder:
   # Kaizen Loop は Claude/Codex を直接呼ばず、このコマンドへプロンプトを stdin で渡す
@@ -128,6 +130,7 @@ issues:
 - 未知のキーはエラー(タイポによるサイレント無効化を防ぐ)
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
+- `commands.goalEvaluate` は `kaizen goal run` から `sh -lc` で呼ばれる。stdin に `{ "phase": "before"|"after", "goal": ... }` が渡され、`KAIZEN_GOAL_RESULT_PATH` に JSON を書くか stdout に JSON を出す。形式は [11-goals.md](./11-goals.md) を参照
 - `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない

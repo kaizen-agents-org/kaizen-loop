@@ -10,6 +10,7 @@ Commands:
   run         夜間メンテナンスパイプラインを実行する(スケジューラからも呼ばれる)
   fix         Issue を即時修正する(夜間を待たない。→ 09-instant-run.md)
   report      Kaizen Issue を素早く登録する(人間・AI 共用)
+  goal        複数 Issue にまたがる Goal を作成・実行・停止する
   watch       kaizen:now ラベルを監視して即時修正する常駐モード(→ 09-instant-run.md)
   status      ループの状態・直近の実行結果を表示する
   enable      スケジューラを有効化する
@@ -46,7 +47,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 3. **ファイル生成**(リポジトリ内 → 要コミット):
    - `.kaizen/config.yml`(→ [03-config-spec.md](./03-config-spec.md))
    - `.github/ISSUE_TEMPLATE/kaizen.yml`(→ [05-issue-conventions.md](./05-issue-conventions.md))
-4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:agent:claude`, `kaizen:agent:codex`
+4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:ready`, `kaizen:goal`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:agent:claude`, `kaizen:agent:codex`
 5. **ローカル登録**: `~/.kaizen/registry.json` にプロジェクト追加、専用クローン作成(`~/.kaizen/workspaces/<slug>/`)
 6. **スケジューラ登録**: `kaizen enable` 相当を実行(`--no-schedule` でスキップ可)
 7. 完了サマリと「次のステップ」(生成ファイルのコミット、最初の Issue 登録方法)を表示
@@ -149,6 +150,26 @@ echo "$BODY" | kaizen report "起動時に config 検証エラーの行番号が
 - `--now` は未指定時の `--queue` と同じく実行許可ラベルを付ける。即時実行だけにしたい場合は `--now --no-queue`
 - `--json` 時は作成された Issue の番号と URL を JSON で返す(AI が後続処理に使える)
 - 本文が Issue テンプレートの必須セクション(再現手順 / 期待動作)を欠く場合は警告を出すが登録は通す(夜間エージェントが「情報不足」と判断した場合の挙動は [04-nightly-pipeline.md](./04-nightly-pipeline.md) §6)
+
+---
+
+## `kaizen goal`
+
+Goal は、1 つの大きな目的をローカル状態として保持し、必要な scoped Issue を作って既存の Issue-to-PR パイプラインへ流し、評価結果に応じて継続・成功・ブロックを判断する。詳細なエージェント契約は [11-goals.md](./11-goals.md)。
+
+```
+kaizen goal create "<目的>" [--project <slug>] [--max-iterations <N>] [--json]
+kaizen goal run <Goal ID> [--project <slug>] [--max-iterations <N>] [--agent claude|codex] [--json]
+kaizen goal status [Goal ID] [--project <slug>] [--json]
+kaizen goal list [--project <slug>] [--json]
+kaizen goal stop <Goal ID> [--project <slug>] [--reason <理由>] [--json]
+```
+
+- `create`: `KAIZEN_HOME/projects/<slug>/goals/<Goal ID>.json` に Goal state を作る
+- `run`: Goal lock を取り、Goal-linked Issue を作成し、`kaizen run --issue` と同じ処理で PR-first に実行する
+- `status` / `list`: ローカル Goal state を表示する。`status` は Goal ID 省略時に一覧を返す
+- `stop`: state を `stopped` にし、以降の `run` 対象から外す
+- `commands.goalEvaluate` が設定されている場合、各 iteration の前後で評価コマンドを呼び、`continue` / `succeeded` / `blocked` を判断する
 
 ---
 
