@@ -39,6 +39,9 @@ scheduler:
   nightly:
     enabled: true
     time: "02:00"            # `kaizen run --scheduled --trigger scheduled`
+  afternoon:
+    enabled: false
+    time: "14:00"            # `kaizen run --scheduled --trigger afternoon`
   poll:
     enabled: false
     intervalMinutes: 5       # `kaizen run --scheduled --trigger watch`
@@ -75,6 +78,23 @@ guardian:
   command: "codex"
   timeoutMinutes: 60
   maxAttempts: 5
+
+goal:
+  # 1 Goal あたりの最大自動 iteration 数
+  maxIterations: 5
+  # Goal runner が作る Issue に追加するラベル
+  issueLabel: "kaizen:goal"
+  evaluation:
+    # Goal 固有の機械評価。設定すると AI evaluator が succeeded を返しても、このコマンドが失敗していれば Goal は成功扱いにしない
+    command: null             # 例: "npm test && npm run coverage"
+    timeoutMinutes: 15
+  agent:
+    # Planner / evaluator 用 agent。stdin で prompt を受け取り、JSON を返す
+    command: "codex"
+    args: ["exec", "--sandbox", "read-only", "-"]
+    # 相対パスの場合はローカル Goal 状態ディレクトリ相対
+    resultPath: "goal-result.json"
+    timeoutMinutes: 20
 
 policy:
   # 反映方法: pr-only | hybrid | direct-only
@@ -132,6 +152,9 @@ issues:
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
 - `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、レビューコメントへの返信は skill 側の責務
+- `goal.agent` は Goal planner / evaluator の呼び出し設定。`KAIZEN_GOAL_RESULT_PATH` に JSON を書くか、stdout の最後に JSON を出す。Goal runner はこの agent に実装や GitHub 操作をさせず、Issue 作成と既存 pipeline の呼び出しを自分で行う
+- `goal.issueLabel` は `kaizen goal run` が生成する Issue に付けるラベル。実行対象の判定は通常の `issues.label` と queued label に従う
+- `goal.evaluation.command` は Goal 達成の機械的な追加ゲート。設定されている場合、各 iteration 後に登録プロジェクトの checkout で実行し、失敗時は AI evaluator の `succeeded` を `continue` に降格する
 - `issues.selection.mode: auto` は既存互換で、`issues.label` 付きの open Issue を自動選択候補にする
 - `issues.selection.mode: opt-in` は `issues.label` と `issues.selection.includeLabel` の両方を持つ Issue だけを scheduled / backlog 実行候補にする
 - `issues.selection.mode: manual-only` は scheduled / backlog 実行で Issue を自動選択しない。`kaizen fix <Issue番号>` などの明示実行は可能
@@ -241,9 +264,22 @@ issues:
 </plist>
 ```
 
-`scheduler.poll.enabled: true` の場合は別 plist を生成する:
+`scheduler.afternoon.enabled: true` / `scheduler.poll.enabled: true` の場合はそれぞれ別 plist を生成する。afternoon は時刻指定、poll は間隔指定:
 
 ```xml
+<key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.afternoon</string>
+<key>ProgramArguments</key>
+<array>
+  <string>/path/to/node</string>
+  <string>/path/to/kaizen</string>
+  <string>run</string>
+  <string>--project</string><string>s-hiraoku-myapp</string>
+  <string>--scheduled</string>
+  <string>--trigger</string><string>afternoon</string>
+</array>
+<key>StartCalendarInterval</key>
+<dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+
 <key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.poll</string>
 <key>ProgramArguments</key>
 <array>
@@ -269,11 +305,13 @@ issues:
 ```cron
 # KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) nightly
 0 2 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'scheduled' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/nightly.cron.log' 2>&1
+# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) afternoon
+0 14 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'afternoon' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/afternoon.cron.log' 2>&1
 # KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) poll
 */5 * * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'watch' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/poll.cron.log' 2>&1
 ```
 
-マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。poll は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、前回 run が続いていれば `run.lock` によりスキップされる。
+マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。afternoon は `run.latestStartHour` の朝の遅延実行ガード対象外で、午後の意図した定時起動として扱う。poll は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、前回 run が続いていれば `run.lock` によりスキップされる。
 
 注意点(実装時の要件):
 

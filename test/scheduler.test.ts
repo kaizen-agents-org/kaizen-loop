@@ -146,6 +146,50 @@ describe('enableScheduler', () => {
     expect(plist).toContain('<string>--trigger</string><string>watch</string>');
   });
 
+  it('installs configured afternoon launchd job with StartCalendarInterval', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('KAIZEN_HOME', home);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const project: RegistryProject = {
+      repo: 'owner/repo',
+      localPath: '/repo',
+      workspacePath: '/workspace',
+      schedule: '02:00',
+      enabled: false,
+      createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    const scheduler = await enableScheduler({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({
+        version: 1,
+        scheduler: {
+          nightly: { enabled: false, time: '02:00' },
+          afternoon: { enabled: true, time: '14:30' },
+          poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
+        }
+      }),
+      schedule: '02:00',
+      runCommand: runner,
+      platform: 'darwin'
+    });
+
+    expect(scheduler.paths).toHaveLength(1);
+    const plist = await fs.readFile(scheduler.paths![0], 'utf8');
+    expect(plist).toContain('<key>Label</key><string>com.kaizen-loop.owner-repo.afternoon</string>');
+    expect(plist).toContain('<dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>');
+    expect(plist).toContain('<string>--trigger</string><string>afternoon</string>');
+  });
+
   it('fails when launchd bootstrap fails', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('HOME', home);

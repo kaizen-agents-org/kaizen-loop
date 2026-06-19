@@ -178,7 +178,7 @@ describe('runKaizen PR flow', () => {
     }
   });
 
-  it('does not apply latestStartHour skips to afternoon scheduler runs', async () => {
+  it('runs afternoon triggers after latestStartHour', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-12T12:00:00Z'));
     try {
@@ -189,7 +189,10 @@ describe('runKaizen PR flow', () => {
       await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
       await fs.writeFile(
         path.join(repo, '.kaizen', 'config.yml'),
-        defaultConfigWith({ run: { latestStartHour: 0 } }, { agent: 'claude', setup: null, verify: [] })
+        defaultConfigWith(
+          { run: { latestStartHour: 0 }, scheduler: { afternoon: { enabled: true, time: '14:00' } } },
+          { agent: 'claude', setup: null, verify: [] }
+        )
       );
       await saveRegistry({
         version: 1,
@@ -205,10 +208,7 @@ describe('runKaizen PR flow', () => {
         }
       });
 
-      const runner = vi.fn<CommandRunner>(async (command, args) => {
-        if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
-        return result(command, args, repo, '');
-      });
+      const runner = vi.fn<CommandRunner>(async (command, args) => result(command, args, repo, JSON.stringify([])));
 
       const summary = await runKaizen({
         cwd: repo,
@@ -220,9 +220,14 @@ describe('runKaizen PR flow', () => {
         runCommand: runner
       });
 
+      expect(runner).toHaveBeenCalledWith('gh', expect.arrayContaining(['issue', 'list']), expect.any(Object));
       expect('issues' in summary && summary.trigger).toBe('afternoon');
       expect('issues' in summary && summary.skipped).toEqual([]);
-      expect(runner).toHaveBeenCalledWith('gh', expect.arrayContaining(['issue', 'list']), expect.anything());
+      const runsDir = path.join(home, 'projects', 'o-r', 'runs');
+      const runIds = await fs.readdir(runsDir);
+      const persisted = JSON.parse(await fs.readFile(path.join(runsDir, runIds[0], 'summary.json'), 'utf8'));
+      expect(persisted.trigger).toBe('afternoon');
+      expect(persisted.skipped).toEqual([]);
     } finally {
       vi.useRealTimers();
     }

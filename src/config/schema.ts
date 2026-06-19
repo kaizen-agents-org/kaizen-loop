@@ -112,6 +112,44 @@ export const configSchema = z
         timeoutMinutes: 60,
         maxAttempts: 5
       }),
+    goal: z
+      .object({
+        maxIterations: z.number().int().positive().default(5),
+        issueLabel: z.string().default('kaizen:goal'),
+        evaluation: z
+          .object({
+            command: z.string().nullable().default(null),
+            timeoutMinutes: z.number().int().positive().default(15)
+          })
+          .strict()
+          .default({ command: null, timeoutMinutes: 15 }),
+        agent: z
+          .object({
+            command: z.string().default('codex'),
+            args: z.array(z.string()).default(['exec', '--sandbox', 'read-only', '-']),
+            resultPath: z.string().default('goal-result.json'),
+            timeoutMinutes: z.number().int().positive().default(20)
+          })
+          .strict()
+          .default({
+            command: 'codex',
+            args: ['exec', '--sandbox', 'read-only', '-'],
+            resultPath: 'goal-result.json',
+            timeoutMinutes: 20
+          })
+      })
+      .strict()
+      .default({
+        maxIterations: 5,
+        issueLabel: 'kaizen:goal',
+        evaluation: { command: null, timeoutMinutes: 15 },
+        agent: {
+          command: 'codex',
+          args: ['exec', '--sandbox', 'read-only', '-'],
+          resultPath: 'goal-result.json',
+          timeoutMinutes: 20
+        }
+      }),
     policy: z
       .object({
         mode: z.enum(['hybrid', 'pr-only', 'direct-only']).default('pr-only'),

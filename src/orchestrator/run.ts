@@ -534,6 +534,7 @@ async function processIssue(options: {
           agent: agent.name,
           attempt: attempts,
           outcome: 'direct-commit',
+          branch,
           commit: direct.commit,
           reason: decision.reason,
           changedFiles: finalDiff.changedFiles,
@@ -629,6 +630,7 @@ async function finishPr(
     agent: agent.name,
     attempt: attempts,
     outcome: 'pr-created',
+    branch: pr.branch,
     pr: pr.number,
     prUrl: pr.url,
     guardian: {

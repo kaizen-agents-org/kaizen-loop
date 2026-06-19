@@ -57,7 +57,7 @@ flowchart TB
 
 - **進捗はフォアグラウンドでストリーム表示**(エージェントの作業ログ、検証結果)。`Ctrl-C` は SIGTERM と同じグレースフルシャットダウン([07-safety.md](./07-safety.md) §2)
 - 直接コミット成功時、**実行したディレクトリがターゲットプロジェクト内であれば「`git pull` で取り込めます」と案内**する(ワークスペースは隔離クローンなので、開発者の作業ツリーには自動反映しない。pull するかは開発者の判断)
-- 結果コメントの機械可読マーカーには `"trigger": "instant"` を記録(夜間は `"scheduled"` / `"manual"`)。試行回数のカウントは夜間と共通
+- 結果コメントの機械可読マーカーには `"trigger": "instant"` を記録(定期実行は `"scheduled"` / `"afternoon"`、手動実行は `"manual"`)。試行回数のカウントは夜間と共通
 
 ### 3.2 `kaizen report --now` — 起票 + 即時処理(既存コマンドの拡張)
 
@@ -164,7 +164,7 @@ instant:
 
 ## 7. メトリクスへの反映
 
-`summary.json` / 結果コメントの `trigger` フィールド(`scheduled` / `manual` / `instant` / `watch`)により、`kaizen status --metrics` で以下が比較できる:
+`summary.json` / 結果コメントの `trigger` フィールド(`scheduled` / `afternoon` / `manual` / `instant` / `watch`)により、`kaizen status --metrics` で以下が比較できる:
 
 - 即時実行と夜間実行の成功率・所要時間の差
 - 即時実行の利用頻度(高ければ「夜まで待てない問題」が多い = 優先度判定や夜間処理上限の見直しシグナル)
