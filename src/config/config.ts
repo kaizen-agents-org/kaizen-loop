@@ -49,6 +49,10 @@ export function defaultConfigYaml(options: {
         enabled: true,
         time: options.schedule ?? '02:00'
       },
+      afternoon: {
+        enabled: false,
+        time: '14:00'
+      },
       poll: {
         enabled: false,
         intervalMinutes: 5,

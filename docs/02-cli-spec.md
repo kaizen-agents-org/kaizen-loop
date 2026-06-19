@@ -60,14 +60,14 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 
 ```
 kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
-           [--trigger manual|scheduled|instant|watch]
+           [--trigger manual|scheduled|afternoon|instant|watch]
            [--max-issues <N>] [--agent claude|codex]
 ```
 
 | オプション | 意味 |
 |---|---|
 | `--scheduled` | 無人実行モード。対話なし。スケジューラからの呼び出し専用 |
-| `--trigger <trigger>` | 実行契機を明示する。`scheduled` は nightly job、`watch` は poll job、`instant` は即時実行、`manual` は手動実行 |
+| `--trigger <trigger>` | 実行契機を明示する。`scheduled` は nightly job、`afternoon` は afternoon job、`watch` は poll job、`instant` は即時実行、`manual` は手動実行 |
 | `--issue <番号>` | 指定 Issue のみ処理(優先度選択をスキップ)。デバッグ・即時修正用 |
 | `--dry-run` | Issue 取得・除外フィルタ・優先順位による選択までを実行し、**ワークスペース変更・push・コメントは行わない**。リスク判定は実 diff が必要なため実行しない |
 | `--max-issues <N>` | この実行に限り処理上限を上書き |
@@ -225,7 +225,7 @@ kaizen disable [--project <slug>] [--all]
 
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
-- `enable` は `.kaizen/config.yml` の `scheduler.nightly` / `scheduler.poll` を読み、nightly と poll をそれぞれ登録する。`--schedule` は nightly の時刻だけを一時上書きする
+- `enable` は `.kaizen/config.yml` の `scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` を読み、nightly、afternoon、poll をそれぞれ登録する。`--schedule` は nightly の時刻だけを一時上書きする
 - `disable --all`: 登録済み全プロジェクトを無効化
 - `disable` は実行中の run があれば、ロックファイルの PID に SIGTERM を送って中断させる(中断時の安全性は [07-safety.md](./07-safety.md) §4)
 

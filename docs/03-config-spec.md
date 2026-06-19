@@ -39,6 +39,9 @@ scheduler:
   nightly:
     enabled: true
     time: "02:00"            # `kaizen run --scheduled --trigger scheduled`
+  afternoon:
+    enabled: false
+    time: "14:00"            # `kaizen run --scheduled --trigger afternoon`
   poll:
     enabled: false
     intervalMinutes: 5       # `kaizen run --scheduled --trigger watch`
@@ -261,9 +264,22 @@ issues:
 </plist>
 ```
 
-`scheduler.poll.enabled: true` の場合は別 plist を生成する:
+`scheduler.afternoon.enabled: true` / `scheduler.poll.enabled: true` の場合はそれぞれ別 plist を生成する。afternoon は時刻指定、poll は間隔指定:
 
 ```xml
+<key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.afternoon</string>
+<key>ProgramArguments</key>
+<array>
+  <string>/path/to/node</string>
+  <string>/path/to/kaizen</string>
+  <string>run</string>
+  <string>--project</string><string>s-hiraoku-myapp</string>
+  <string>--scheduled</string>
+  <string>--trigger</string><string>afternoon</string>
+</array>
+<key>StartCalendarInterval</key>
+<dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+
 <key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.poll</string>
 <key>ProgramArguments</key>
 <array>
@@ -289,11 +305,13 @@ issues:
 ```cron
 # KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) nightly
 0 2 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'scheduled' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/nightly.cron.log' 2>&1
+# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) afternoon
+0 14 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'afternoon' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/afternoon.cron.log' 2>&1
 # KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) poll
 */5 * * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'watch' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/poll.cron.log' 2>&1
 ```
 
-マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。poll は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、前回 run が続いていれば `run.lock` によりスキップされる。
+マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。afternoon は `run.latestStartHour` の朝の遅延実行ガード対象外で、午後の意図した定時起動として扱う。poll は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、前回 run が続いていれば `run.lock` によりスキップされる。
 
 注意点(実装時の要件):
 

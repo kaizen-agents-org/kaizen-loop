@@ -25,6 +25,7 @@ describe('configSchema', () => {
     });
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.scheduler.nightly).toEqual({ enabled: true, time: '02:00' });
+    expect(config.scheduler.afternoon).toEqual({ enabled: false, time: '14:00' });
     expect(config.scheduler.poll).toEqual({ enabled: false, intervalMinutes: 5, skipIfRunning: true });
     expect(config.policy.mode).toBe('pr-only');
     expect(config.issues.priorityOrder).toEqual(['kaizen:P0', 'kaizen:P1', 'kaizen:P2']);
@@ -38,6 +39,8 @@ describe('configSchema', () => {
   it('rejects invalid scheduler values', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '24:00' } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:60' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '24:00' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:60' } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 60 } } })).toThrow();
   });
 
