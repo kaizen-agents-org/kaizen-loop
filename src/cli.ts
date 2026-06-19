@@ -10,6 +10,7 @@ import { KaizenError } from './utils/errors.js';
 import { reportIssue, reportIssueNow } from './commands/report.js';
 import { listQueuedIssues, queueIssues, unqueueIssues } from './commands/queue.js';
 import { planImprove, runImprove } from './commands/improve.js';
+import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './commands/goal.js';
 import { statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
@@ -266,6 +267,113 @@ program
     print(result, json);
   });
 
+const goal = program
+  .command('goal')
+  .description('manage multi-iteration Kaizen goals');
+
+goal
+  .command('create')
+  .description('create a Goal for iterative design, implementation, test, and evaluation')
+  .argument('<title>', 'goal title')
+  .option('--project <slug>', 'target project slug')
+  .option('--description <description>', 'goal description', '')
+  .option('--description-file <path>', 'read goal description from file or stdin with -')
+  .option('--success <criteria>', 'success criterion; repeat for multiple criteria', collectOption, [])
+  .option('--constraint <constraint>', 'goal constraint; repeat for multiple constraints', collectOption, [])
+  .option('--max-iterations <number>', 'maximum automatic iterations')
+  .option('--json', 'print machine-readable output')
+  .action(async (title, options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await createGoal({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      title,
+      description: await resolveBody(options.description, options.descriptionFile),
+      successCriteria: options.success,
+      constraints: options.constraint,
+      maxIterations: parseOptionalPositiveInteger(options.maxIterations, 'max-iterations')
+    });
+    print(result, Boolean(options.json ?? globals.json));
+  });
+
+goal
+  .command('run')
+  .description('run a Goal until it succeeds, blocks, fails, or reaches max iterations')
+  .argument('<goal-id>', 'goal id')
+  .option('--project <slug>', 'target project slug')
+  .option('--agent <agent>', 'agent override for implementation issues: claude or codex')
+  .option('--yes', 'run without interactive confirmations', false)
+  .option('--json', 'print machine-readable output')
+  .action(async (goalId, options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const json = Boolean(options.json ?? globals.json);
+    const assumeYes = Boolean(options.yes);
+    if (!assumeYes && (json || !process.stdin.isTTY || !process.stdout.isTTY)) {
+      throw new KaizenError('Use --yes to run goal non-interactively', 2);
+    }
+    const result = await runGoalCommand({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      goalId,
+      agent: parseAgent(options.agent),
+      assumeYes,
+      json,
+      confirmDirectCommit: !assumeYes && !json && process.stdin.isTTY && process.stdout.isTTY
+        ? promptDirectCommit
+        : undefined,
+      runCommand
+    });
+    print(result, json);
+  });
+
+goal
+  .command('status')
+  .description('show Goal status')
+  .argument('<goal-id>', 'goal id')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (goalId, options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await goalStatus({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      goalId
+    });
+    print(result, Boolean(options.json ?? globals.json));
+  });
+
+goal
+  .command('list')
+  .description('list Goals')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await listGoals({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project
+    });
+    print(result, Boolean(options.json ?? globals.json));
+  });
+
+goal
+  .command('stop')
+  .description('stop an active Goal')
+  .argument('<goal-id>', 'goal id')
+  .option('--project <slug>', 'target project slug')
+  .option('--reason <reason>', 'stop reason', '')
+  .option('--json', 'print machine-readable output')
+  .action(async (goalId, options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await stopGoal({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      goalId,
+      reason: options.reason
+    });
+    print(result, Boolean(options.json ?? globals.json));
+  });
+
 program
   .command('status')
   .description('show loop status')
@@ -425,6 +533,10 @@ function parsePositiveInteger(value: string, name: string): number {
   const parsed = Number(value);
   if (Number.isInteger(parsed) && parsed > 0) return parsed;
   throw new KaizenError(`Invalid ${name}: ${value}`, 2);
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 function parsePriority(value: unknown): 'P0' | 'P1' | 'P2' {

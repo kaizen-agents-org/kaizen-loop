@@ -5,6 +5,7 @@ export interface RunIssueSummary {
   agent?: string;
   attempt?: number;
   outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped';
+  branch?: string;
   commit?: string;
   pr?: number;
   prUrl?: string;

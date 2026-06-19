@@ -10,6 +10,7 @@ Commands:
   run         夜間メンテナンスパイプラインを実行する(スケジューラからも呼ばれる)
   fix         Issue を即時修正する(夜間を待たない。→ 09-instant-run.md)
   report      Kaizen Issue を素早く登録する(人間・AI 共用)
+  goal        複数 iteration の Goal を作成・実行・評価する
   watch       kaizen:now ラベルを監視して即時修正する常駐モード(→ 09-instant-run.md)
   status      ループの状態・直近の実行結果を表示する
   enable      スケジューラを有効化する
@@ -46,7 +47,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 3. **ファイル生成**(リポジトリ内 → 要コミット):
    - `.kaizen/config.yml`(→ [03-config-spec.md](./03-config-spec.md))
    - `.github/ISSUE_TEMPLATE/kaizen.yml`(→ [05-issue-conventions.md](./05-issue-conventions.md))
-4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:agent:claude`, `kaizen:agent:codex`
+4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:goal`, `kaizen:agent:claude`, `kaizen:agent:codex`
 5. **ローカル登録**: `~/.kaizen/registry.json` にプロジェクト追加、専用クローン作成(`~/.kaizen/workspaces/<slug>/`)
 6. **スケジューラ登録**: `kaizen enable` 相当を実行(`--no-schedule` でスキップ可)
 7. 完了サマリと「次のステップ」(生成ファイルのコミット、最初の Issue 登録方法)を表示
@@ -116,6 +117,32 @@ kaizen improve [--project <slug>] [--issue <番号[,番号...]>] [--dry-run]
 | `--yes` | 実行計画の確認を省略する。非 TTY / `--json` で実行する場合は必須 |
 
 TTY では実行前に対象 Issue の計画を表示して確認する。`--json` や自動化から使う場合は `--dry-run` で計画を確認するか、`--yes` で明示的に実行する。
+
+---
+
+## `kaizen goal`
+
+複数の設計・実装・テスト・評価サイクルが必要な目的を Goal として管理する。Goal は Issue の代替ではなく、Goal runner が小さな `kaizen` Issue を 1 件ずつ作成し、既存の Issue-to-PR pipeline に流してから達成度を評価する上位ループである。詳細は [11-goals.md](./11-goals.md)。
+
+```
+kaizen goal create "<title>" --success "<criteria>" [--success "<criteria>"]
+                   [--description <body>] [--description-file <path|->]
+                   [--constraint <constraint>] [--max-iterations <N>] [--json]
+
+kaizen goal run <goal-id> [--agent claude|codex] [--yes] [--json]
+kaizen goal status <goal-id> [--json]
+kaizen goal list [--json]
+kaizen goal stop <goal-id> [--reason <reason>] [--json]
+```
+
+| オプション | 意味 |
+|---|---|
+| `--success <criteria>` | Goal の達成条件。少なくとも 1 つ必須。複数回指定できる |
+| `--constraint <constraint>` | Goal 全体に適用する制約。複数回指定できる |
+| `--max-iterations <N>` | この Goal の最大自動 iteration 数。省略時は `goal.maxIterations` |
+| `--yes` | `goal run` を非対話で実行する。非 TTY / `--json` では必須 |
+
+Goal が作成する Issue には `kaizen:goal` と queued 実行許可ラベルを付け、本文に `<!-- kaizen-loop:goal ... -->` marker を残す。
 
 ---
 
