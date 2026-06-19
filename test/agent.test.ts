@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { BuilderAgentAdapter } from '../src/agents/builder.js';
 import { VerifierAgentAdapter } from '../src/agents/verifier.js';
@@ -159,5 +160,38 @@ describe('buildFixPrompt', () => {
     expect(prompt).toContain('Protected path changes will be reviewed by PR: .github/**, .kaizen/**');
     expect(prompt).toContain('Add it to "discoveredIssues" in the final JSON');
     expect(prompt).not.toContain('forbidden/protected path');
+  });
+
+  it('renders heredoc verification commands as runnable shell', () => {
+    const heredoc = "python3 <<'PY'\nprint('ok')\nPY";
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        verify: [heredoc, 'npm test']
+      }
+    });
+
+    const prompt = buildFixPrompt({
+      repo: 'o/r',
+      config,
+      attempt: 1,
+      issue: {
+        number: 50,
+        title: 'Generated verification heredoc command is not shell-runnable',
+        body: 'Heredoc verify commands must be runnable',
+        labels: [{ name: 'kaizen' }],
+        createdAt: '2026-06-13T00:00:00Z',
+        comments: []
+      }
+    });
+
+    expect(prompt).toContain("5. Verify with:\n```sh\nset -e\npython3 <<'PY'\nprint('ok')\nPY\nnpm test\n```");
+    expect(prompt).not.toContain('PY && npm test');
+
+    const match = prompt.match(/5\. Verify with:\n```sh\n([\s\S]*?)\n```/);
+    if (!match) throw new Error('missing verification shell block');
+
+    const syntaxCheck = spawnSync('sh', ['-n'], { input: match[1], encoding: 'utf8' });
+    expect(syntaxCheck.status, syntaxCheck.stderr).toBe(0);
   });
 });
