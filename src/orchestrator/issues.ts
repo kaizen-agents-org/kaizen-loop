@@ -1,6 +1,6 @@
 import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubIssue } from '../github/types.js';
-import { countAttempts } from '../report/comments.js';
+import { countAttempts, hasPendingPullRequest } from '../report/comments.js';
 
 export interface IssueSelection {
   selected: GitHubIssue[];
@@ -48,6 +48,11 @@ export function selectIssues(options: {
 
     if (hasActiveInProgress(issue, now)) {
       skipped.push({ number: issue.number, reason: 'in-progress' });
+      return false;
+    }
+
+    if (!options.explicit && hasPendingPullRequest(issue.comments ?? [])) {
+      skipped.push({ number: issue.number, reason: 'pending pull request' });
       return false;
     }
 

@@ -19,8 +19,11 @@ scheduler:
   nightly:
     enabled: true
     time: "02:45"
-  poll:
+  afternoon:
     enabled: true
+    time: "14:45"
+  poll:
+    enabled: false
     intervalMinutes: 5
     skipIfRunning: true
 

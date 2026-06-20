@@ -28,11 +28,12 @@ agent:
     codex: null              # 例: "gpt-5-codex"
 
 run:
-  maxIssuesPerNight: 3       # 1 晩に処理する Issue の上限
+  maxIssuesPerNight: 3       # scheduled/afternoon 1 回あたりに処理する Issue の上限
   issueTimeoutMinutes: 120   # 1 Issue あたりのエージェント実行タイムアウト
   runTimeoutMinutes: 240     # 実行全体のタイムアウト(超過時は残 Issue をスキップして終了処理)
   maxVerifyRetries: 2        # 検証失敗時、エラーを添えてエージェントに再修正させる回数
   maxAttemptsPerIssue: 3     # 夜をまたいだ累計試行回数。超えたら kaizen:needs-human へ
+  maxOpenPullRequests: 1     # 自動実行で新規 PR 作成を許可する repo 別 open PR 上限
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
 scheduler:
@@ -150,6 +151,7 @@ issues:
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
+- `run.maxOpenPullRequests` は scheduled / afternoon / watch の自動実行にだけ適用する repo 別 backpressure。open PR 数が上限以上なら新しい Issue は選択せず、`kaizen fix` / `--issue` の明示実行は止めない
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
 - `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、レビューコメントへの返信は skill 側の責務
 - `goal.agent` は Goal planner / evaluator の呼び出し設定。`KAIZEN_GOAL_RESULT_PATH` に JSON を書くか、stdout の最後に JSON を出す。Goal runner はこの agent に実装や GitHub 操作をさせず、Issue 作成と既存 pipeline の呼び出しを自分で行う

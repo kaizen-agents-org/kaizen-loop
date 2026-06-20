@@ -59,6 +59,49 @@ describe('selectIssues', () => {
     ]);
   });
 
+  it('skips issues that already have a pending pull request in automatic selection', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [
+        {
+          ...issue(1, 'has pr', '2026-06-12T01:00:00Z', ['kaizen']),
+          comments: [
+            {
+              body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"pr-created","pr":"https://github.com/o/r/pull/1"} -->'
+            }
+          ]
+        },
+        issue(2, 'ok', '2026-06-12T02:00:00Z', ['kaizen'])
+      ]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([2]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'pending pull request' }]);
+  });
+
+  it('allows explicit reruns for issues with a pending pull request marker', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 1,
+      explicit: true,
+      onlyIssue: 1,
+      issues: [
+        {
+          ...issue(1, 'has pr', '2026-06-12T01:00:00Z', ['kaizen']),
+          comments: [
+            {
+              body: '<!-- kaizen-loop:progress {"attempt":1,"outcome":"pr-monitoring","pr":"https://github.com/o/r/pull/1"} -->'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
+  });
+
   it('requires the selection label in opt-in mode for automatic selection', () => {
     const selection = selectIssues({
       config: optInConfig,

@@ -55,7 +55,10 @@ gh issue list --label kaizen --state open \
 | `kaizen:needs-human` あり | 人間にエスカレーション済み |
 | `kaizen:in-progress` あり、かつ付与から 24h 以内 | 他マシン・前回実行が処理中 |
 | `kaizen:in-progress` あり、かつ 24h 超 | **stale とみなしラベルを剥がして対象に戻す**(前回実行のクラッシュ回復) |
+| `kaizen-loop:progress` / `kaizen-loop:result` コメントに PR URL 付きの pending PR marker あり | 既に PR 作成済み。review/merge 待ちの Issue を再処理しない |
 | 累計試行回数 ≥ `maxAttemptsPerIssue` | 試行回数はオーケストレータが残した結果コメント(機械可読マーカー付き、→ §8)を数えて算出 |
+
+scheduled / afternoon / watch の自動実行では、選択後に `gh pr list --state open` で repo の open PR 数を確認する。open PR 数が `run.maxOpenPullRequests` 以上なら、新しい Issue は処理せず `open pull request limit reached` としてスキップする。明示実行(`kaizen fix` / `--issue`)はこの backpressure の対象外。
 
 ### 優先順位
 

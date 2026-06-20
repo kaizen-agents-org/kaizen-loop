@@ -42,6 +42,7 @@ export function defaultConfigYaml(options: {
       runTimeoutMinutes: 240,
       maxVerifyRetries: 2,
       maxAttemptsPerIssue: 3,
+      maxOpenPullRequests: 1,
       latestStartHour: 7
     },
     scheduler: {
