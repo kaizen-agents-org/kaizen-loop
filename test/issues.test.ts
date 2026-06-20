@@ -63,6 +63,7 @@ describe('selectIssues', () => {
     const selection = selectIssues({
       config,
       maxIssues: 10,
+      openPullRequests: [{ number: 1, headRefName: 'kaizen/issue-1-has-pr', url: 'https://github.com/o/r/pull/1' }],
       issues: [
         {
           ...issue(1, 'has pr', '2026-06-12T01:00:00Z', ['kaizen']),
@@ -78,6 +79,27 @@ describe('selectIssues', () => {
 
     expect(selection.selected.map((item) => item.number)).toEqual([2]);
     expect(selection.skipped).toEqual([{ number: 1, reason: 'pending pull request' }]);
+  });
+
+  it('does not skip issues when a pending pull request marker points to a closed PR', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      openPullRequests: [{ number: 9, headRefName: 'kaizen/issue-9-other', url: 'https://github.com/o/r/pull/9' }],
+      issues: [
+        {
+          ...issue(1, 'closed pr', '2026-06-12T01:00:00Z', ['kaizen']),
+          comments: [
+            {
+              body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"pr-created","pr":"https://github.com/o/r/pull/1"} -->'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
   });
 
   it('allows explicit reruns for issues with a pending pull request marker', () => {

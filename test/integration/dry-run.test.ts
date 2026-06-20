@@ -222,6 +222,55 @@ describe('runKaizen dry-run', () => {
       { number: 2, reason: 'open pull request limit would be exceeded (0/1)' }
     ]);
   });
+
+  it('allows explicit issue runs even when the open PR limit is reached', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ run: { maxOpenPullRequests: 1 } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(issue(1)));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([{ number: 3, headRefName: 'kaizen/issue-9-x', url: 'https://github.com/o/r/pull/3' }]));
+      }
+      return result(command, args, repo, '');
+    });
+
+    const resultSummary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'afternoon',
+      issue: 1,
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in resultSummary && resultSummary.selected.map((item) => item.number)).toEqual([1]);
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'pr' && args[1] === 'list')).toBe(false);
+  });
 });
 
 describe('runKaizen PR flow', () => {

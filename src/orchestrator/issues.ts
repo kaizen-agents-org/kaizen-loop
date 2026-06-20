@@ -1,5 +1,5 @@
 import type { KaizenConfig } from '../config/schema.js';
-import type { GitHubIssue } from '../github/types.js';
+import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
 import { countAttempts, hasPendingPullRequest } from '../report/comments.js';
 
 export interface IssueSelection {
@@ -13,6 +13,7 @@ export function selectIssues(options: {
   maxIssues: number;
   onlyIssue?: number;
   explicit?: boolean;
+  openPullRequests?: GitHubPullRequest[];
   now?: Date;
 }): IssueSelection {
   const now = options.now ?? new Date();
@@ -51,7 +52,7 @@ export function selectIssues(options: {
       return false;
     }
 
-    if (!options.explicit && hasPendingPullRequest(issue.comments ?? [])) {
+    if (!options.explicit && hasPendingPullRequest(issue.comments ?? [], options.openPullRequests)) {
       skipped.push({ number: issue.number, reason: 'pending pull request' });
       return false;
     }
