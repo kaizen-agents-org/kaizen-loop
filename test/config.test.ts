@@ -44,6 +44,17 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 60 } } })).toThrow();
   });
 
+  it('accepts the afternoon scheduler slot', () => {
+    const config = configSchema.parse({
+      version: 1,
+      scheduler: {
+        afternoon: { enabled: true, time: '14:30' }
+      }
+    });
+
+    expect(config.scheduler.afternoon).toEqual({ enabled: true, time: '14:30' });
+  });
+
   it('parses generated yaml shape', () => {
     const config = configSchema.parse(
       parse(`
