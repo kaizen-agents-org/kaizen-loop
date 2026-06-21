@@ -1,6 +1,6 @@
 # 07. 安全性設計
 
-無人・夜間・自動 push という性質上、安全装置は機能と同等以上に重要である。本ドキュメントはガードレール、失敗モード、停止手段を定める。
+無人・夜間に PR 作成まで進める性質上、安全装置は機能と同等以上に重要である。明示 opt-in の直接コミット運用では main への自動 push も扱うため、本ドキュメントはそのガードレール、失敗モード、停止手段も定める。
 
 ## 1. 多層ガードレール(まとめ)
 
@@ -9,7 +9,7 @@
 | 物理隔離 | 専用クローンでのみ作業(→ [01-architecture.md](./01-architecture.md) §3) | 開発者の作業ツリー・未コミット変更の破壊 |
 | 権限 | エージェントに push / gh を許可しない(→ [06-agents.md](./06-agents.md) §2) | エージェント単独でのリモート反映 |
 | パス | `protectedPaths`(変更可だが強制 PR)/ `forbiddenPaths`(変更即失敗) | CI・秘密情報・ループ自身の設定の無審査変更 |
-| 検証 | テスト・lint 必須。検証なしプロジェクトは直接コミット禁止 | 壊れたコードの main 混入 |
+| 検証 | テスト・lint 必須。検証なしプロジェクトは直接コミット禁止 | 壊れたコードの main 混入、または壊れた PR の量産 |
 | 量 | `maxChangedLines` / `maxChangedFiles` 超は強制 PR | 大規模変更の無審査反映 |
 | 回数 | `maxVerifyRetries` / `maxAttemptsPerIssue` / `maxIssuesPerNight` | 無限リトライ・暴走によるトークン浪費 |
 | 時間 | Issue 単位・実行全体のタイムアウト | ハング・長時間占有 |
@@ -41,7 +41,7 @@
 | エージェントが無関係なファイルを大量変更 | diff 検査(行数・ファイル数・パス) | 強制 PR or 失敗。`forbiddenPaths` は即失敗 |
 | テストがもともと壊れている(エージェントのせいでない) | ベースライン検証: **修正前に一度 verify を実行**し、失敗するなら「環境/既存の問題」としてエージェントを起動しない | `in-progress` を剥がし、result marker なしの中断コメントを残して実行全体を中止 |
 | flaky テスト | 検証失敗 → リトライで通ることがある | `maxVerifyRetries` の範囲で自然吸収。頻発するならそれ自体を Kaizen Issue にする(ドッグフーディング) |
-| 夜間に人間が main へ push | push 前 fetch + rebase + 再検証(→ [04-nightly-pipeline.md](./04-nightly-pipeline.md) §7a) | 競合時は PR フォールバック |
+| 明示 opt-in の直接コミット中に人間が main へ push | push 前 fetch + rebase + 再検証(→ [04-nightly-pipeline.md](./04-nightly-pipeline.md) §7a) | 競合時は PR フォールバック |
 | gh / API 障害・レート制限 | コマンド失敗 | 指数バックオフ ×3 → 実行中止(中途半端に続けない) |
 | Mac がスリープしていた | launchd が起床時に実行 | §6 の「遅延実行ガード」で制御 |
 | 前回実行のクラッシュ(ロック残留・in-progress 残留) | ロックの PID 生存確認 / in-progress の 24h ルール | stale 回収(自動) |
@@ -51,16 +51,17 @@
 
 ## 4. 直接コミットの安全条件(再掲・正規化)
 
-main への直接 push が許されるのは、以下が**すべて**真のときのみ:
+標準の scheduled / dogfood 実行は `policy.mode: pr-only` かつ `verifier.enabled: true` で ready-for-review PR を作成する。main への直接 push が許されるのは、直接コミットへ明示 opt-in したうえで、以下が**すべて**真のときのみ:
 
-1. `policy.mode` が `hybrid` または `direct-only`
-2. `commands.verify` が定義済みで、全コマンドが成功した
-3. 変更が `protectedPaths` / `forbiddenPaths` に触れていない
-4. `kaizen:pr-only` ラベルがない
-5. (`policy.mode: direct-only`)または(`kaizen:direct` ラベルがある)または(変更量が上限以下)
-6. push 直前の rebase 後にも検証が成功した
+1. `verifier.enabled: false`
+2. `policy.mode` が `hybrid` または `direct-only`
+3. `commands.verify` が定義済みで、全コマンドが成功した
+4. 変更が `protectedPaths` / `forbiddenPaths` に触れていない
+5. `kaizen:pr-only` ラベルがない
+6. (`policy.mode: direct-only`)または(`kaizen:direct` ラベルがある)または(変更量が上限以下)
+7. push 直前の rebase 後にも検証が成功した
 
-ひとつでも欠ければ PR(または失敗)。`direct-only` は「直接コミットを優先する」指定であり、検証なし・保護パス変更・`kaizen:pr-only`・禁止パス変更を上書きしない。この条件は実装上 1 つの純関数 `decideReflection(diffStats, labels, config, verifyResult): 'direct' | 'pr'` に集約し、ユニットテストで全パターンを固定する。
+ひとつでも欠ければ PR(または失敗)。`direct-only` は「直接コミットを優先する」指定であり、verifier 有効・検証なし・保護パス変更・`kaizen:pr-only`・禁止パス変更を上書きしない。この条件は実装上 1 つの純関数 `decideReflection(diffStats, labels, config, verifyResult): 'direct' | 'pr'` と、verifier step の分岐に集約し、ユニットテストで全パターンを固定する。
 
 ## 5. 秘密情報の扱い
 
@@ -83,7 +84,7 @@ launchd は取りこぼしたスケジュールを起床時に実行するため
 
 1. **週 1〜2 回、`kaizen run --dry-run`** で選択・除外理由だけ確認
 2. 既定の **`policy.mode: pr-only`** で数日運用し、PR の品質を観察
-3. 品質に納得したら **`hybrid`** に切り替え、`maxChangedLines` を小さめ(例: 50)から始める
+3. 直接コミットまで自動化する必要があるリポジトリだけ、`verifier.enabled: false` と **`hybrid`** へ明示変更し、`maxChangedLines` を小さめ(例: 50)から始める
 4. メトリクス(revert 率)を見ながら上限を緩める
 
-`kaizen init` はデフォルトで `pr-only` を生成する。直接コミットは `hybrid` または `direct-only` への明示変更後にだけ候補になる。
+`kaizen init` はデフォルトで `pr-only` を生成する。直接コミットは verifier を無効化し、`hybrid` または `direct-only` へ明示変更したあとにだけ候補になる。

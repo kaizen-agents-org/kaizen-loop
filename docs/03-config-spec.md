@@ -126,7 +126,7 @@ git:
 instant:
   # 即時実行(kaizen fix / report --now / watch。→ 09-instant-run.md)
   # 非 TTY・無人の即時実行で「直接コミット」判定が出たときの挙動
-  unattendedMode: pr         # pr(PR に切替・デフォルト) | direct(夜間と同じ) | reject(中止)
+  unattendedMode: pr         # pr(PR に切替・デフォルト) | direct(設定済み direct 経路) | reject(中止)
 
 report:
   notification: true         # macOS 通知センターへの完了通知

@@ -21,12 +21,12 @@
 
 ## Phase 2 — 自動化と両エージェント対応
 
-**ゴール**: 無人で毎晩回る。ハイブリッド反映。Claude/Codex 切り替え。
+**ゴール**: 無人で毎晩回り、ready-for-review PR を作成する。直接コミットは明示 opt-in の反映モードとして残す。Claude/Codex を切り替えられる。
 
 | # | 項目 | 内容 |
 |---|---|---|
 | 2-1 | スケジューラ | launchd plist 生成 / crontab 管理、`enable` / `disable`、`--scheduled` モード、macOS 通知 |
-| 2-2 | ハイブリッド反映 | リスク判定(`decideReflection` 純関数 + 全パターンのユニットテスト)、直接コミット経路(rebase + 再検証 + PR フォールバック) |
+| 2-2 | PR-first 反映 | ready-for-review PR 作成を既定にする。明示 opt-in 用にリスク判定(`decideReflection` 純関数 + 全パターンのユニットテスト)と直接コミット経路(rebase + 再検証 + PR フォールバック)を持つ |
 | 2-3 | 検証リトライ | エラーフィードバック付き再修正(`maxVerifyRetries`) |
 | 2-4 | CodexAdapter | codex exec 対応、フォールバックロジック |
 | 2-5 | 試行回数管理 | 結果コメントの機械可読マーカー、`maxAttemptsPerIssue`、`kaizen:needs-human` エスカレーション |
@@ -36,7 +36,7 @@
 | 2-9 | 遅延実行ガード | `latestStartHour`(→ [07-safety.md](./07-safety.md) §6) |
 | 2-10 | `kaizen fix <Issue番号>` | 既存 Issue の即時処理。確認プロンプト・ロック共存(→ [09-instant-run.md](./09-instant-run.md)) |
 
-**Phase 2 完了の検証**: 1 週間、人手の介在なしに毎晩実行され、直接コミットと PR が方針どおりに振り分けられること。
+**Phase 2 完了の検証**: 1 週間、人手の介在なしに毎晩実行され、標準設定では ready-for-review PR が作成されること。直接コミット opt-in リポジトリでは方針どおりに PR / 直接コミットが振り分けられること。
 
 ## Phase 3 — 運用品質・計測
 
@@ -45,7 +45,7 @@
 | # | 項目 | 内容 |
 |---|---|---|
 | 3-1 | メトリクス | `kaizen status --metrics`(成功率・リードタイム・エージェント別比較) |
-| 3-2 | revert 検知 | 直接コミットがその後 revert されたかを追跡(自動修正の品質指標) |
+| 3-2 | revert 検知 | 明示 opt-in 直接コミットがその後 revert されたかを追跡(自動修正の品質指標) |
 | 3-3 | プロンプトカスタマイズ | `.kaizen/prompts/fix.md` によるテンプレート上書き |
 | 3-4 | テンプレート登録の自動ラベル | Web UI 登録時の優先度ラベル自動付与(GitHub Actions、任意導入) |
 | 3-5 | ナイトリーサマリ Issue(任意) | 1 晩 1 コメントの集約レポートを GitHub 上にも残すオプション |
@@ -66,5 +66,5 @@
 |---|---|---|
 | U-1 | Codex CLI の最新フラグ体系(`exec` / sandbox / JSON 出力)の確認 | [06-agents.md](./06-agents.md) §2.2 の想定で設計。実装時に最新ドキュメントへ追従 |
 | U-2 | `commands.setup` の自動検出範囲(npm / pnpm / yarn / bun / cargo / pip …) | Phase 1 は npm 系のみ自動検出、他は手動設定 |
-| U-3 | ブランチ保護ルールがあるリポジトリでの直接コミット | `hybrid` でも push 失敗時は PR フォールバックで自然に吸収。init 時に保護ルールを検出して `pr-only` を提案 |
+| U-3 | ブランチ保護ルールがあるリポジトリでの opt-in 直接コミット | `hybrid` でも push 失敗時は PR フォールバックで自然に吸収。init 時に保護ルールを検出して `pr-only` を提案 |
 | U-4 | モノレポ(ワークスペース内サブプロジェクト)対応 | 初期スコープ外。config はリポジトリルート 1 つのみ |
