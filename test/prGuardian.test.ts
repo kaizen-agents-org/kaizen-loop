@@ -33,7 +33,9 @@ describe('runPrGuardianSkill', () => {
 
     expect(prompt).toContain('Always inspect PR review feedback before declaring the PR mergeable');
     expect(prompt).toContain('PullRequest.reviewThreads');
+    expect(prompt).toContain('hasNextPage=false');
     expect(prompt).toContain('no unresolved actionable review feedback remains');
+    expect(prompt).toContain('required checks are passing');
     expect(prompt).toContain('unresolved/skipped feedback with reasons');
   });
 });
