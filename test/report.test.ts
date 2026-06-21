@@ -289,11 +289,24 @@ async function runCli(options: { cwd: string; binDir: string; args: string[] }) 
 }
 
 async function readCalls(logPath: string) {
-  const raw = await fs.readFile(logPath, 'utf8');
-  return raw
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { command: string; args: string[]; cwd: string });
+  const fields = (await fs.readFile(logPath, 'utf8')).split('\0');
+  const calls: Array<{ command: string; args: string[]; cwd: string }> = [];
+  for (let index = 0; index < fields.length && fields[index];) {
+    const command = fields[index++];
+    const cwd = fields[index++];
+    const rawArgCount = fields[index++];
+    const argCount = Number(rawArgCount);
+    if (!Number.isInteger(argCount) || argCount < 0) {
+      throw new Error(`Invalid fake command arg count: ${rawArgCount}`);
+    }
+    if (index + argCount > fields.length) {
+      throw new Error(`Truncated fake command log for ${command}`);
+    }
+    const args = fields.slice(index, index + argCount);
+    index += argCount;
+    calls.push({ command, args, cwd });
+  }
+  return calls;
 }
 
 async function writeExecutable(filePath: string, contents: string) {
@@ -301,79 +314,85 @@ async function writeExecutable(filePath: string, contents: string) {
 }
 
 function fakeGhScript(logPath: string) {
-  return `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ command: 'gh', args, cwd: process.cwd() }) + '\\n');
-if (args[0] === 'issue' && args[1] === 'create') {
-  console.log('https://github.com/o/r/issues/14');
-} else if (args[0] === 'issue' && args[1] === 'view') {
-  console.log(JSON.stringify({
-    number: 14,
-    title: 'CLI now',
-    body: '',
-    labels: [{ name: 'kaizen' }],
-    createdAt: '2026-06-12T00:00:00Z',
-    comments: [],
-    url: 'https://github.com/o/r/issues/14'
-  }));
-} else if (args[0] === 'pr' && args[1] === 'create') {
-  console.log('https://github.com/o/r/pull/4');
-}
+  return `#!/bin/sh
+{
+  printf '%s\\0' gh "$PWD" "$#"
+  for arg do printf '%s\\0' "$arg"; done
+} >> ${shellQuote(logPath)}
+if [ "$1" = issue ] && [ "$2" = create ]; then
+  printf '%s\\n' 'https://github.com/o/r/issues/14'
+elif [ "$1" = issue ] && [ "$2" = view ]; then
+  printf '%s\\n' '{"number":14,"title":"CLI now","body":"","labels":[{"name":"kaizen"}],"createdAt":"2026-06-12T00:00:00Z","comments":[],"url":"https://github.com/o/r/issues/14"}'
+elif [ "$1" = pr ] && [ "$2" = create ]; then
+  printf '%s\\n' 'https://github.com/o/r/pull/4'
+fi
 `;
 }
 
 function fakeGitScript(logPath: string) {
-  return `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ command: 'git', args, cwd: process.cwd() }) + '\\n');
-const joined = args.join(' ');
-if (joined === 'remote get-url origin') {
-  console.log('https://github.com/o/r.git');
-} else if (joined === 'diff --name-only origin/main...HEAD') {
-  console.log('src/file.ts');
-} else if (joined === 'diff --numstat origin/main...HEAD') {
-  console.log('1\\t0\\tsrc/file.ts');
-}
+  return `#!/bin/sh
+{
+  printf '%s\\0' git "$PWD" "$#"
+  for arg do printf '%s\\0' "$arg"; done
+} >> ${shellQuote(logPath)}
+case "$*" in
+  'remote get-url origin')
+    printf '%s\\n' 'https://github.com/o/r.git'
+    ;;
+  'diff --name-only origin/main...HEAD')
+    printf '%s\\n' 'src/file.ts'
+    ;;
+  'diff --numstat origin/main...HEAD')
+    printf '1\\t0\\tsrc/file.ts\\n'
+    ;;
+esac
 `;
 }
 
 function fakeBuilderScript(logPath: string) {
-  return `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ command: 'builder-agent', args, cwd: process.cwd() }) + '\\n');
-if (args[0] === '--version') {
-  console.log('ok');
-} else {
-  fs.writeFileSync(process.env.KAIZEN_BUILD_RESULT_PATH, JSON.stringify({ status: 'fixed', summary: 'fixed', notes: '' }));
-  console.log('built');
-}
+  return `#!/bin/sh
+{
+  printf '%s\\0' builder-agent "$PWD" "$#"
+  for arg do printf '%s\\0' "$arg"; done
+} >> ${shellQuote(logPath)}
+if [ "$1" = --version ]; then
+  printf 'ok\\n'
+else
+  cat >/dev/null
+  printf '%s' '{"status":"fixed","summary":"fixed","notes":""}' > "$KAIZEN_BUILD_RESULT_PATH"
+  printf 'built\\n'
+fi
 `;
 }
 
 function fakeShScript(logPath: string) {
-  return `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ command: 'sh', args, cwd: process.cwd() }) + '\\n');
-console.log('ok');
+  return `#!/bin/sh
+{
+  printf '%s\\0' sh "$PWD" "$#"
+  for arg do printf '%s\\0' "$arg"; done
+} >> ${shellQuote(logPath)}
+printf 'ok\\n'
 `;
 }
 
 function fakeVerifierScript(logPath: string) {
-  return `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ command: 'verifier', args, cwd: process.cwd() }) + '\\n');
-if (args[0] === '--version') {
-  console.log('ok');
-} else {
-  fs.writeFileSync(process.env.KAIZEN_VERIFIER_RESULT_PATH, JSON.stringify({ status: 'open_pr', summary: 'verified', notes: '' }));
-  console.log('verified');
-}
+  return `#!/bin/sh
+{
+  printf '%s\\0' verifier "$PWD" "$#"
+  for arg do printf '%s\\0' "$arg"; done
+} >> ${shellQuote(logPath)}
+if [ "$1" = --version ]; then
+  printf 'ok\\n'
+else
+  cat >/dev/null
+  printf '%s' '{"status":"open_pr","summary":"verified","notes":""}' > "$KAIZEN_VERIFIER_RESULT_PATH"
+  printf 'verified\\n'
+fi
 `;
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function issue(number: number, title: string) {
