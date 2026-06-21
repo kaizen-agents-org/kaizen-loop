@@ -22,3 +22,9 @@ export interface PullRequestResult {
   number?: number;
   url: string;
 }
+
+export interface GitHubPullRequest {
+  number: number;
+  headRefName?: string;
+  url: string;
+}

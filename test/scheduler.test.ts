@@ -52,6 +52,8 @@ describe('enableScheduler', () => {
           ? [
               '# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) nightly',
               '30 1 * * * node kaizen run --project owner-repo --scheduled --trigger scheduled',
+              '# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) afternoon',
+              '30 13 * * * node kaizen run --project owner-repo --scheduled --trigger afternoon',
               '0 9 * * * node kaizen run --project other-repo --scheduled'
             ].join('\n')
           : '',

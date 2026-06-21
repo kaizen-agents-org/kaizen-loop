@@ -27,6 +27,7 @@ export const configSchema = z
         runTimeoutMinutes: z.number().int().positive().default(240),
         maxVerifyRetries: z.number().int().min(0).default(2),
         maxAttemptsPerIssue: z.number().int().positive().default(3),
+        maxOpenPullRequests: z.number().int().nonnegative().default(1),
         latestStartHour: z.number().int().min(0).max(23).default(7)
       })
       .strict()
@@ -36,6 +37,7 @@ export const configSchema = z
         runTimeoutMinutes: 240,
         maxVerifyRetries: 2,
         maxAttemptsPerIssue: 3,
+        maxOpenPullRequests: 1,
         latestStartHour: 7
       }),
     scheduler: z

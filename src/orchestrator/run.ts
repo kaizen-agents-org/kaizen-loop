@@ -70,11 +70,20 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
       : undefined;
     const issues = requestedIssues ?? await github.listIssues(config.issues.label);
-    return selectIssues({
+    const automatic = options.scheduled && requestedIssues === undefined;
+    const openPullRequests = automatic ? await github.listOpenPullRequests(Math.max(config.run.maxOpenPullRequests, 100)) : [];
+    const selection = selectIssues({
       issues,
       config,
       maxIssues,
-      explicit: requestedIssues !== undefined
+      explicit: requestedIssues !== undefined,
+      openPullRequests
+    });
+    return applyOpenPullRequestLimit({
+      config,
+      selection,
+      automatic,
+      openPullRequests
     });
   };
 
@@ -226,6 +235,48 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 
 function uniqueIssueNumbers(issueNumbers: number[]): number[] {
   return [...new Set(issueNumbers)];
+}
+
+async function applyOpenPullRequestLimit(options: {
+  config: KaizenConfig;
+  selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> };
+  automatic: boolean;
+  openPullRequests: Array<{ number: number }>;
+}): Promise<{ selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
+  if (!options.automatic || options.selection.selected.length === 0) return options.selection;
+  const limit = options.config.run.maxOpenPullRequests;
+  if (limit === 0) {
+    return skipSelectedForOpenPrLimit(options.selection, 'open pull request limit reached (0/0)');
+  }
+
+  const remaining = limit - options.openPullRequests.length;
+  if (remaining <= 0) {
+    return skipSelectedForOpenPrLimit(options.selection, `open pull request limit reached (${options.openPullRequests.length}/${limit})`);
+  }
+  if (options.selection.selected.length <= remaining) return options.selection;
+  return {
+    selected: options.selection.selected.slice(0, remaining),
+    skipped: [
+      ...options.selection.skipped,
+      ...options.selection.selected.slice(remaining).map((issue) => ({
+        number: issue.number,
+        reason: `open pull request limit would be exceeded (${options.openPullRequests.length}/${limit})`
+      }))
+    ]
+  };
+}
+
+function skipSelectedForOpenPrLimit(
+  selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> },
+  reason: string
+): { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> } {
+  return {
+    selected: [],
+    skipped: [
+      ...selection.skipped,
+      ...selection.selected.map((issue) => ({ number: issue.number, reason }))
+    ]
+  };
 }
 
 async function prepareBaseWorkspace(options: {

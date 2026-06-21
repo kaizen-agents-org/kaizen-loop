@@ -1,4 +1,5 @@
 import type { AgentResult } from '../agents/types.js';
+import type { GitHubPullRequest } from '../github/types.js';
 
 export interface ResultCommentOptions {
   runId: string;
@@ -73,9 +74,42 @@ export function countAttempts(comments: Array<{ body: string }>): number {
   return comments.filter((comment) => /<!--\s*kaizen-loop:result\s+{/.test(comment.body)).length;
 }
 
+export function hasPendingPullRequest(comments: Array<{ body: string }>, openPullRequests: GitHubPullRequest[] = []): boolean {
+  return comments.some((comment) => {
+    const marker = parseKaizenMarker(comment.body, 'result') ?? parseKaizenMarker(comment.body, 'progress');
+    if (!marker) return false;
+    return (
+      typeof marker.pr === 'string' &&
+      marker.pr.length > 0 &&
+      (marker.outcome === 'pr-created' || marker.outcome === 'pr-monitoring') &&
+      isOpenPullRequest(marker.pr, openPullRequests)
+    );
+  });
+}
+
 export function agentSummary(result: AgentResult): string {
   if (result.status === 'blocked') return result.blockedReason || result.summary;
   return result.summary;
+}
+
+function parseKaizenMarker(body: string, kind: 'result' | 'progress'): { outcome?: string; pr?: string } | undefined {
+  const match = body.match(new RegExp(`<!--\\s*kaizen-loop:${kind}\\s+({.*?})\\s*-->`, 's'));
+  if (!match) return undefined;
+  try {
+    return JSON.parse(match[1]) as { outcome?: string; pr?: string };
+  } catch {
+    return undefined;
+  }
+}
+
+function isOpenPullRequest(markerPr: string, openPullRequests: GitHubPullRequest[]): boolean {
+  const markerNumber = pullRequestNumber(markerPr);
+  return openPullRequests.some((pr) => pr.url === markerPr || (markerNumber !== undefined && pr.number === markerNumber));
+}
+
+function pullRequestNumber(value: string): number | undefined {
+  const match = value.match(/\/pull\/(\d+)(?:\b|$)/) ?? value.match(/^#?(\d+)$/);
+  return match ? Number(match[1]) : undefined;
 }
 
 function formatOutcome(options: ResultCommentOptions): string {

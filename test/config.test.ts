@@ -24,6 +24,7 @@ describe('configSchema', () => {
       timeoutMinutes: 20
     });
     expect(config.run.issueTimeoutMinutes).toBe(120);
+    expect(config.run.maxOpenPullRequests).toBe(1);
     expect(config.scheduler.nightly).toEqual({ enabled: true, time: '02:00' });
     expect(config.scheduler.afternoon).toEqual({ enabled: false, time: '14:00' });
     expect(config.scheduler.poll).toEqual({ enabled: false, intervalMinutes: 5, skipIfRunning: true });
@@ -42,6 +43,7 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '24:00' } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:60' } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 60 } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, run: { maxOpenPullRequests: -1 } })).toThrow();
   });
 
   it('accepts the afternoon scheduler slot', () => {

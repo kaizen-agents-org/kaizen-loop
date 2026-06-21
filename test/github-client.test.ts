@@ -25,6 +25,32 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[0][1]).not.toContain('--draft');
   });
 
+  it('lists open pull requests for backlog limiting', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: JSON.stringify([{ number: 7, headRefName: 'kaizen/issue-1-x', url: 'https://github.com/o/r/pull/7' }]),
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    const prs = await client.listOpenPullRequests(3);
+
+    expect(prs).toEqual([{ number: 7, headRefName: 'kaizen/issue-1-x', url: 'https://github.com/o/r/pull/7' }]);
+    expect(runner.mock.calls[0][1]).toEqual([
+      'pr',
+      'list',
+      '--state',
+      'open',
+      '--json',
+      'number,headRefName,url',
+      '--limit',
+      '3'
+    ]);
+  });
+
   it('preserves the base label when an optional target repo label is missing', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       const labelValue = String(args.at(args.indexOf('--label') + 1));
