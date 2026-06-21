@@ -88,10 +88,11 @@ Requirements:
 - Read and follow skills/pr-guardian/SKILL.md.
 - Check the PR with gh pr view and gh pr checks.
 - Watch relevant workflow runs with gh run watch --exit-status when a run exists.
-- Inspect CI logs and review feedback if anything fails or blocks mergeability.
-- Address actionable feedback with focused commits and push them.
+- Always inspect PR review feedback before declaring the PR mergeable, even when mergeStateStatus is CLEAN.
+- Fetch inline review threads and PR comments with resolution state using paginated GraphQL/API reads, iterating until hasNextPage=false, for example via PullRequest.reviewThreads, so unresolved actionable feedback cannot be missed.
+- Address every unresolved actionable review thread, PR comment, and check annotation with focused commits or an explicit disposition, then push any fixes.
 - Reply or comment on each addressed review item with the action taken.
-- Stop only when mergeStateStatus is CLEAN with required checks passing, retry budget is exhausted, or an external blocker remains.
+- Stop only when mergeStateStatus is CLEAN, required checks are passing, and no unresolved actionable review feedback remains; otherwise continue until retry budget is exhausted or an external blocker remains.
 - Do not merge the PR.
-- Before finishing, comment on the PR with final mergeability, watched runs, fixes pushed, feedback addressed, and remaining blockers.`;
+- Before finishing, comment on the PR with final mergeability, watched runs, fixes pushed, feedback addressed, unresolved/skipped feedback with reasons, and remaining blockers.`;
 }
