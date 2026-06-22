@@ -26,10 +26,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     await new GitHubClient(options.runCommand, resolved.project.localPath).createLabels(requiredLabels(loaded));
   });
   await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
-  await check(checks, 'temporary directory', async () => {
-    await fs.access(resolved.project.workspacePath);
-    await ensureKaizenTempDir(resolved.project.workspacePath);
-  });
+  await check(checks, 'temporary directory', async () => void (await checkWorkspaceTempDir(resolved.project.workspacePath)));
   for (const agent of configuredAgents(config)) {
     await check(checks, `${agent} auth`, async () => {
       const adapter = agent === 'codex' ? new CodexAdapter(options.runCommand) : new ClaudeCodeAdapter(options.runCommand);
@@ -54,6 +51,11 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
   return { slug: resolved.slug, checks, ok: checks.every((item) => item.ok) };
+}
+
+async function checkWorkspaceTempDir(workspacePath: string): Promise<void> {
+  await fs.access(workspacePath);
+  await ensureKaizenTempDir(workspacePath);
 }
 
 function configuredAgents(config: KaizenConfig | undefined): Array<'claude' | 'codex'> {
