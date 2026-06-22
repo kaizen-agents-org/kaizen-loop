@@ -27,7 +27,8 @@ export type CommandRunner = (
 
 export const runCommand: CommandRunner = async (command, args, options = {}) => {
   const started = Date.now();
-  const env = await envWithKaizenTemp(options.env ?? process.env, options.cwd);
+  const baseEnv = options.env ?? process.env;
+  const env = hasInjectedTempEnv(baseEnv) ? baseEnv : await envWithKaizenTemp(baseEnv, options.cwd);
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -95,6 +96,10 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     child.stdin.end();
   });
 };
+
+function hasInjectedTempEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.TMPDIR && env.TMPDIR === env.TMP && env.TMPDIR === env.TEMP);
+}
 
 export function formatCommand(command: string, args: string[]): string {
   return [command, ...args.map((arg) => (/\s/.test(arg) ? JSON.stringify(arg) : arg))].join(' ');
