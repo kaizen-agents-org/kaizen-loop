@@ -17,12 +17,19 @@ run:
 
 scheduler:
   jobs:
-    maintenance:
+    scheduled:
       enabled: true
       schedule:
-        type: interval
-        everyHours: 8
-        anchorTime: "02:45"
+        type: daily
+        time: "02:45"
+      run:
+        mode: maintenance
+        lateStartGuard: true
+    afternoon:
+      enabled: true
+      schedule:
+        type: daily
+        time: "14:45"
       run:
         mode: maintenance
         lateStartGuard: false
