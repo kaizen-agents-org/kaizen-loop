@@ -91,6 +91,7 @@ For a target repository:
 
 ```sh
 kaizen init --agent codex --schedule 02:00
+kaizen scheduler sync
 kaizen doctor
 kaizen report "Fix stale config reload" --body "Observed during local dogfooding" --priority P2 --queue
 kaizen run --dry-run

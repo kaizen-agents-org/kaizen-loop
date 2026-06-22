@@ -155,6 +155,7 @@ issues:
 ### フィールド規約
 
 - 未知のキーはエラー(タイポによるサイレント無効化を防ぐ)
+- `scheduler.provider` は省略可能。省略時、`kaizen scheduler status` / `plan` は macOS なら `launchd`、Linux なら `cron` と表示する。schema は `codex-automation` / `claude-routine` / `external` も受け付けるが、現行の `scheduler sync` は OS に応じた launchd / cron 生成だけを行う
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
@@ -195,6 +196,8 @@ issues:
   }
 }
 ```
+
+`schedule` は旧 scheduler 互換の時刻で、現行の job 定義では `.kaizen/config.yml` の `scheduler.jobs` が起動時刻の source of truth になる。`enabled` はローカル scheduler が有効化されているかを示すマシン固有状態。
 
 ## 3. 実行サマリ `runs/<timestamp>/summary.json`
 
@@ -296,7 +299,7 @@ issues:
 <key>StartInterval</key><integer>300</integer>
 ```
 
-注意点(実装時の要件):
+注意点:
 
 - `node` / `kaizen` は**絶対パス**で埋め込む(launchd の PATH は最小限のため)
 - `gh` / `claude` / `codex` / `git` が見つかるよう、`EnvironmentVariables` に PATH を明示的に設定する
@@ -316,7 +319,7 @@ issues:
 
 マーカーコメントで kaizen 管理行を識別し、`scheduler sync` / `scheduler disable` はその行のみを追加・削除する。`run.mode: watch` の job は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、`skipIfRunning: true` なら前回 run が続いている場合に `run.lock` でスキップされる。
 
-注意点(実装時の要件):
+注意点:
 
 - `node` / `kaizen` / ログパスは絶対パスを使う
 - パスや slug を crontab 行へ埋め込むときは POSIX shell として quote する

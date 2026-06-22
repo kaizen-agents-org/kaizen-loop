@@ -7,7 +7,7 @@ Kaizen Loop は単一の Node.js (TypeScript) 製 CLI パッケージ `kaizen-lo
 ```mermaid
 flowchart TB
     subgraph cli["kaizen-loop CLI"]
-        CMD["コマンド層<br/>init / run / report / status / enable / disable / logs / doctor"]
+        CMD["コマンド層<br/>init / run / report / queue / improve / goal / status / scheduler / logs / doctor"]
         ORCH["オーケストレータ<br/>(夜間パイプライン制御)"]
         ADAPT["エージェントアダプタ層<br/>BuilderAgentAdapter / VerifierAgentAdapter"]
         GHC["GitHub クライアント<br/>(gh CLI ラッパー)"]
@@ -20,7 +20,7 @@ flowchart TB
     ADAPT -->|"headless 実行"| EXT1["builder-agent / verifier"]
     GHC -->|"issue / pr / label"| EXT2["GitHub"]
     WSM -->|"clone / fetch / branch"| EXT3["~/.kaizen/workspaces/&lt;slug&gt;/"]
-    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt; --scheduled --job maintenance&#124;issue-watch"| CMD
+    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt; --scheduled --job &lt;job-id&gt;"| CMD
 ```
 
 ### 設計原則
@@ -141,7 +141,7 @@ Kaizen Agents 組織で運用する `kaizen-loop` と `verifier` は、GitHub Is
 | Issue テンプレート | `<repo>/.github/ISSUE_TEMPLATE/kaizen.yml` | **する** | Kaizen Issue の入力フォーム |
 | ローカル登録簿 | `~/.kaizen/registry.json` | しない | どのプロジェクトがどのマシンでスケジュールされているか |
 | 実行ログ・レポート | `~/.kaizen/projects/<slug>/runs/` | しない | 夜間実行の記録。リポジトリ履歴を汚さない |
-| スケジューラ定義 | `~/Library/LaunchAgents/com.kaizen-loop.<slug>.plist`(macOS)<br/>crontab エントリ(Linux) | しない | 起動時刻 |
+| スケジューラ定義 | `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job>.plist`(macOS)<br/>crontab エントリ(Linux) | しない | `scheduler.jobs` の enabled job |
 
 > ナイトリーレポートをリポジトリにコミットしない理由: 毎晩の機械的コミットで履歴が汚れるため。実行結果は「各 Issue へのコメント」として GitHub 上に残るので、チームからの可視性は保たれる。
 
@@ -161,12 +161,12 @@ kaizen run --project <slug> --scheduled --job maintenance
 kaizen run --project <slug> --scheduled --job issue-watch
 ```
 
-`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さない。`--job` は `scheduler.jobs.<job-id>.run` を読み、`maintenance` / `watch`、遅延起動ガード、重複起動スキップを job ごとに適用する。`--trigger` は実行サマリの分類を明示したい手動・互換用途に限定し、外部スケジューラが生成するコマンドでは使わない。
+現行の launchd / cron 生成物は `--job <job-id>` を使う。`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さない。`--job` は `scheduler.jobs.<job-id>.run` を読み、`maintenance` / `watch`、遅延起動ガード、重複起動スキップを job ごとに適用する。`--trigger` は実行サマリの分類を明示したい手動・互換用途に限定し、外部スケジューラが生成するコマンドでは使わない。
 
 ## 6. 複数プロジェクト対応
 
 - `~/.kaizen/registry.json` に複数プロジェクトを登録できる
-- スケジューラ定義はプロジェクトごとに 1 エントリ(起動時刻をずらして API・マシン負荷を分散することを推奨。`kaizen init` がデフォルトで 02:00 / 02:30 / 03:00… と空き時刻を自動提案する)
+- スケジューラ定義はプロジェクトごとの enabled job 数だけ作成される。起動時刻は `.kaizen/config.yml` の `scheduler.jobs` で明示する
 - 同一プロジェクトの多重実行は `run.lock` で防止(→ [07-safety.md](./07-safety.md))
 
 ## 7. 技術スタック

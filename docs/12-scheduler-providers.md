@@ -2,7 +2,9 @@
 
 この文書は、Kaizen Loop の定期実行を Codex Automations、Claude Code routines、launchd、cron、その他外部ツールへ広げるための設計仕様である。
 
-現行実装は `nightly` / `afternoon` / `poll` という固定 job を launchd / cron に登録する。しかし、この名前と形は特定の運用パターンに寄っている。provider 対応後の scheduler は、任意の job を `.kaizen/config.yml` に宣言し、その desired state を外部実行基盤へ同期する。
+現行実装は `.kaizen/config.yml` の `scheduler.jobs` に定義した任意 job を macOS では launchd、Linux では cron に同期する。`nightly` / `afternoon` / `poll` の旧固定 job 設定は schema で受け付けない。`scheduler.provider` は schema 上は存在するが、現行の `scheduler sync` は OS に応じた launchd / cron 生成だけを行い、Codex Automations / Claude Code routines / external provider adapter は未実装である。
+
+以降の provider adapter、drift 判定、registry binding、Codex Automation 同期例は将来設計であり、現行 CLI の実装済み範囲は §10 に明記する。
 
 ## 1. 背景と目的
 
@@ -37,11 +39,11 @@
 
 ## 3. Desired State モデル
 
-provider 対応後の設定は、固定フィールドではなく `scheduler.jobs` に任意 job を定義する。起動回数は job 数ではなく `schedule` で表現する。たとえば「1日3回」は `everyHours: 8`、「1日12回」は `everyHours: 2` であり、起動回数が増えても Kaizen Loop 本体のコードは変えない。
+現行設定は、固定フィールドではなく `scheduler.jobs` に任意 job を定義する。起動回数は job 数ではなく `schedule` で表現する。たとえば「1日3回」は `everyHours: 8`、「1日12回」は `everyHours: 2` であり、起動回数が増えても Kaizen Loop 本体のコードは変えない。
 
 ```yaml
 scheduler:
-  provider: codex-automation
+  provider: launchd
   jobs:
     maintenance:
       enabled: true
@@ -109,7 +111,7 @@ schedule:
   times: ["02:45", "10:45", "18:45"]
 ```
 
-`anchorTime` は1日内の起点時刻である。`everyHours: 8` と `anchorTime: "02:45"` は、ローカルタイムで `02:45`, `10:45`, `18:45` に起動する。`everyHours` が24を割り切らない場合や `anchorTime` から日をまたぐ場合は、provider は24時間周期の繰り返しとして扱う。provider で正確に表現できない schedule は `plan` で `unsupported` として報告する。
+`anchorTime` は1日内の起点時刻である。`everyHours: 8` と `anchorTime: "02:45"` は、ローカルタイムで `02:45`, `10:45`, `18:45` に起動する。現行の launchd / cron 実装は、`anchorTime` 付き `everyHours` が24を割り切らない場合は unsupported としてエラーにする。将来の provider-aware `plan` では、provider で正確に表現できない schedule を `unsupported` として報告する。
 
 ### Run policy
 
@@ -163,9 +165,9 @@ interface DesiredSchedulerJob {
 
 ## 4. 旧設定からの置き換え
 
-provider 対応後の scheduler schema は `scheduler.jobs` に一本化する。`scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` は最終仕様では読み続けない。
+現行 scheduler schema は `scheduler.jobs` に一本化している。`scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` は読み続けない。
 
-既存プロジェクトは migration で `scheduler.jobs` へ書き換える。
+既存プロジェクト向けの migration コマンドは未実装である。必要になった場合は、以下のようなコマンドで `scheduler.jobs` へ書き換える想定とする。
 
 ```sh
 kaizen migrate scheduler-jobs [--project <slug>] [--write]
@@ -183,7 +185,7 @@ kaizen migrate scheduler-jobs [--project <slug>] [--write]
 
 - migration は既存設定を読み、`scheduler.jobs` を生成し、旧フィールドを削除する
 - provider 未指定の既存プロジェクトは、macOS なら `launchd`、Linux なら `cron` を migration 時に明示する
-- `--schedule <HH:MM>` は固定 job 前提のため廃止する。schedule 変更は `kaizen scheduler set-schedule --job <id> ...` または config 編集で行う
+- `--schedule <HH:MM>` は固定 job 前提のため、新しい schedule 変更では `kaizen scheduler set-schedule --job <id> ...` または config 編集を使う。現行 CLI の `init --schedule` と `scheduler sync --schedule` は互換用に残っている
 - provider-aware scheduler は `scheduler.jobs` がない config をエラーにする
 
 ## 5. Provider Adapter
@@ -255,7 +257,7 @@ Claude Code routines を使う将来 provider。Codex Automation provider と同
 
 ### external provider
 
-外部ツールや社内スケジューラ向けの escape hatch。Kaizen Loop は直接外部 API を知らず、設定された command / script に desired state JSON を渡す。
+外部ツールや社内スケジューラ向けの将来 escape hatch。Kaizen Loop は直接外部 API を知らず、設定された command / script に desired state JSON を渡す。
 
 ```yaml
 scheduler:
@@ -272,7 +274,7 @@ scheduler:
         mode: maintenance
 ```
 
-external command は `inspect` / `plan` / `apply` / `disable` 相当の subcommand を受け取る。これは provider 実装を追加するまでの統合ポイントとして扱う。
+この `scheduler.external` 設定は現行 schema には存在しない。external command は将来、`inspect` / `plan` / `apply` / `disable` 相当の subcommand を受け取る統合ポイントとして扱う。
 
 ## 6. `kaizen run` との接続
 
@@ -341,6 +343,8 @@ marker の保存場所:
 
 ## 9. 差分判定
 
+この節は provider-aware scheduler の将来設計である。現行の `kaizen scheduler plan` は external actual state や drift を読まず、`sync` が登録対象にする desired job だけを表示する。
+
 `kaizen scheduler plan` は desired state と actual state を比較し、次の action を出す。
 
 | 状態 | action |
@@ -362,14 +366,13 @@ drift の扱い:
 
 ## 10. CLI
 
-provider 対応後に以下のコマンドを追加する。
+現行実装済みの scheduler コマンド:
 
 ```sh
 kaizen scheduler status [--project <slug>] [--json]
 kaizen scheduler plan [--project <slug>] [--json]
-kaizen scheduler sync [--project <slug>] [--force] [--json]
-kaizen scheduler adopt [--project <slug>] [--provider <provider>] [--json]
-kaizen scheduler set-schedule --job <job-id> [--project <slug>] [--json]
+kaizen scheduler sync [--project <slug>] [--schedule <HH:MM>] [--json]
+kaizen scheduler set-schedule --job <job-id> [--project <slug>] (--daily <HH:MM> | --times <HH:MM,...> | --every-hours <N> [--anchor-time <HH:MM>] | --every-minutes <N>) [--json]
 kaizen scheduler disable [--project <slug>] [--all] [--json]
 ```
 
@@ -377,14 +380,22 @@ kaizen scheduler disable [--project <slug>] [--all] [--json]
 
 | コマンド | 役割 |
 |---|---|
-| `status` | desired / actual / registry binding を表示する |
-| `plan` | 外部実体に加える変更を表示し、変更はしない |
-| `sync` | config に合わせて外部実体を作成・更新・無効化する |
-| `adopt` | 既存外部ジョブを Kaizen 管理下に取り込む |
+| `status` | config 上の enabled job、local registry の有効状態、既定 provider 名を表示する |
+| `plan` | `sync` が登録対象にする desired job を表示し、変更はしない |
+| `sync` | config に合わせて launchd plist または cron 行を作成・更新する |
 | `set-schedule` | job の schedule expression を変更する |
 | `disable` | Kaizen 管理ジョブを無効化する |
 
-既存の `kaizen enable` / `kaizen disable` は provider-aware scheduler の導入時に `kaizen scheduler sync` / `kaizen scheduler disable` へ置き換える。ユーザー向けの新しい scheduler 操作は `kaizen scheduler ...` に統一する。
+`kaizen enable` / `kaizen disable` は互換用エイリアスとして残っており、内部では同じ launchd / cron 同期・解除処理を呼ぶ。ユーザー向けの新しい scheduler 操作は `kaizen scheduler ...` に統一する。
+
+provider-aware scheduler で追加予定のコマンド:
+
+```sh
+kaizen scheduler sync [--project <slug>] [--force] [--json]
+kaizen scheduler adopt [--project <slug>] [--provider <provider>] [--json]
+```
+
+`--force` は drift 上書き、`adopt` は Kaizen marker がある既存外部ジョブの registry binding 取り込みに使う想定で、現行 CLI には未実装である。
 
 ## 11. Codex Automation 同期例
 
@@ -451,16 +462,17 @@ Codex Automation は job 実行基盤であり、Issue 選択、排他制御、P
 
 ## 12. 移行計画
 
-1. `scheduler.jobs` の設定仕様を schema に追加する
-2. `kaizen run --job <job-id>` を追加し、job ごとの run policy を適用する
-3. `kaizen migrate scheduler-jobs` を実装し、旧 scheduler 設定を `jobs` へ書き換えられるようにする
-4. `kaizen scheduler status` / `plan` を read-only で実装し、既存 launchd / cron / Codex Automation の drift を可視化する
-5. `codex-automation` provider の `sync` を実装する
-6. `launchd` / `cron` の既存実装を provider adapter へ移す
-7. `kaizen enable` / `disable` を `kaizen scheduler sync` / `disable` へ置き換える
-8. `adopt` で既存 Codex Automation を registry binding に取り込めるようにする
-9. Claude Code routines provider を、永続化 API / ファイル形式が確定した時点で追加する
-10. `doctor` に provider drift チェックを追加する
+1. 完了: `scheduler.jobs` の設定仕様を schema に追加する
+2. 完了: `kaizen run --job <job-id>` を追加し、job ごとの run policy を適用する
+3. 完了: `kaizen scheduler status` / `plan` / `sync` / `set-schedule` / `disable` を launchd / cron 向けに実装する
+4. 未実装: `kaizen migrate scheduler-jobs` を実装し、旧 scheduler 設定を `jobs` へ書き換えられるようにする
+5. 未実装: provider-aware `plan` で既存 launchd / cron / Codex Automation の actual state と drift を可視化する
+6. 未実装: `codex-automation` provider の `sync` を実装する
+7. 未実装: `launchd` / `cron` の既存実装を provider adapter へ移す
+8. 未実装: `kaizen enable` / `disable` を互換 alias として残しつつ、ユーザー向け導線を `kaizen scheduler sync` / `disable` に統一する
+9. 未実装: `adopt` で既存 Codex Automation を registry binding に取り込めるようにする
+10. 未実装: Claude Code routines provider を、永続化 API / ファイル形式が確定した時点で追加する
+11. 未実装: `doctor` に provider drift チェックを追加する
 
 ## 13. 非目標
 

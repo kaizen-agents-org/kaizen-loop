@@ -10,13 +10,18 @@ Commands:
   run         夜間メンテナンスパイプラインを実行する(スケジューラからも呼ばれる)
   fix         Issue を即時修正する(夜間を待たない。→ 09-instant-run.md)
   report      Kaizen Issue を素早く登録する(人間・AI 共用)
+  queue       既存 Issue を queued 実行対象にする
+  unqueue     既存 Issue を queued 実行対象から外す
+  improve     queued/backlog Issue をユーザー操作で即時処理する
   goal        複数 iteration の Goal を作成・実行・評価する
-  watch       kaizen:now ラベルを監視して即時修正する常駐モード(→ 09-instant-run.md)
   status      ループの状態・直近の実行結果を表示する
   scheduler   スケジューラ job を管理する
   logs        実行ログを表示する
   doctor      環境診断・修復
   list        登録済みプロジェクト一覧
+  enable      互換用: scheduler sync と同等
+  disable     互換用: scheduler disable と同等
+  watch       未実装。Phase 4 予定
 
 Global Options:
   --project <slug>   対象プロジェクト指定(省略時はカレントディレクトリから解決)
@@ -48,8 +53,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
    - `.github/ISSUE_TEMPLATE/kaizen.yml`(→ [05-issue-conventions.md](./05-issue-conventions.md))
 4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:goal`, `kaizen:agent:claude`, `kaizen:agent:codex`
 5. **ローカル登録**: `~/.kaizen/registry.json` にプロジェクト追加、専用クローン作成(`~/.kaizen/workspaces/<slug>/`)
-6. **スケジューラ登録**: `kaizen scheduler sync` 相当を実行(`--no-schedule` でスキップ可)
-7. 完了サマリと「次のステップ」(生成ファイルのコミット、最初の Issue 登録方法)を表示
+6. 完了サマリと「次のステップ」(生成ファイルのコミット、`kaizen scheduler sync` によるスケジューラ登録、最初の Issue 登録方法)を表示
 
 ---
 
@@ -85,17 +89,14 @@ kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
 Issue を**即時**に修正する(夜間スケジュールを待たない)。パイプライン・安全装置は `run` と共通で、トリガーと対話性のみが異なる。詳細仕様は [09-instant-run.md](./09-instant-run.md)。
 
 ```
-kaizen fix <Issue番号>                          # 既存 Issue を即時処理
-kaizen fix "<タイトル>" [--body <本文>]          # 起票 + 即時処理
-          [--priority P0|P1|P2] [--direct|--pr-only] [--agent claude|codex]
-          [--yes] [--wait] [--json]
+kaizen fix <Issue番号> [--project <slug>] [--agent claude|codex] [--yes] [--json]
 ```
 
 - TTY 実行時は main への直接 push 前に**確認プロンプト**を出す(`--yes` でスキップ)
 - 非 TTY 時は `instant.unattendedMode`(デフォルト: PR に切替)に従う
-- 夜間実行と同一ロックを共有。実行中なら中止(`--wait` で完了待ち)
+- 夜間実行と同一ロックを共有。実行中なら中止する
 
-Phase 2 で実装する範囲は `kaizen fix <Issue番号>`、`--agent`、`--yes`、`--json`。タイトル指定による起票 + 即時処理と `--wait` は Phase 3 で実装する。
+タイトル指定による起票 + 即時処理は `kaizen report "<タイトル>" --now` を使う。`kaizen fix "<タイトル>"` と `--wait` は未実装。
 
 ---
 
@@ -235,6 +236,8 @@ kaizen scheduler disable [--project <slug>] [--all]
 - `disable` は実行中の run があれば、ロックファイルの PID に SIGTERM を送って中断させる(中断時の安全性は [07-safety.md](./07-safety.md) §4)
 
 新しい scheduler 操作は `kaizen scheduler ...` に統一する。固定名の `nightly` / `afternoon` / `poll` は設定インターフェイスとして扱わない。
+
+`kaizen enable` / `kaizen disable` は互換用エイリアスとして残っており、内部では同じ launchd / cron 同期・解除処理を呼ぶ。新しい手順やドキュメントでは `kaizen scheduler sync` / `kaizen scheduler disable` を使う。
 
 ---
 
