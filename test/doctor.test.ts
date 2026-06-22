@@ -34,12 +34,32 @@ describe('doctorProject', () => {
     expect(output.checks.find((item) => item.name === 'claude auth')?.ok).toBe(true);
     expect(output.checks.find((item) => item.name === 'codex auth')?.ok).toBe(true);
   });
+
+  it('does not create a missing workspace while checking temporary storage', async () => {
+    const { repo, workspace } = await setupProject({ createWorkspace: false });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => result(command, args, options?.cwd, 'ok'));
+
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: runner
+    });
+
+    expect(output.ok).toBe(false);
+    expect(output.checks.find((item) => item.name === 'workspace')?.ok).toBe(false);
+    expect(output.checks.find((item) => item.name === 'temporary directory')?.ok).toBe(false);
+    await expect(fs.access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
-async function setupProject() {
+async function setupProject(options: { createWorkspace?: boolean } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+  if (options.createWorkspace === false) {
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
   vi.stubEnv('KAIZEN_HOME', home);
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   const config = parse(defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })) as Record<string, any>;
@@ -47,7 +67,9 @@ async function setupProject() {
   config.guardian.enabled = false;
   config.issues.selection.excludeLabels = [];
   await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), stringify(config));
-  await fs.mkdir(workspace, { recursive: true });
+  if (options.createWorkspace !== false) {
+    await fs.mkdir(workspace, { recursive: true });
+  }
   await saveRegistry({
     version: 1,
     projects: {
@@ -61,7 +83,7 @@ async function setupProject() {
       }
     }
   });
-  return { repo };
+  return { repo, workspace };
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {

@@ -25,7 +25,9 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!options.repair) return;
     await new GitHubClient(options.runCommand, resolved.project.localPath).createLabels(requiredLabels(loaded));
   });
+  await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
   await check(checks, 'temporary directory', async () => {
+    await fs.access(resolved.project.workspacePath);
     await ensureKaizenTempDir(resolved.project.workspacePath);
   });
   for (const agent of configuredAgents(config)) {
@@ -51,7 +53,6 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!loaded.guardian.enabled) return;
     if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
-  await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
   return { slug: resolved.slug, checks, ok: checks.every((item) => item.ok) };
 }
 
