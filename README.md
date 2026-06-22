@@ -55,7 +55,7 @@ flowchart TB
 
 | Command | Purpose |
 |---|---|
-| `kaizen init` | Install `.kaizen/config.yml`, issue template, labels, registry entry, and workspace for a GitHub repository. Use `kaizen scheduler sync` to install scheduler jobs. |
+| `kaizen init` | Install `.kaizen/config.yml`, issue template, labels, registry entry, workspace, and default scheduler registration. Use `kaizen scheduler sync` to re-sync or repair scheduler jobs. |
 | `kaizen run` | Run the maintenance pipeline once. Use `--dry-run` to inspect issue selection without modifying workspaces or GitHub. |
 | `kaizen fix <issue>` | Process one existing issue immediately with the same safety gates as scheduled runs. |
 | `kaizen report <title>` | Create a Kaizen issue; `--now` creates and immediately processes it. |

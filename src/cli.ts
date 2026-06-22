@@ -18,6 +18,7 @@ import { statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
+import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
 
 const program = new Command();
 
@@ -141,7 +142,7 @@ scheduler
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
     const schedule = parseSchedule(options.schedule ?? project.schedule);
-    const result = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
+    const result = await enableScheduler({ slug: resolved.slug, project, config, runCommand });
     project.enabled = true;
     project.schedule = schedule;
     await saveRegistry(registry);
@@ -170,6 +171,8 @@ scheduler
     const schedulerConfig = ensureRecord(raw, 'scheduler');
     const jobs = ensureRecord(schedulerConfig, 'jobs');
     const jobConfig = ensureRecord(jobs, job);
+    if (typeof jobConfig.enabled !== 'boolean') jobConfig.enabled = true;
+    if (!isRecord(jobConfig.run)) jobConfig.run = defaultSchedulerRun(schedule);
     jobConfig.schedule = schedule;
     await fs.writeFile(configPath, stringify(raw));
     print({ slug: resolved.slug, job, schedule }, Boolean(options.json ?? globals.json));
@@ -184,9 +187,10 @@ scheduler
   .action(async (options) => {
     const globals = program.opts<{ project?: string; json?: boolean }>();
     const registry = await loadRegistry();
+    const resolved = options.all ? undefined : await resolveProject(options.project ?? globals.project, process.cwd());
     const targets = options.all
       ? Object.entries(registry.projects)
-      : [[(await resolveProject(options.project ?? globals.project, process.cwd())).slug, (await resolveProject(options.project ?? globals.project, process.cwd())).project] as const];
+      : [[resolved!.slug, registry.projects[resolved!.slug]] as const];
     const results = [];
     for (const [slug, project] of targets) {
       const schedulerResult = await disableScheduler({ slug, runCommand, terminateRunning: true });
@@ -515,7 +519,7 @@ program
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
     const schedule = parseSchedule(options.schedule ?? project.schedule);
-    const scheduler = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
+    const scheduler = await enableScheduler({ slug: resolved.slug, project, config, runCommand });
     project.enabled = true;
     project.schedule = schedule;
     await saveRegistry(registry);
@@ -531,9 +535,10 @@ program
   .action(async (options) => {
     const globals = program.opts<{ project?: string; json?: boolean }>();
     const registry = await loadRegistry();
+    const resolved = options.all ? undefined : await resolveProject(options.project ?? globals.project, process.cwd());
     const targets = options.all
       ? Object.entries(registry.projects)
-      : [[(await resolveProject(options.project ?? globals.project, process.cwd())).slug, (await resolveProject(options.project ?? globals.project, process.cwd())).project] as const];
+      : [[resolved!.slug, registry.projects[resolved!.slug]] as const];
     const results = [];
     for (const [slug, project] of targets) {
       const scheduler = await disableScheduler({ slug, runCommand, terminateRunning: true });
@@ -668,6 +673,17 @@ function ensureRecord(parent: Record<string, unknown>, key: string): Record<stri
   const next: Record<string, unknown> = {};
   parent[key] = next;
   return next;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function defaultSchedulerRun(schedule: SchedulerSchedule): SchedulerRun {
+  if (schedule.type === 'interval' && schedule.everyMinutes !== undefined) {
+    return { mode: 'watch', skipIfRunning: true };
+  }
+  return { mode: 'maintenance', lateStartGuard: false };
 }
 
 function defaultSchedulerProvider(): 'launchd' | 'cron' {

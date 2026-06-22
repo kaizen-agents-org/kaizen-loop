@@ -59,8 +59,12 @@ interface PullRequestReflection {
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
+  if (options.job) {
+    const configuredJob = config.scheduler.jobs[options.job];
+    if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${options.job}`);
+    if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${options.job}`);
+  }
   const scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
-  if (options.job && !scheduledJob) throw new ConfigError(`Unknown scheduler job: ${options.job}`);
   const trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
   const nowDate = new Date();
   const cutoff = new Date(nowDate);

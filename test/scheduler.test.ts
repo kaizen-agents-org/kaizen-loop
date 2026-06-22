@@ -32,7 +32,6 @@ describe('enableScheduler', () => {
       slug: 'owner-repo',
       project,
       config: configSchema.parse({ version: 1 }),
-      schedule: '02:00',
       runCommand: runner,
       platform: 'linux'
     });
@@ -87,7 +86,6 @@ describe('enableScheduler', () => {
           }
         }
       }),
-      schedule: '01:30',
       runCommand: runner,
       platform: 'linux'
     });
@@ -167,6 +165,45 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'maintenance'");
   });
 
+  it('rejects hourly cron schedules that cannot be represented exactly', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: command === 'crontab' && args[0] === '-l' ? '' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const project: RegistryProject = {
+      repo: 'owner/repo',
+      localPath: '/repo',
+      workspacePath: '/workspace',
+      schedule: '02:00',
+      enabled: false,
+      createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableScheduler({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({
+        version: 1,
+        scheduler: {
+          jobs: {
+            maintenance: {
+              schedule: { type: 'interval', everyHours: 7 },
+              run: { mode: 'maintenance', lateStartGuard: false }
+            }
+          }
+        }
+      }),
+      runCommand: runner,
+      platform: 'linux'
+    })).rejects.toThrow('Unsupported cron hourly interval: everyHours 7');
+  });
+
   it('installs configured watch launchd job with StartInterval', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('HOME', home);
@@ -202,7 +239,6 @@ describe('enableScheduler', () => {
           }
         }
       }),
-      schedule: '02:00',
       runCommand: runner,
       platform: 'darwin'
     });
@@ -250,7 +286,6 @@ describe('enableScheduler', () => {
           }
         }
       }),
-      schedule: '02:00',
       runCommand: runner,
       platform: 'darwin'
     });
@@ -260,6 +295,52 @@ describe('enableScheduler', () => {
     expect(plist).toContain('<key>Label</key><string>com.kaizen-loop.owner-repo.maintenance</string>');
     expect(plist).toContain('<dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>');
     expect(plist).toContain('<string>--job</string><string>maintenance</string>');
+  });
+
+  it('installs configured weekly launchd jobs with weekdays', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('KAIZEN_HOME', home);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const project: RegistryProject = {
+      repo: 'owner/repo',
+      localPath: '/repo',
+      workspacePath: '/workspace',
+      schedule: '02:00',
+      enabled: false,
+      createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    const scheduler = await enableScheduler({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({
+        version: 1,
+        scheduler: {
+          jobs: {
+            maintenance: {
+              schedule: { type: 'weekly', days: ['MO', 'FR'], time: '14:30' },
+              run: { mode: 'maintenance', lateStartGuard: false }
+            }
+          }
+        }
+      }),
+      runCommand: runner,
+      platform: 'darwin'
+    });
+
+    const plist = await fs.readFile(scheduler.paths![0], 'utf8');
+    expect(plist).toContain('<array>');
+    expect(plist).toContain('<key>Weekday</key><integer>1</integer>');
+    expect(plist).toContain('<key>Weekday</key><integer>5</integer>');
+    expect(plist).toContain('<key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer>');
   });
 
   it('fails when launchd bootstrap fails', async () => {
@@ -290,7 +371,6 @@ describe('enableScheduler', () => {
       slug: 'owner-repo',
       project,
       config: configSchema.parse({ version: 1 }),
-      schedule: '02:00',
       runCommand: runner,
       platform: 'darwin'
     })).rejects.toThrow('bootstrap failed');

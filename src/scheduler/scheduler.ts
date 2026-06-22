@@ -9,7 +9,6 @@ export async function enableScheduler(options: {
   slug: string;
   project: RegistryProject;
   config: KaizenConfig;
-  schedule?: string;
   runCommand: CommandRunner;
   platform?: NodeJS.Platform;
 }): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[] }> {
@@ -187,22 +186,28 @@ function launchdSchedule(schedule: SchedulerSchedule): string {
   if (schedule.type === 'interval' && schedule.everyHours !== undefined && schedule.anchorTime === undefined) {
     return launchdInterval(schedule.everyHours * 60);
   }
-  const times = scheduleTimes(schedule);
-  if (times.length === 1) return launchdCalendar(times[0]);
+  const calendars = scheduleCalendars(schedule);
+  if (calendars.length === 1) return launchdCalendar(calendars[0]);
   return `  <key>StartCalendarInterval</key>
   <array>
-${times.map((time) => `    ${launchdCalendarDict(time)}`).join('\n')}
+${calendars.map((calendar) => `    ${launchdCalendarDict(calendar)}`).join('\n')}
   </array>`;
 }
 
-function launchdCalendar(time: string): string {
+function launchdCalendar(calendar: LaunchdCalendar): string {
   return `  <key>StartCalendarInterval</key>
-  ${launchdCalendarDict(time)}`;
+  ${launchdCalendarDict(calendar)}`;
 }
 
-function launchdCalendarDict(time: string): string {
-  const [hour, minute] = time.split(':').map(Number);
-  return `<dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`;
+interface LaunchdCalendar {
+  time: string;
+  day?: 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU';
+}
+
+function launchdCalendarDict(calendar: LaunchdCalendar): string {
+  const [hour, minute] = calendar.time.split(':').map(Number);
+  const weekday = calendar.day ? `<key>Weekday</key><integer>${launchdDay(calendar.day)}</integer>` : '';
+  return `<dict>${weekday}<key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`;
 }
 
 function launchdInterval(intervalMinutes: number): string {
@@ -216,6 +221,9 @@ function cronTimes(schedule: SchedulerSchedule): string[] {
       return [`*/${schedule.everyMinutes} * * * *`];
     }
     if (schedule.everyHours !== undefined && schedule.anchorTime === undefined) {
+      if (24 % schedule.everyHours !== 0) {
+        throw new Error(`Unsupported cron hourly interval: everyHours ${schedule.everyHours}`);
+      }
       return [`0 */${schedule.everyHours} * * *`];
     }
   }
@@ -227,6 +235,13 @@ function cronTimes(schedule: SchedulerSchedule): string[] {
     const [hour, minute] = time.split(':').map(Number);
     return `${minute} ${hour} * * *`;
   });
+}
+
+function scheduleCalendars(schedule: SchedulerSchedule): LaunchdCalendar[] {
+  if (schedule.type === 'weekly') {
+    return schedule.days.map((day) => ({ time: schedule.time, day }));
+  }
+  return scheduleTimes(schedule).map((time) => ({ time }));
 }
 
 function scheduleTimes(schedule: SchedulerSchedule): string[] {
@@ -251,6 +266,10 @@ function intervalTimes(anchorTime: string, everyHours: number): string[] {
 }
 
 function cronDay(day: 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU'): string {
+  return { MO: '1', TU: '2', WE: '3', TH: '4', FR: '5', SA: '6', SU: '0' }[day];
+}
+
+function launchdDay(day: 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU'): string {
   return { MO: '1', TU: '2', WE: '3', TH: '4', FR: '5', SA: '6', SU: '0' }[day];
 }
 

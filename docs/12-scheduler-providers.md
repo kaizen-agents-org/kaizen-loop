@@ -416,7 +416,7 @@ scheduler:
       "action": "create",
       "job": "maintenance",
       "externalId": "kaizen-loop-kaizen-agents-org-kaizen-loop-maintenance",
-      "rrule": "FREQ=DAILY;BYHOUR=2,10,18;BYMINUTE=45;BYSECOND=0"
+      "cron": "45 2,10,18 * * *"
     }
   ]
 }

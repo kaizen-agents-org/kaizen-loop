@@ -49,6 +49,7 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:00' } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 5 } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'interval' }, run: { mode: 'maintenance' } } } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'interval', everyMinutes: 5, anchorTime: '02:00' }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'daily', time: '24:00' }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'times', times: [] }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, run: { maxOpenPullRequests: -1 } })).toThrow();

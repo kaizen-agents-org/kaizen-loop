@@ -20,7 +20,7 @@ flowchart TB
     ADAPT -->|"headless 実行"| EXT1["builder-agent / verifier"]
     GHC -->|"issue / pr / label"| EXT2["GitHub"]
     WSM -->|"clone / fetch / branch"| EXT3["~/.kaizen/workspaces/&lt;slug&gt;/"]
-    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt; --scheduled --trigger scheduled&#124;watch"| CMD
+    SCHED["launchd / cron"] -.->|"kaizen run --project &lt;slug&gt; --scheduled --job maintenance&#124;issue-watch"| CMD
 ```
 
 ### 設計原則
@@ -157,12 +157,11 @@ Kaizen Agents 組織で運用する `kaizen-loop` と `verifier` は、GitHub Is
 スケジューラが実行するコマンド:
 
 ```sh
-kaizen run --project <slug> --scheduled --trigger scheduled
 kaizen run --project <slug> --scheduled --job maintenance
 kaizen run --project <slug> --scheduled --job issue-watch
 ```
 
-`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さない。`--job` は `scheduler.jobs.<job-id>.run` を読み、`maintenance` / `watch`、遅延起動ガード、重複起動スキップを job ごとに適用する。
+`--scheduled` フラグは「無人実行モード」を示し、対話プロンプトを一切出さない。`--job` は `scheduler.jobs.<job-id>.run` を読み、`maintenance` / `watch`、遅延起動ガード、重複起動スキップを job ごとに適用する。`--trigger` は実行サマリの分類を明示したい手動・互換用途に限定し、外部スケジューラが生成するコマンドでは使わない。
 
 ## 6. 複数プロジェクト対応
 

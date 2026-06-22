@@ -21,6 +21,12 @@ const schedulerScheduleSchema = z.discriminatedUnion('type', [
           message: 'interval schedule must set exactly one of everyMinutes or everyHours'
         });
       }
+      if (value.everyMinutes !== undefined && value.anchorTime !== undefined) {
+        context.addIssue({
+          code: 'custom',
+          message: 'anchorTime is not supported with everyMinutes intervals'
+        });
+      }
     }),
   z.object({ type: z.literal('times'), times: z.array(timeString).min(1) }).strict(),
   z.object({ type: z.literal('daily'), time: timeString }).strict(),

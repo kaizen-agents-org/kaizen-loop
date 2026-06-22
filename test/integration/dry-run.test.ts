@@ -9,6 +9,54 @@ import { runKaizen } from '../../src/orchestrator/run.js';
 import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
+  it('reports configured disabled scheduler jobs separately from unknown jobs', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      stringify({
+        version: 1,
+        scheduler: {
+          jobs: {
+            disabled: {
+              enabled: false,
+              schedule: { type: 'daily', time: '02:00' },
+              run: { mode: 'maintenance', lateStartGuard: false }
+            }
+          }
+        }
+      })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      job: 'disabled',
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    })).rejects.toThrow('Scheduler job is disabled: disabled');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('selects issues without acquiring a lock or mutating GitHub', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
