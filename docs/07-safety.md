@@ -14,13 +14,13 @@
 | 回数 | `maxVerifyRetries` / `maxAttemptsPerIssue` / `maxIssuesPerNight` | 無限リトライ・暴走によるトークン浪費 |
 | 時間 | Issue 単位・実行全体のタイムアウト | ハング・長時間占有 |
 | 排他 | `run.lock`(PID 検証つき) | 多重実行による競合 |
-| 停止 | `kaizen disable` / `PAUSE` ファイル / ラベル操作 | 異常時に止められない事態 |
+| 停止 | `kaizen scheduler disable` / `PAUSE` ファイル / ラベル操作 | 異常時に止められない事態 |
 
 ## 2. キルスイッチ(止め方の階層)
 
 | 手段 | 効果 | 即効性 |
 |---|---|---|
-| `kaizen disable` | スケジューラ解除 + 実行中プロセスに SIGTERM | 即時 |
+| `kaizen scheduler disable` | スケジューラ解除 + 実行中プロセスに SIGTERM | 即時 |
 | `touch ~/.kaizen/projects/<slug>/PAUSE` | 次回以降の実行をプリフライトで中止(スケジューラ定義は残る)。SSH 越し・スクリプトから止めたいとき用 | 次回実行から |
 | Issue から `kaizen` ラベルを外す | その Issue だけ対象外に | 次回実行から |
 | `kaizen:needs-human` を付ける | その Issue の自動処理を停止し人間に委ねる | 次回実行から |
@@ -73,7 +73,7 @@
 
 launchd は取りこぼしたスケジュールを起床時に実行するため、「朝 9 時に Mac を開いた瞬間に夜間メンテが走り出す」ことがある。これは仕様として許容するが、以下で制御する:
 
-- 設定 `run.latestStartHour`(デフォルト: 7)— nightly の `scheduled` 実行が大幅に遅れて起動した場合(この時刻を過ぎていたら)、実行をスキップして「スキップした」通知のみ出す(日中の開発と夜間メンテの同時進行を防ぐ)。`scheduler.afternoon` の `afternoon` trigger と `scheduler.poll` の `watch` trigger には適用しない
+- 設定 `run.latestStartHour`(デフォルト: 7)— `run.mode: maintenance` かつ `lateStartGuard: true` の scheduler job が大幅に遅れて起動した場合(この時刻を過ぎていたら)、実行をスキップして「スキップした」通知のみ出す(日中の開発とメンテナンス実行の同時進行を防ぐ)。`lateStartGuard: false` の job や `run.mode: watch` の job には適用しない
 - スキップされた Issue は翌晩そのまま対象になる(取りこぼしによるロストはない)
 
 > `latestStartHour` は [03-config-spec.md](./03-config-spec.md) の `run` セクションに含める(デフォルト 7 時)。

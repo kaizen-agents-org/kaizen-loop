@@ -45,12 +45,11 @@ describe('configSchema', () => {
   });
 
   it('rejects invalid scheduler values', () => {
-    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '24:00' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:60' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '24:00' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:60' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 60 } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:00' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:00' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 5 } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'interval' }, run: { mode: 'maintenance' } } } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'daily', time: '24:00' }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'times', times: [] }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, run: { maxOpenPullRequests: -1 } })).toThrow();
   });

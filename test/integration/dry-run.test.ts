@@ -345,7 +345,7 @@ describe('runKaizen PR flow', () => {
       await fs.writeFile(
         path.join(repo, '.kaizen', 'config.yml'),
         defaultConfigWith(
-          { run: { latestStartHour: 0 }, scheduler: { afternoon: { enabled: true, time: '14:00' } } },
+          { run: { latestStartHour: 0 } },
           { agent: 'claude', setup: null, verify: [] }
         )
       );
@@ -449,7 +449,7 @@ describe('runKaizen PR flow', () => {
     }
   });
 
-  it('skips overlapping scheduled poll runs when skipIfRunning is enabled', async () => {
+  it('skips overlapping scheduled watch jobs when skipIfRunning is enabled', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -457,7 +457,17 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigWith({ scheduler: { poll: { enabled: true } } }, { agent: 'claude', setup: null, verify: [] })
+      defaultConfigWith({
+        scheduler: {
+          jobs: {
+            'issue-watch': {
+              enabled: true,
+              schedule: { type: 'interval', everyMinutes: 5 },
+              run: { mode: 'watch', skipIfRunning: true }
+            }
+          }
+        }
+      }, { agent: 'claude', setup: null, verify: [] })
     );
     await saveRegistry({
       version: 1,
@@ -487,13 +497,13 @@ describe('runKaizen PR flow', () => {
       cwd: repo,
       project: 'o-r',
       scheduled: true,
-      trigger: 'watch',
+      job: 'issue-watch',
       dryRun: false,
       json: true,
       runCommand: runner
     });
 
-    expect('issues' in summary && summary.trigger).toBe('watch');
+    expect('issues' in summary && summary.trigger).toBe('issue-watch');
     expect('issues' in summary && summary.result).toBe('success');
     expect('issues' in summary && summary.issues).toHaveLength(0);
     expect('issues' in summary && summary.skipped).toEqual([{ number: 0, reason: 'run already in progress' }]);

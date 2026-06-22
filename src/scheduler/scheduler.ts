@@ -13,7 +13,7 @@ export async function enableScheduler(options: {
   runCommand: CommandRunner;
   platform?: NodeJS.Platform;
 }): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[] }> {
-  const jobs = schedulerJobs(options.config, options.schedule);
+  const jobs = schedulerJobs(options.config);
   if ((options.platform ?? process.platform) === 'darwin') {
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
@@ -66,39 +66,10 @@ export interface SchedulerJob {
   config: SchedulerJobConfig;
 }
 
-export function schedulerJobs(config: KaizenConfig, scheduleOverride?: string): SchedulerJob[] {
-  if (config.scheduler.jobs) {
-    return Object.entries(config.scheduler.jobs)
-      .filter(([, job]) => job.enabled)
-      .map(([name, job]) => ({ name, config: job }));
-  }
-
-  const jobs: SchedulerJob[] = [];
-  if (config.scheduler.nightly?.enabled || config.scheduler.afternoon?.enabled) {
-    const times = [
-      config.scheduler.nightly?.enabled ? (scheduleOverride ?? config.scheduler.nightly.time) : undefined,
-      config.scheduler.afternoon?.enabled ? config.scheduler.afternoon.time : undefined
-    ].filter((time): time is string => Boolean(time));
-    jobs.push({
-      name: 'maintenance',
-      config: {
-        enabled: true,
-        schedule: times.length === 1 ? { type: 'daily', time: times[0] } : { type: 'times', times },
-        run: { mode: 'maintenance', lateStartGuard: Boolean(config.scheduler.nightly?.enabled) }
-      }
-    });
-  }
-  if (config.scheduler.poll?.enabled) {
-    jobs.push({
-      name: 'issue-watch',
-      config: {
-        enabled: true,
-        schedule: { type: 'interval', everyMinutes: config.scheduler.poll.intervalMinutes },
-        run: { mode: 'watch', skipIfRunning: config.scheduler.poll.skipIfRunning }
-      }
-    });
-  }
-  return jobs;
+export function schedulerJobs(config: KaizenConfig): SchedulerJob[] {
+  return Object.entries(config.scheduler.jobs)
+    .filter(([, job]) => job.enabled)
+    .map(([name, job]) => ({ name, config: job }));
 }
 
 export function schedulerJob(config: KaizenConfig, jobName: string): SchedulerJob | undefined {

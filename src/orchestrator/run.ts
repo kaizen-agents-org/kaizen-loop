@@ -106,7 +106,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   } catch (error) {
     const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
       ? scheduledJob.config.run.skipIfRunning
-      : trigger === 'watch' && (config.scheduler.poll?.skipIfRunning ?? true);
+      : trigger === 'watch';
     if (options.scheduled && skipIfRunning && RunLock.isActiveError(error)) {
       const now = new Date().toISOString();
       return {

@@ -40,7 +40,7 @@ describe('enableScheduler', () => {
     await expect(fs.access(path.join(home, 'projects', 'owner-repo'))).resolves.toBeUndefined();
   });
 
-  it('installs configured nightly, afternoon, and poll cron jobs', async () => {
+  it('installs configured scheduler cron jobs', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('KAIZEN_HOME', home);
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
@@ -50,9 +50,9 @@ describe('enableScheduler', () => {
       stdout:
         command === 'crontab' && args[0] === '-l'
           ? [
-              '# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) nightly',
+              '# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) maintenance',
               '30 1 * * * node kaizen run --project owner-repo --scheduled --trigger scheduled',
-              '# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) afternoon',
+              '# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) old-job',
               '30 13 * * * node kaizen run --project owner-repo --scheduled --trigger afternoon',
               '0 9 * * * node kaizen run --project other-repo --scheduled'
             ].join('\n')
@@ -75,9 +75,16 @@ describe('enableScheduler', () => {
       config: configSchema.parse({
         version: 1,
         scheduler: {
-          nightly: { enabled: true, time: '01:30' },
-          afternoon: { enabled: true, time: '14:30' },
-          poll: { enabled: true, intervalMinutes: 5, skipIfRunning: true }
+          jobs: {
+            maintenance: {
+              schedule: { type: 'times', times: ['01:30', '14:30'] },
+              run: { mode: 'maintenance', lateStartGuard: true }
+            },
+            'issue-watch': {
+              schedule: { type: 'interval', everyMinutes: 5 },
+              run: { mode: 'watch', skipIfRunning: true }
+            }
+          }
         }
       }),
       schedule: '01:30',
@@ -160,7 +167,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'maintenance'");
   });
 
-  it('installs configured poll launchd job with StartInterval', async () => {
+  it('installs configured watch launchd job with StartInterval', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('HOME', home);
     vi.stubEnv('KAIZEN_HOME', home);
@@ -187,8 +194,12 @@ describe('enableScheduler', () => {
       config: configSchema.parse({
         version: 1,
         scheduler: {
-          nightly: { enabled: false, time: '02:00' },
-          poll: { enabled: true, intervalMinutes: 5, skipIfRunning: true }
+          jobs: {
+            'issue-watch': {
+              schedule: { type: 'interval', everyMinutes: 5 },
+              run: { mode: 'watch', skipIfRunning: true }
+            }
+          }
         }
       }),
       schedule: '02:00',
@@ -204,7 +215,7 @@ describe('enableScheduler', () => {
     expect(plist).toContain('<string>--job</string><string>issue-watch</string>');
   });
 
-  it('installs configured afternoon launchd job with StartCalendarInterval', async () => {
+  it('installs configured maintenance launchd job with StartCalendarInterval', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('HOME', home);
     vi.stubEnv('KAIZEN_HOME', home);
@@ -231,9 +242,12 @@ describe('enableScheduler', () => {
       config: configSchema.parse({
         version: 1,
         scheduler: {
-          nightly: { enabled: false, time: '02:00' },
-          afternoon: { enabled: true, time: '14:30' },
-          poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
+          jobs: {
+            maintenance: {
+              schedule: { type: 'daily', time: '14:30' },
+              run: { mode: 'maintenance', lateStartGuard: false }
+            }
+          }
         }
       }),
       schedule: '02:00',

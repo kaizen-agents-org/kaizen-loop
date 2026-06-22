@@ -13,8 +13,7 @@ Commands:
   goal        複数 iteration の Goal を作成・実行・評価する
   watch       kaizen:now ラベルを監視して即時修正する常駐モード(→ 09-instant-run.md)
   status      ループの状態・直近の実行結果を表示する
-  enable      スケジューラを有効化する
-  disable     スケジューラを無効化する(キルスイッチ)
+  scheduler   スケジューラ job を管理する
   logs        実行ログを表示する
   doctor      環境診断・修復
   list        登録済みプロジェクト一覧
@@ -49,7 +48,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
    - `.github/ISSUE_TEMPLATE/kaizen.yml`(→ [05-issue-conventions.md](./05-issue-conventions.md))
 4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:goal`, `kaizen:agent:claude`, `kaizen:agent:codex`
 5. **ローカル登録**: `~/.kaizen/registry.json` にプロジェクト追加、専用クローン作成(`~/.kaizen/workspaces/<slug>/`)
-6. **スケジューラ登録**: `kaizen enable` 相当を実行(`--no-schedule` でスキップ可)
+6. **スケジューラ登録**: `kaizen scheduler sync` 相当を実行(`--no-schedule` でスキップ可)
 7. 完了サマリと「次のステップ」(生成ファイルのコミット、最初の Issue 登録方法)を表示
 
 ---
@@ -215,9 +214,9 @@ kaizen status [--project <slug>] [--metrics] [--json]
 
 ---
 
-## `kaizen enable` / `kaizen disable`
+## `kaizen scheduler`
 
-スケジューラ登録の有効化・無効化。`disable` は**キルスイッチ**であり、即座に確実に止まることを最優先とする。
+スケジューラ登録の確認・同期・無効化。`disable` は**キルスイッチ**であり、即座に確実に止まることを最優先とする。
 
 ```
 kaizen scheduler status [--project <slug>]
@@ -235,7 +234,7 @@ kaizen scheduler disable [--project <slug>] [--all]
 - `disable --all`: 登録済み全プロジェクトを無効化
 - `disable` は実行中の run があれば、ロックファイルの PID に SIGTERM を送って中断させる(中断時の安全性は [07-safety.md](./07-safety.md) §4)
 
-`kaizen enable` / `kaizen disable` は既存互換として残るが、新しい scheduler 操作は `kaizen scheduler ...` に統一する。
+新しい scheduler 操作は `kaizen scheduler ...` に統一する。固定名の `nightly` / `afternoon` / `poll` は設定インターフェイスとして扱わない。
 
 ---
 

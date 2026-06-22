@@ -99,29 +99,7 @@ export const configSchema = z
     scheduler: z
       .object({
         provider: z.enum(['launchd', 'cron', 'codex-automation', 'claude-routine', 'external']).optional(),
-        jobs: z.record(jobIdString, schedulerJobSchema).optional(),
-        nightly: z
-          .object({
-            enabled: z.boolean().default(true),
-            time: timeString.default('02:00')
-          })
-          .strict()
-          .optional(),
-        afternoon: z
-          .object({
-            enabled: z.boolean().default(false),
-            time: timeString.default('14:00')
-          })
-          .strict()
-          .optional(),
-        poll: z
-          .object({
-            enabled: z.boolean().default(false),
-            intervalMinutes: z.number().int().min(1).max(59).default(5),
-            skipIfRunning: z.boolean().default(true)
-          })
-          .strict()
-          .optional()
+        jobs: z.record(jobIdString, schedulerJobSchema).default({})
       })
       .strict()
       .default({

@@ -140,7 +140,7 @@ scheduler
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
-    const schedule = parseSchedule(options.schedule ?? config.scheduler.nightly?.time ?? project.schedule);
+    const schedule = parseSchedule(options.schedule ?? project.schedule);
     const result = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
     project.enabled = true;
     project.schedule = schedule;
@@ -514,7 +514,7 @@ program
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
-    const schedule = parseSchedule(options.schedule ?? config.scheduler.nightly?.time ?? project.schedule);
+    const schedule = parseSchedule(options.schedule ?? project.schedule);
     const scheduler = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
     project.enabled = true;
     project.schedule = schedule;

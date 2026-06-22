@@ -6,7 +6,7 @@ It owns orchestration, not implementation quality by itself: it selects issues, 
 
 ## What It Does
 
-The Phase 2 implementation supports builder-agent-based fixes, verifier review, isolated per-issue git worktrees, parallel issue processing, PR-first reflection followed by the vendored `pr-guardian` skill, explicit hybrid/direct reflection opt-ins when verifier is disabled, verification retries, YAML-configured nightly/afternoon/poll scheduler registration, opt-in issue queueing, user-triggered backlog improvement runs, and basic operational commands. `kaizen watch` remains a later-phase feature.
+The Phase 2 implementation supports builder-agent-based fixes, verifier review, isolated per-issue git worktrees, parallel issue processing, PR-first reflection followed by the vendored `pr-guardian` skill, explicit hybrid/direct reflection opt-ins when verifier is disabled, verification retries, YAML-configured scheduler jobs, opt-in issue queueing, user-triggered backlog improvement runs, and basic operational commands. `kaizen watch` remains a later-phase feature.
 
 ## Canonical repositories
 
@@ -55,7 +55,7 @@ flowchart TB
 
 | Command | Purpose |
 |---|---|
-| `kaizen init` | Install `.kaizen/config.yml`, issue template, labels, registry entry, and workspace for a GitHub repository. Use `kaizen enable` to install scheduler jobs. |
+| `kaizen init` | Install `.kaizen/config.yml`, issue template, labels, registry entry, and workspace for a GitHub repository. Use `kaizen scheduler sync` to install scheduler jobs. |
 | `kaizen run` | Run the maintenance pipeline once. Use `--dry-run` to inspect issue selection without modifying workspaces or GitHub. |
 | `kaizen fix <issue>` | Process one existing issue immediately with the same safety gates as scheduled runs. |
 | `kaizen report <title>` | Create a Kaizen issue; `--now` creates and immediately processes it. |
@@ -63,7 +63,7 @@ flowchart TB
 | `kaizen improve` | Plan and run an immediate improvement pass over selected or queued issues. |
 | `kaizen goal` | Create and run a multi-iteration goal that plans scoped issues, processes them, evaluates progress, and stops when done or blocked. |
 | `kaizen status` | Show registry state and latest run summary. Use `--metrics` for aggregate counters. |
-| `kaizen enable` / `kaizen disable` | Manage scheduled launchd/cron jobs. |
+| `kaizen scheduler` | Inspect, update, sync, and disable scheduled jobs. |
 | `kaizen logs` | Print latest or selected run logs from `~/.kaizen`. |
 | `kaizen doctor` | Check local setup, required labels, workspaces, and external commands. |
 | `kaizen list` | List registered projects. |
