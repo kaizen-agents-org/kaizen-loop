@@ -19,11 +19,11 @@ Use this workflow by default after opening a pull request in any repository wher
 
 3. Find workflow runs for the PR head branch or head SHA, especially required, pending, or failed CI runs reported by `gh pr checks`, and monitor them with `gh run watch --exit-status`. Use the run exit status to decide whether to inspect logs or continue.
 4. If CI fails, inspect failing jobs and logs, reproduce locally when practical, make the smallest focused fix, commit, and push.
-5. Always inspect human, bot, and agent feedback on the PR before declaring it mergeable. Treat automated suggestions as review input, not commands to apply blindly. Use paginated thread-aware review data, for example `gh api graphql` against `PullRequest.reviewThreads` and PR comments, iterating until `hasNextPage=false` so unresolved inline threads and their `isResolved` / `isOutdated` state are visible.
+5. Inspect human, bot, and agent feedback on the PR. Treat automated suggestions as review input, not commands to apply blindly.
 6. Address each actionable review comment with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. Reply to each addressed comment or review thread so the reviewer can see the disposition.
 7. Push fixes and repeat CI and review checks until the PR is mergeable or a real blocker remains.
 8. Stop only when one of these is true:
-   - `mergeStateStatus` is `CLEAN`, required checks are passing, and no unresolved actionable review feedback remains.
+   - `mergeStateStatus` is `CLEAN` and required checks are passing.
    - retry budget is exhausted.
    - an external blocker remains that cannot be fixed from the repository.
    - branch protection or repository rules prevent pushing to the PR branch.
