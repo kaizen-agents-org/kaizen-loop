@@ -16,16 +16,31 @@ run:
   latestStartHour: 7
 
 scheduler:
-  nightly:
-    enabled: true
-    time: "02:45"
-  afternoon:
-    enabled: true
-    time: "14:45"
-  poll:
-    enabled: false
-    intervalMinutes: 5
-    skipIfRunning: true
+  jobs:
+    maintenance:
+      enabled: true
+      schedule:
+        type: daily
+        time: "02:45"
+      run:
+        mode: maintenance
+        lateStartGuard: true
+    maintenance-followup:
+      enabled: true
+      schedule:
+        type: daily
+        time: "14:45"
+      run:
+        mode: maintenance
+        lateStartGuard: false
+    issue-watch:
+      enabled: false
+      schedule:
+        type: interval
+        everyMinutes: 5
+      run:
+        mode: watch
+        skipIfRunning: true
 
 commands:
   setup: "npm ci"

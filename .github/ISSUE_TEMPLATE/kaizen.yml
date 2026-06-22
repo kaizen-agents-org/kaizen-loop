@@ -33,5 +33,5 @@ body:
     id: priority
     attributes:
       label: Priority
-      options: ["P2", "P1", "P0"]
+      options: ["kaizen:P2", "kaizen:P1", "kaizen:P0"]
       default: 0
