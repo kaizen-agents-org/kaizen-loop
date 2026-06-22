@@ -6,7 +6,7 @@
 
 | # | シナリオ | 使うインターフェース |
 |---|---|---|
-| U1 | ドッグフーディング中に不具合を踏んだ。作業を続けたいので今すぐ直してほしい | `kaizen fix "<説明>"`(起票 + 即修正を 1 コマンドで) |
+| U1 | ドッグフーディング中に不具合を踏んだ。作業を続けたいので今すぐ直してほしい | `kaizen report "<説明>" --now`(起票 + 即修正を 1 コマンドで) |
 | U2 | 既存の Kaizen Issue を夜まで待たず処理したい | `kaizen fix <Issue番号>` |
 | U3 | 夜間実行が失敗した Issue を、情報を追記したうえですぐ再試行したい | `kaizen fix <Issue番号>` |
 | U4 | 利用側 AI エージェントが、遭遇した問題の修正をその場で依頼したい | `kaizen report --now --json` |
@@ -16,7 +16,7 @@
 ## 2. 設計原則
 
 1. **パイプラインは夜間と共通**: Issue 選択以外の全工程(ワークスペース同期 → setup → ベースライン検証 → エージェント実行 → 検証 → verifier step / リスク判定 → 反映 → 結果コメント)は [04-nightly-pipeline.md](./04-nightly-pipeline.md) §3〜§8 をそのまま使う。既定は ready-for-review PR 作成で、安全装置([07-safety.md](./07-safety.md))もすべて同一
-2. **Issue が常に記録に残る**: 即時実行でも必ず GitHub Issue を経由する(`kaizen fix "<説明>"` は内部で起票してから処理)。「Issue = 改善の台帳」という原則を崩さない
+2. **Issue が常に記録に残る**: 即時実行でも必ず GitHub Issue を経由する。新規起票して即処理する場合は `kaizen report "<説明>" --now` を使う。「Issue = 改善の台帳」という原則を崩さない
 3. **人間が見ている前提を活かす**: 夜間と違い実行者が端末の前にいるため、**反映前の確認プロンプト**という夜間にはない安全装置を使える
 4. **デイタイム特有のリスクに対応**: 日中の main 直接 push は、開発者のローカル作業と競合しうる。確認プロンプトと設定でコントロールする(→ §5)
 
@@ -25,25 +25,21 @@
 ### 3.1 `kaizen fix` — 即時修正(新コマンド)
 
 ```
-kaizen fix <Issue番号>                          # 既存 Issue を即時処理
-kaizen fix "<タイトル>" [--body <本文>]          # 起票 + 即時処理
-          [--priority P0|P1|P2] [--direct|--pr-only] [--agent claude|codex]
-          [--yes] [--wait] [--json]
+kaizen fix <Issue番号> [--project <slug>] [--agent claude|codex] [--yes] [--json]
 ```
 
 | オプション | 意味 |
 |---|---|
 | `--yes` | 反映前の確認プロンプトをスキップ(夜間と同じ全自動挙動) |
-| `--wait` | 夜間実行などが進行中(ロック取得失敗)のとき、終了を待って実行(デフォルトはメッセージを出して中止) |
-| `--json` | 最終結果を JSON で返す(AI・スクリプト用)。進捗の NDJSON ストリーム出力は Phase 3 |
+| `--json` | 最終結果を JSON で返す(AI・スクリプト用) |
 
-Phase 2 では `kaizen fix <Issue番号>`、`--agent`、`--yes`、`--json` のみ実装する。`kaizen fix "<タイトル>"` と `--wait` は Phase 3 で実装する。
+`kaizen fix` は既存 Issue 番号だけを受け付ける。タイトル指定による起票 + 即時処理は `kaizen report "<タイトル>" --now` を使う。`--wait` は未実装。
 
 #### 実行フロー(夜間との差分のみ)
 
 ```mermaid
 flowchart TB
-    A["起票(タイトル指定時)<br/>kaizen ラベル"] --> B["ロック取得<br/>(失敗時: 中止 or --wait)"]
+    A["既存 Issue 番号を指定"] --> B["ロック取得<br/>(失敗時: 中止)"]
     B --> C["パイプライン §3〜§5<br/>(夜間と完全に同一)"]
     C --> D["verifier step / リスク判定<br/>(夜間と同一ルール)"]
     D -->|直接コミット判定| E{確認プロンプト<br/>(TTY かつ --yes なし)}
@@ -55,9 +51,9 @@ flowchart TB
     G --> H
 ```
 
-- **進捗はフォアグラウンドでストリーム表示**(エージェントの作業ログ、検証結果)。`Ctrl-C` は SIGTERM と同じグレースフルシャットダウン([07-safety.md](./07-safety.md) §2)
-- 直接コミット成功時、**実行したディレクトリがターゲットプロジェクト内であれば「`git pull` で取り込めます」と案内**する(ワークスペースは隔離クローンなので、開発者の作業ツリーには自動反映しない。pull するかは開発者の判断)
-- 結果コメントの機械可読マーカーには `"trigger": "instant"` を記録(定期実行は `"scheduled"` / `"afternoon"`、手動実行は `"manual"`)。試行回数のカウントは夜間と共通
+- 実行結果は通常出力または `--json` で返す。詳細ログは `kaizen logs` で確認する
+- 直接コミット成功時も、変更は隔離ワークスペースから push される。開発者の作業ツリーには自動反映しない
+- 結果コメントの機械可読マーカーには `"trigger": "instant"` を記録する。定期実行では `"scheduled"` や scheduler job id、手動実行では `"manual"` が入る。試行回数のカウントは夜間と共通
 
 ### 3.2 `kaizen report --now` — 起票 + 即時処理(既存コマンドの拡張)
 
@@ -108,7 +104,7 @@ kaizen watch [--project <slug>] [--interval 5m]
 | 状況 | 挙動 |
 |---|---|
 | 即時実行中に夜間スケジュールが発火 | 夜間側はロック取得失敗 → スキップ終了(通知)。Issue は翌晩処理される |
-| 夜間実行中に `kaizen fix` | デフォルト: 「夜間実行中(開始 02:00、Issue #42 処理中)」と表示して中止。`--wait` で完了待ち |
+| 夜間実行中に `kaizen fix` | ロック取得に失敗し、中止する |
 | `kaizen watch` 常駐中の夜間スケジュール | watch はロックを実行中のみ保持(ポーリング待機中は保持しない)ため、通常は競合しない |
 
 ## 5. デイタイム直接コミットのポリシー
@@ -164,7 +160,7 @@ instant:
 
 ## 7. メトリクスへの反映
 
-`summary.json` / 結果コメントの `trigger` フィールド(`scheduled` / `afternoon` / `manual` / `instant` / `watch`)により、`kaizen status --metrics` で以下が比較できる:
+`summary.json` / 結果コメントの `trigger` フィールド(`scheduled`、scheduler job id、`manual`、`instant` など)により、`kaizen status --metrics` で以下が比較できる:
 
 - 即時実行と夜間実行の成功率・所要時間の差
 - 即時実行の利用頻度(高ければ「夜まで待てない問題」が多い = 優先度判定や夜間処理上限の見直しシグナル)
@@ -174,5 +170,5 @@ instant:
 | フェーズ | 内容 |
 |---|---|
 | Phase 2 | `kaizen fix <Issue番号>`(既存 Issue の即時処理。確認プロンプト・ロック共存) |
-| Phase 3 | `kaizen fix "<タイトル>"` / `kaizen report --now`(起票 + 即時処理)、`--json` ストリーム出力、`instant.unattendedMode` |
-| Phase 4 | `kaizen watch`(ラベル駆動の常駐モード) |
+| Phase 3 | `kaizen report --now`(起票 + 即時処理)、`kaizen improve`、`instant.unattendedMode`、`--json` 結果出力 |
+| Phase 4 | `kaizen watch`(ラベル駆動の常駐モード)、`kaizen fix "<タイトル>"` 別名、進捗ストリーム |

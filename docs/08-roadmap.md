@@ -25,7 +25,7 @@
 
 | # | 項目 | 内容 |
 |---|---|---|
-| 2-1 | スケジューラ | launchd plist 生成 / crontab 管理、`enable` / `disable`、`--scheduled` モード、macOS 通知 |
+| 2-1 | スケジューラ | `scheduler.jobs` からの launchd plist 生成 / crontab 管理、`scheduler sync` / `scheduler disable`、互換用 `enable` / `disable`、`--scheduled --job` モード |
 | 2-2 | PR-first 反映 | ready-for-review PR 作成を既定にする。明示 opt-in 用にリスク判定(`decideReflection` 純関数 + 全パターンのユニットテスト)と直接コミット経路(rebase + 再検証 + PR フォールバック)を持つ |
 | 2-3 | 検証リトライ | エラーフィードバック付き再修正(`maxVerifyRetries`) |
 | 2-4 | CodexAdapter | codex exec 対応、フォールバックロジック |
@@ -50,11 +50,12 @@
 | 3-4 | テンプレート登録の自動ラベル | Web UI 登録時の優先度ラベル自動付与(GitHub Actions、任意導入) |
 | 3-5 | ナイトリーサマリ Issue(任意) | 1 晩 1 コメントの集約レポートを GitHub 上にも残すオプション |
 | 3-6 | 複数プロジェクト運用の改善 | 起動時刻の自動分散、`kaizen list` の充実 |
-| 3-7 | 即時実行の拡充 | `kaizen fix "<タイトル>"`(起票 + 即時)、`report --now`、`--json` ストリーム、`instant.unattendedMode` |
+| 3-7 | 即時実行の拡充 | `report --now`、`kaizen improve`、`instant.unattendedMode`、`--json` 結果出力 |
 
 ## Phase 4 — 拡張(必要になったら)
 
-- `kaizen watch`(`kaizen:now` ラベル駆動の常駐即時実行。→ [09-instant-run.md](./09-instant-run.md) §3.3)
+- `kaizen watch`(`kaizen:now` ラベル駆動の常駐即時実行。→ [09-instant-run.md](./09-instant-run.md) §3.4)
+- `kaizen fix "<タイトル>"`(起票 + 即時処理の別名。現行は `kaizen report "<タイトル>" --now` を使う)
 - Scheduler provider 同期(Codex Automations、Claude Code routines、launchd、cron、外部ツールを `.kaizen/config.yml` から `plan` / `sync` / `status` する。→ [12-scheduler-providers.md](./12-scheduler-providers.md))
 - GitHub Actions ランナー対応(マシン非依存の夜間実行)
 - 他ホスティング(GitLab)・他エージェント CLI への対応(アダプタ追加)
