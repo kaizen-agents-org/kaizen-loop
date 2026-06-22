@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import type { CommandRunner } from '../utils/command.js';
+import { ensureKaizenTempDir } from '../utils/temp.js';
 import { parseAgentResult } from './claude.js';
 import type { AgentAdapter, AgentRequest, AgentResult } from './types.js';
 
@@ -20,7 +20,8 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async run(req: AgentRequest): Promise<AgentResult> {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-codex-'));
+    const tempRoot = await ensureKaizenTempDir(req.workspaceDir);
+    const tempDir = await fs.mkdtemp(path.join(tempRoot, 'kaizen-codex-'));
     const outputPath = path.join(tempDir, 'last-message.txt');
     const args = [
       'exec',
