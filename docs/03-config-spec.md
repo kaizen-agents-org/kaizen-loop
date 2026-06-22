@@ -38,18 +38,18 @@ run:
 
 scheduler:
   jobs:
-    scheduled:
+    maintenance:
       enabled: true
       schedule:
-        type: daily          # `kaizen run --scheduled --job scheduled`
+        type: daily          # `kaizen run --scheduled --job maintenance`
         time: "02:45"
       run:
         mode: maintenance
         lateStartGuard: true
-    afternoon:
+    maintenance-followup:
       enabled: true
       schedule:
-        type: daily          # `kaizen run --scheduled --job afternoon`
+        type: daily          # `kaizen run --scheduled --job maintenance-followup`
         time: "14:45"
       run:
         mode: maintenance
