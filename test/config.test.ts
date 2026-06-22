@@ -25,9 +25,16 @@ describe('configSchema', () => {
     });
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.run.maxOpenPullRequests).toBe(1);
-    expect(config.scheduler.nightly).toEqual({ enabled: true, time: '02:00' });
-    expect(config.scheduler.afternoon).toEqual({ enabled: false, time: '14:00' });
-    expect(config.scheduler.poll).toEqual({ enabled: false, intervalMinutes: 5, skipIfRunning: true });
+    expect(config.scheduler.jobs?.maintenance).toEqual({
+      enabled: true,
+      schedule: { type: 'daily', time: '02:00' },
+      run: { mode: 'maintenance', lateStartGuard: true }
+    });
+    expect(config.scheduler.jobs?.['issue-watch']).toEqual({
+      enabled: false,
+      schedule: { type: 'interval', everyMinutes: 5 },
+      run: { mode: 'watch', skipIfRunning: true }
+    });
     expect(config.policy.mode).toBe('pr-only');
     expect(config.issues.priorityOrder).toEqual(['kaizen:P0', 'kaizen:P1', 'kaizen:P2']);
   });
@@ -38,23 +45,34 @@ describe('configSchema', () => {
   });
 
   it('rejects invalid scheduler values', () => {
-    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '24:00' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:60' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '24:00' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:60' } } })).toThrow();
-    expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 60 } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:00' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:00' } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { poll: { intervalMinutes: 5 } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'interval' }, run: { mode: 'maintenance' } } } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'interval', everyMinutes: 5, anchorTime: '02:00' }, run: { mode: 'maintenance' } } } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'daily', time: '24:00' }, run: { mode: 'maintenance' } } } } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'times', times: [] }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, run: { maxOpenPullRequests: -1 } })).toThrow();
   });
 
-  it('accepts the afternoon scheduler slot', () => {
+  it('accepts scheduler jobs', () => {
     const config = configSchema.parse({
       version: 1,
       scheduler: {
-        afternoon: { enabled: true, time: '14:30' }
+        jobs: {
+          maintenance: {
+            schedule: { type: 'interval', everyHours: 8, anchorTime: '02:45' },
+            run: { mode: 'maintenance', lateStartGuard: false }
+          }
+        }
       }
     });
 
-    expect(config.scheduler.afternoon).toEqual({ enabled: true, time: '14:30' });
+    expect(config.scheduler.jobs?.maintenance).toEqual({
+      enabled: true,
+      schedule: { type: 'interval', everyHours: 8, anchorTime: '02:45' },
+      run: { mode: 'maintenance', lateStartGuard: false }
+    });
   });
 
   it('parses generated yaml shape', () => {

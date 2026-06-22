@@ -46,18 +46,29 @@ export function defaultConfigYaml(options: {
       latestStartHour: 7
     },
     scheduler: {
-      nightly: {
-        enabled: true,
-        time: options.schedule ?? '02:00'
-      },
-      afternoon: {
-        enabled: false,
-        time: '14:00'
-      },
-      poll: {
-        enabled: false,
-        intervalMinutes: 5,
-        skipIfRunning: true
+      jobs: {
+        maintenance: {
+          enabled: true,
+          schedule: {
+            type: 'daily',
+            time: options.schedule ?? '02:00'
+          },
+          run: {
+            mode: 'maintenance',
+            lateStartGuard: true
+          }
+        },
+        'issue-watch': {
+          enabled: false,
+          schedule: {
+            type: 'interval',
+            everyMinutes: 5
+          },
+          run: {
+            mode: 'watch',
+            skipIfRunning: true
+          }
+        }
       }
     },
     commands: {

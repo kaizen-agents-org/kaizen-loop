@@ -9,6 +9,54 @@ import { runKaizen } from '../../src/orchestrator/run.js';
 import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
+  it('reports configured disabled scheduler jobs separately from unknown jobs', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      stringify({
+        version: 1,
+        scheduler: {
+          jobs: {
+            disabled: {
+              enabled: false,
+              schedule: { type: 'daily', time: '02:00' },
+              run: { mode: 'maintenance', lateStartGuard: false }
+            }
+          }
+        }
+      })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      job: 'disabled',
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    })).rejects.toThrow('Scheduler job is disabled: disabled');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('selects issues without acquiring a lock or mutating GitHub', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
@@ -345,7 +393,7 @@ describe('runKaizen PR flow', () => {
       await fs.writeFile(
         path.join(repo, '.kaizen', 'config.yml'),
         defaultConfigWith(
-          { run: { latestStartHour: 0 }, scheduler: { afternoon: { enabled: true, time: '14:00' } } },
+          { run: { latestStartHour: 0 } },
           { agent: 'claude', setup: null, verify: [] }
         )
       );
@@ -388,7 +436,68 @@ describe('runKaizen PR flow', () => {
     }
   });
 
-  it('skips overlapping scheduled poll runs when skipIfRunning is enabled', async () => {
+  it('runs scheduler jobs with lateStartGuard disabled after latestStartHour', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-12T12:00:00Z'));
+    try {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+      const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+      vi.stubEnv('KAIZEN_HOME', home);
+      await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+      await fs.writeFile(
+        path.join(repo, '.kaizen', 'config.yml'),
+        defaultConfigWith(
+          {
+            run: { latestStartHour: 0 },
+            scheduler: {
+              jobs: {
+                maintenance: {
+                  enabled: true,
+                  schedule: { type: 'interval', everyHours: 8, anchorTime: '02:45' },
+                  run: { mode: 'maintenance', lateStartGuard: false }
+                }
+              }
+            }
+          },
+          { agent: 'claude', setup: null, verify: [] }
+        )
+      );
+      await saveRegistry({
+        version: 1,
+        projects: {
+          'o-r': {
+            repo: 'o/r',
+            localPath: repo,
+            workspacePath: workspace,
+            schedule: '02:00',
+            enabled: true,
+            createdAt: '2026-06-12T00:00:00Z'
+          }
+        }
+      });
+
+      const runner = vi.fn<CommandRunner>(async (command, args) => result(command, args, repo, JSON.stringify([])));
+
+      const summary = await runKaizen({
+        cwd: repo,
+        project: 'o-r',
+        scheduled: true,
+        job: 'maintenance',
+        dryRun: false,
+        json: true,
+        runCommand: runner
+      });
+
+      expect(runner).toHaveBeenCalledWith('gh', expect.arrayContaining(['issue', 'list']), expect.any(Object));
+      expect('issues' in summary && summary.trigger).toBe('maintenance');
+      expect('issues' in summary && summary.skipped).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips overlapping scheduled watch jobs when skipIfRunning is enabled', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -396,7 +505,17 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigWith({ scheduler: { poll: { enabled: true } } }, { agent: 'claude', setup: null, verify: [] })
+      defaultConfigWith({
+        scheduler: {
+          jobs: {
+            'issue-watch': {
+              enabled: true,
+              schedule: { type: 'interval', everyMinutes: 5 },
+              run: { mode: 'watch', skipIfRunning: true }
+            }
+          }
+        }
+      }, { agent: 'claude', setup: null, verify: [] })
     );
     await saveRegistry({
       version: 1,
@@ -426,13 +545,13 @@ describe('runKaizen PR flow', () => {
       cwd: repo,
       project: 'o-r',
       scheduled: true,
-      trigger: 'watch',
+      job: 'issue-watch',
       dryRun: false,
       json: true,
       runCommand: runner
     });
 
-    expect('issues' in summary && summary.trigger).toBe('watch');
+    expect('issues' in summary && summary.trigger).toBe('issue-watch');
     expect('issues' in summary && summary.result).toBe('success');
     expect('issues' in summary && summary.issues).toHaveLength(0);
     expect('issues' in summary && summary.skipped).toEqual([{ number: 0, reason: 'run already in progress' }]);
@@ -1298,7 +1417,7 @@ function defaultConfigWith(
 
 function mergeConfig(target: Record<string, unknown>, source: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(source)) {
-    if (isPlainObject(value) && isPlainObject(target[key])) {
+    if (isPlainObject(value) && isPlainObject(target[key]) && !('type' in value)) {
       mergeConfig(target[key], value);
     } else {
       target[key] = value;

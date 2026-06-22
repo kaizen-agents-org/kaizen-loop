@@ -55,6 +55,7 @@
 ## Phase 4 — 拡張(必要になったら)
 
 - `kaizen watch`(`kaizen:now` ラベル駆動の常駐即時実行。→ [09-instant-run.md](./09-instant-run.md) §3.3)
+- Scheduler provider 同期(Codex Automations、Claude Code routines、launchd、cron、外部ツールを `.kaizen/config.yml` から `plan` / `sync` / `status` する。→ [12-scheduler-providers.md](./12-scheduler-providers.md))
 - GitHub Actions ランナー対応(マシン非依存の夜間実行)
 - 他ホスティング(GitLab)・他エージェント CLI への対応(アダプタ追加)
 - Issue の自動トリアージ(重複検知・優先度提案)

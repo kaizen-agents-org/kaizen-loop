@@ -28,7 +28,7 @@ agent:
     codex: null              # 例: "gpt-5-codex"
 
 run:
-  maxIssuesPerNight: 3       # scheduled/afternoon 1 回あたりに処理する Issue の上限
+  maxIssuesPerNight: 3       # 自動実行 1 回あたりに処理する Issue の上限
   issueTimeoutMinutes: 120   # 1 Issue あたりのエージェント実行タイムアウト
   runTimeoutMinutes: 240     # 実行全体のタイムアウト(超過時は残 Issue をスキップして終了処理)
   maxVerifyRetries: 2        # 検証失敗時、エラーを添えてエージェントに再修正させる回数
@@ -37,16 +37,24 @@ run:
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
 scheduler:
-  nightly:
-    enabled: true
-    time: "02:00"            # `kaizen run --scheduled --trigger scheduled`
-  afternoon:
-    enabled: false
-    time: "14:00"            # `kaizen run --scheduled --trigger afternoon`
-  poll:
-    enabled: false
-    intervalMinutes: 5       # `kaizen run --scheduled --trigger watch`
-    skipIfRunning: true      # 実体は run.lock。前回run中なら次の起動は即終了
+  jobs:
+    maintenance:
+      enabled: true
+      schedule:
+        type: interval       # `kaizen run --scheduled --job maintenance`
+        everyHours: 8
+        anchorTime: "02:45"  # 02:45 / 10:45 / 18:45
+      run:
+        mode: maintenance
+        lateStartGuard: false
+    issue-watch:
+      enabled: false
+      schedule:
+        type: interval       # `kaizen run --scheduled --job issue-watch`
+        everyMinutes: 5
+      run:
+        mode: watch
+        skipIfRunning: true  # 実体は run.lock。前回run中なら次の起動は即終了
 
 commands:
   # ワークスペース reset 後、ベースライン検証前と作業ブランチ作成前に実行(依存インストール等)。null ならスキップ
@@ -151,7 +159,7 @@ issues:
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
-- `run.maxOpenPullRequests` は scheduled / afternoon / watch の自動実行にだけ適用する repo 別 backpressure。open PR 数が上限以上なら新しい Issue は選択せず、`kaizen fix` / `--issue` の明示実行は止めない
+- `run.maxOpenPullRequests` は scheduler job などの自動実行にだけ適用する repo 別 backpressure。open PR 数が上限以上なら新しい Issue は選択せず、`kaizen fix` / `--issue` の明示実行は止めない
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
 - `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、未解決の actionable review feedback 対応、レビューコメントへの返信は skill 側の責務
 - `goal.agent` は Goal planner / evaluator の呼び出し設定。`KAIZEN_GOAL_RESULT_PATH` に JSON を書くか、stdout の最後に JSON を出す。Goal runner はこの agent に実装や GitHub 操作をさせず、Issue 作成と既存 pipeline の呼び出しを自分で行う
@@ -164,7 +172,7 @@ issues:
 
 ## 2. ローカル登録簿 `~/.kaizen/registry.json`
 
-`kaizen init` / `enable` / `disable` が管理する。手編集は想定しない(`kaizen list` / `doctor` で参照・修復)。
+`kaizen init` / `kaizen scheduler sync` / `kaizen scheduler disable` が管理する。手編集は想定しない(`kaizen list` / `doctor` で参照・修復)。
 
 ```json
 {
@@ -236,6 +244,8 @@ issues:
 
 ## 4. スケジューラ定義(生成物)
 
+この節は現行の launchd / cron 生成物を定義する。Codex Automations、Claude Code routines、外部スケジューラへ同じ scheduler 設定を同期する provider 設計は [12-scheduler-providers.md](./12-scheduler-providers.md) を参照。
+
 ### macOS — `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job>.plist`
 
 ```xml
@@ -244,7 +254,7 @@ issues:
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.nightly</string>
+  <key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.maintenance</string>
   <key>ProgramArguments</key>
   <array>
     <string>/path/to/node</string>
@@ -252,24 +262,28 @@ issues:
     <string>run</string>
     <string>--project</string><string>s-hiraoku-myapp</string>
     <string>--scheduled</string>
-    <string>--trigger</string><string>scheduled</string>
+    <string>--job</string><string>maintenance</string>
   </array>
   <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
+  <array>
+    <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>45</integer></dict>
+  </array>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string></dict>
   <key>StandardOutPath</key>
-  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/nightly.launchd.out.log</string>
+  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/maintenance.launchd.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/nightly.launchd.err.log</string>
+  <string>/Users/me/.kaizen/projects/s-hiraoku-myapp/maintenance.launchd.err.log</string>
 </dict>
 </plist>
 ```
 
-`scheduler.afternoon.enabled: true` / `scheduler.poll.enabled: true` の場合はそれぞれ別 plist を生成する。afternoon は時刻指定、poll は間隔指定:
+`scheduler.jobs` の enabled job ごとに別 plist を生成する。たとえば watch job は `StartInterval` と `--job issue-watch` を使う:
 
 ```xml
-<key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.afternoon</string>
+<key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.issue-watch</string>
 <key>ProgramArguments</key>
 <array>
   <string>/path/to/node</string>
@@ -277,20 +291,7 @@ issues:
   <string>run</string>
   <string>--project</string><string>s-hiraoku-myapp</string>
   <string>--scheduled</string>
-  <string>--trigger</string><string>afternoon</string>
-</array>
-<key>StartCalendarInterval</key>
-<dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
-
-<key>Label</key><string>com.kaizen-loop.s-hiraoku-myapp.poll</string>
-<key>ProgramArguments</key>
-<array>
-  <string>/path/to/node</string>
-  <string>/path/to/kaizen</string>
-  <string>run</string>
-  <string>--project</string><string>s-hiraoku-myapp</string>
-  <string>--scheduled</string>
-  <string>--trigger</string><string>watch</string>
+  <string>--job</string><string>issue-watch</string>
 </array>
 <key>StartInterval</key><integer>300</integer>
 ```
@@ -305,15 +306,15 @@ issues:
 ### Linux — crontab エントリ
 
 ```cron
-# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) nightly
-0 2 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'scheduled' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/nightly.cron.log' 2>&1
-# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) afternoon
-0 14 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'afternoon' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/afternoon.cron.log' 2>&1
-# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) poll
-*/5 * * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --trigger 'watch' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/poll.cron.log' 2>&1
+# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) maintenance
+45 2 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --job 'maintenance' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/maintenance.cron.log' 2>&1
+45 10 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --job 'maintenance' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/maintenance.cron.log' 2>&1
+45 18 * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --job 'maintenance' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/maintenance.cron.log' 2>&1
+# KAIZEN-LOOP s-hiraoku-myapp (managed by kaizen-loop; do not edit) issue-watch
+*/5 * * * * '/path/to/node' '/path/to/kaizen' run --project 's-hiraoku-myapp' --scheduled --job 'issue-watch' >> '/Users/alice/.kaizen/projects/s-hiraoku-myapp/issue-watch.cron.log' 2>&1
 ```
 
-マーカーコメントで kaizen 管理行を識別し、`enable` / `disable` はその行のみを追加・削除する。afternoon は `run.latestStartHour` の朝の遅延実行ガード対象外で、午後の意図した定時起動として扱う。poll は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、前回 run が続いていれば `run.lock` によりスキップされる。
+マーカーコメントで kaizen 管理行を識別し、`scheduler sync` / `scheduler disable` はその行のみを追加・削除する。`run.mode: watch` の job は対象 Issue がなければ `gh issue list` 後に即終了する軽量起動であり、`skipIfRunning: true` なら前回 run が続いている場合に `run.lock` でスキップされる。
 
 注意点(実装時の要件):
 

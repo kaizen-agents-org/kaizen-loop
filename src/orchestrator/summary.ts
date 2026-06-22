@@ -25,7 +25,7 @@ export interface RunSummary {
   project: string;
   startedAt: string;
   finishedAt: string;
-  trigger: 'manual' | 'scheduled' | 'afternoon' | 'instant' | 'watch';
+  trigger: string;
   result: 'success' | 'failed' | 'partial';
   issues: RunIssueSummary[];
   skipped: Array<{ number: number; reason: string }>;

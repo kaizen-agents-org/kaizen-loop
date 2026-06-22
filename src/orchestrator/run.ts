@@ -20,12 +20,14 @@ import { RunLock } from './lock.js';
 import { runPrGuardianSkill, type PrGuardianSkillResult } from './prGuardian.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
 import type { RunIssueSummary, RunSummary } from './summary.js';
+import { schedulerJob } from '../scheduler/scheduler.js';
 
 export interface RunOptions {
   cwd: string;
   project?: string;
   scheduled: boolean;
   trigger?: 'manual' | 'scheduled' | 'afternoon' | 'instant' | 'watch';
+  job?: string;
   issue?: number;
   issueNumbers?: number[];
   dryRun: boolean;
@@ -57,15 +59,25 @@ interface PullRequestReflection {
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
-  const trigger = options.trigger ?? (options.scheduled ? 'scheduled' : 'manual');
+  if (options.job) {
+    const configuredJob = config.scheduler.jobs[options.job];
+    if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${options.job}`);
+    if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${options.job}`);
+  }
+  const scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
+  const trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
   const nowDate = new Date();
   const cutoff = new Date(nowDate);
   cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
-  const skipLatestStart = options.scheduled && trigger === 'scheduled' && nowDate > cutoff;
+  const lateStartGuard = scheduledJob?.config.run.mode === 'maintenance'
+    ? scheduledJob.config.run.lateStartGuard
+    : trigger === 'scheduled';
+  const skipLatestStart = options.scheduled && lateStartGuard && nowDate > cutoff;
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const selectRunIssues = async () => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
-    const maxIssues = options.maxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
+    const jobMaxIssues = scheduledJob?.config.run.maxIssues;
+    const maxIssues = options.maxIssues ?? jobMaxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
     const requestedIssues = requestedIssueNumbers
       ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
       : undefined;
@@ -96,7 +108,10 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   try {
     lock = await RunLock.acquire(stateDir);
   } catch (error) {
-    if (options.scheduled && trigger === 'watch' && config.scheduler.poll.skipIfRunning && RunLock.isActiveError(error)) {
+    const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
+      ? scheduledJob.config.run.skipIfRunning
+      : trigger === 'watch';
+    if (options.scheduled && skipIfRunning && RunLock.isActiveError(error)) {
       const now = new Date().toISOString();
       return {
         version: 1,
