@@ -226,6 +226,7 @@ kaizen disable [--project <slug>] [--all]
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
 - `enable` は `.kaizen/config.yml` の `scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` を読み、nightly、afternoon、poll をそれぞれ登録する。`--schedule` は nightly の時刻だけを一時上書きする
+- Codex Automations / Claude Code routines などを含む provider-aware scheduler では、`kaizen scheduler plan|sync|status|adopt|disable` に操作を統一する。新仕様では `enable` / `disable` は置き換え対象とする(→ [12-scheduler-providers.md](./12-scheduler-providers.md))
 - `disable --all`: 登録済み全プロジェクトを無効化
 - `disable` は実行中の run があれば、ロックファイルの PID に SIGTERM を送って中断させる(中断時の安全性は [07-safety.md](./07-safety.md) §4)
 

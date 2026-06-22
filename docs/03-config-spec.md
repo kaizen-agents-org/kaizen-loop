@@ -236,6 +236,8 @@ issues:
 
 ## 4. スケジューラ定義(生成物)
 
+この節は現行の launchd / cron 生成物を定義する。Codex Automations、Claude Code routines、外部スケジューラへ同じ scheduler 設定を同期する provider 設計は [12-scheduler-providers.md](./12-scheduler-providers.md) を参照。
+
 ### macOS — `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job>.plist`
 
 ```xml

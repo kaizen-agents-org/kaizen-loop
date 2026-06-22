@@ -147,6 +147,8 @@ Kaizen Agents 組織で運用する `kaizen-loop` と `verifier` は、GitHub Is
 
 ## 5. スケジューラ
 
+現行実装は launchd / cron を直接管理する。Codex Automations、Claude Code routines、外部スケジューラを含む provider 同期レイヤーの設計は [12-scheduler-providers.md](./12-scheduler-providers.md) に分離する。
+
 | OS | 機構 | 特性 |
 |---|---|---|
 | macOS | launchd (LaunchAgent, `StartCalendarInterval` / `StartInterval`) | nightly / afternoon は時刻指定、poll は `StartInterval`。`kaizen enable` で job ごとの plist を生成・ロード |
