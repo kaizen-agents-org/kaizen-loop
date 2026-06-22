@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { KaizenConfig, RegistryProject } from '../config/schema.js';
+import type { KaizenConfig, RegistryProject, SchedulerJobConfig, SchedulerSchedule } from '../config/schema.js';
 import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
 
@@ -34,7 +34,9 @@ export async function enableScheduler(options: {
   const lines = removeManagedCronLines(current.stdout, options.slug).filter((line) => line.trim());
   for (const job of jobs) {
     lines.push(`# ${marker} ${job.name}`);
-    lines.push(`${cronTime(job)} ${commandLine(options.slug, job)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+    for (const cronTime of cronTimes(job.config.schedule)) {
+      lines.push(`${cronTime} ${commandLine(options.slug, job)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+    }
   }
   await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
   return { type: 'cron', jobs };
@@ -60,24 +62,47 @@ export async function disableScheduler(options: {
 }
 
 export interface SchedulerJob {
-  name: 'nightly' | 'afternoon' | 'poll';
-  trigger: 'scheduled' | 'afternoon' | 'watch';
-  time?: string;
-  intervalMinutes?: number;
+  name: string;
+  config: SchedulerJobConfig;
 }
 
-function schedulerJobs(config: KaizenConfig, scheduleOverride?: string): SchedulerJob[] {
+export function schedulerJobs(config: KaizenConfig, scheduleOverride?: string): SchedulerJob[] {
+  if (config.scheduler.jobs) {
+    return Object.entries(config.scheduler.jobs)
+      .filter(([, job]) => job.enabled)
+      .map(([name, job]) => ({ name, config: job }));
+  }
+
   const jobs: SchedulerJob[] = [];
-  if (config.scheduler.nightly.enabled) {
-    jobs.push({ name: 'nightly', trigger: 'scheduled', time: scheduleOverride ?? config.scheduler.nightly.time });
+  if (config.scheduler.nightly?.enabled || config.scheduler.afternoon?.enabled) {
+    const times = [
+      config.scheduler.nightly?.enabled ? (scheduleOverride ?? config.scheduler.nightly.time) : undefined,
+      config.scheduler.afternoon?.enabled ? config.scheduler.afternoon.time : undefined
+    ].filter((time): time is string => Boolean(time));
+    jobs.push({
+      name: 'maintenance',
+      config: {
+        enabled: true,
+        schedule: times.length === 1 ? { type: 'daily', time: times[0] } : { type: 'times', times },
+        run: { mode: 'maintenance', lateStartGuard: Boolean(config.scheduler.nightly?.enabled) }
+      }
+    });
   }
-  if (config.scheduler.afternoon.enabled) {
-    jobs.push({ name: 'afternoon', trigger: 'afternoon', time: config.scheduler.afternoon.time });
-  }
-  if (config.scheduler.poll.enabled) {
-    jobs.push({ name: 'poll', trigger: 'watch', intervalMinutes: config.scheduler.poll.intervalMinutes });
+  if (config.scheduler.poll?.enabled) {
+    jobs.push({
+      name: 'issue-watch',
+      config: {
+        enabled: true,
+        schedule: { type: 'interval', everyMinutes: config.scheduler.poll.intervalMinutes },
+        run: { mode: 'watch', skipIfRunning: config.scheduler.poll.skipIfRunning }
+      }
+    });
   }
   return jobs;
+}
+
+export function schedulerJob(config: KaizenConfig, jobName: string): SchedulerJob | undefined {
+  return schedulerJobs(config).find((job) => job.name === jobName);
 }
 
 function legacyLaunchdPlistPath(slug: string): string {
@@ -90,7 +115,7 @@ function launchdPlistPath(slug: string, jobName: string): string {
 
 function launchdPlist(slug: string, job: SchedulerJob): string {
   const stateDir = projectStateDir(slug);
-  const schedule = job.time ? launchdCalendar(job.time) : launchdInterval(job.intervalMinutes ?? 5);
+  const schedule = launchdSchedule(job.config.schedule);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -104,7 +129,7 @@ function launchdPlist(slug: string, job: SchedulerJob): string {
     <string>run</string>
     <string>--project</string><string>${escapeXml(slug)}</string>
     <string>--scheduled</string>
-    <string>--trigger</string><string>${job.trigger}</string>
+    <string>--job</string><string>${escapeXml(job.name)}</string>
   </array>
 ${schedule}
   <key>EnvironmentVariables</key>
@@ -120,30 +145,35 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function cronTime(job: SchedulerJob): string {
-  if (job.name === 'poll') return `*/${job.intervalMinutes ?? 5} * * * *`;
-  const [hour, minute] = (job.time ?? '02:00').split(':');
-  return `${Number(minute)} ${Number(hour)} * * *`;
-}
-
 function commandLine(slug: string, job: SchedulerJob): string {
-  return `${shQuote(process.execPath)} ${shQuote(cliPath())} run --project ${shQuote(slug)} --scheduled --trigger ${shQuote(job.trigger)}`;
+  return `${shQuote(process.execPath)} ${shQuote(cliPath())} run --project ${shQuote(slug)} --scheduled --job ${shQuote(job.name)}`;
 }
 
 async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Promise<string[]> {
-  const paths = [
+  const launchAgentsDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
+  const paths = new Set<string>([
     legacyLaunchdPlistPath(slug),
     launchdPlistPath(slug, 'nightly'),
     launchdPlistPath(slug, 'afternoon'),
     launchdPlistPath(slug, 'poll')
-  ];
+  ]);
+  try {
+    const entries = await fs.readdir(launchAgentsDir);
+    for (const entry of entries) {
+      if (entry.startsWith(`com.kaizen-loop.${slug}.`) && entry.endsWith('.plist')) {
+        paths.add(path.join(launchAgentsDir, entry));
+      }
+    }
+  } catch {
+    // LaunchAgents may not exist yet.
+  }
   for (const plistPath of paths) {
     await runCommand('launchctl', ['bootout', `gui/${process.getuid?.() ?? ''}`, plistPath], {
       rejectOnNonZero: false
     });
     await fs.rm(plistPath, { force: true });
   }
-  return paths;
+  return [...paths];
 }
 
 function removeManagedCronLines(crontab: string, slug: string): string[] {
@@ -179,14 +209,78 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function launchdCalendar(time: string): string {
-  const [hour, minute] = time.split(':').map(Number);
+function launchdSchedule(schedule: SchedulerSchedule): string {
+  if (schedule.type === 'interval' && schedule.everyMinutes !== undefined && schedule.anchorTime === undefined) {
+    return launchdInterval(schedule.everyMinutes);
+  }
+  if (schedule.type === 'interval' && schedule.everyHours !== undefined && schedule.anchorTime === undefined) {
+    return launchdInterval(schedule.everyHours * 60);
+  }
+  const times = scheduleTimes(schedule);
+  if (times.length === 1) return launchdCalendar(times[0]);
   return `  <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`;
+  <array>
+${times.map((time) => `    ${launchdCalendarDict(time)}`).join('\n')}
+  </array>`;
+}
+
+function launchdCalendar(time: string): string {
+  return `  <key>StartCalendarInterval</key>
+  ${launchdCalendarDict(time)}`;
+}
+
+function launchdCalendarDict(time: string): string {
+  const [hour, minute] = time.split(':').map(Number);
+  return `<dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`;
 }
 
 function launchdInterval(intervalMinutes: number): string {
   return `  <key>StartInterval</key><integer>${intervalMinutes * 60}</integer>`;
+}
+
+function cronTimes(schedule: SchedulerSchedule): string[] {
+  if (schedule.type === 'interval') {
+    if (schedule.everyMinutes !== undefined) {
+      if (schedule.everyMinutes > 59) throw new Error(`Unsupported cron interval: everyMinutes ${schedule.everyMinutes}`);
+      return [`*/${schedule.everyMinutes} * * * *`];
+    }
+    if (schedule.everyHours !== undefined && schedule.anchorTime === undefined) {
+      return [`0 */${schedule.everyHours} * * *`];
+    }
+  }
+  if (schedule.type === 'weekly') {
+    const [hour, minute] = schedule.time.split(':').map(Number);
+    return [`${minute} ${hour} * * ${schedule.days.map(cronDay).join(',')}`];
+  }
+  return scheduleTimes(schedule).map((time) => {
+    const [hour, minute] = time.split(':').map(Number);
+    return `${minute} ${hour} * * *`;
+  });
+}
+
+function scheduleTimes(schedule: SchedulerSchedule): string[] {
+  if (schedule.type === 'daily') return [schedule.time];
+  if (schedule.type === 'times') return schedule.times;
+  if (schedule.type === 'interval' && schedule.everyHours !== undefined && schedule.anchorTime !== undefined) {
+    return intervalTimes(schedule.anchorTime, schedule.everyHours);
+  }
+  if (schedule.type === 'rrule') throw new Error('RRULE schedules are not supported by launchd/cron providers yet.');
+  throw new Error(`Unsupported calendar schedule: ${JSON.stringify(schedule)}`);
+}
+
+function intervalTimes(anchorTime: string, everyHours: number): string[] {
+  if (24 % everyHours !== 0) throw new Error(`Unsupported anchored hourly interval: everyHours ${everyHours}`);
+  const [anchorHour, anchorMinute] = anchorTime.split(':').map(Number);
+  const times: string[] = [];
+  for (let offset = 0; offset < 24; offset += everyHours) {
+    const hour = (anchorHour + offset) % 24;
+    times.push(`${String(hour).padStart(2, '0')}:${String(anchorMinute).padStart(2, '0')}`);
+  }
+  return [...new Set(times)].sort();
+}
+
+function cronDay(day: 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU'): string {
+  return { MO: '1', TU: '2', WE: '3', TH: '4', FR: '5', SA: '6', SU: '0' }[day];
 }
 
 function cliPath(): string {

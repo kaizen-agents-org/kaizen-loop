@@ -388,6 +388,67 @@ describe('runKaizen PR flow', () => {
     }
   });
 
+  it('runs scheduler jobs with lateStartGuard disabled after latestStartHour', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-12T12:00:00Z'));
+    try {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+      const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+      vi.stubEnv('KAIZEN_HOME', home);
+      await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+      await fs.writeFile(
+        path.join(repo, '.kaizen', 'config.yml'),
+        defaultConfigWith(
+          {
+            run: { latestStartHour: 0 },
+            scheduler: {
+              jobs: {
+                maintenance: {
+                  enabled: true,
+                  schedule: { type: 'interval', everyHours: 8, anchorTime: '02:45' },
+                  run: { mode: 'maintenance', lateStartGuard: false }
+                }
+              }
+            }
+          },
+          { agent: 'claude', setup: null, verify: [] }
+        )
+      );
+      await saveRegistry({
+        version: 1,
+        projects: {
+          'o-r': {
+            repo: 'o/r',
+            localPath: repo,
+            workspacePath: workspace,
+            schedule: '02:00',
+            enabled: true,
+            createdAt: '2026-06-12T00:00:00Z'
+          }
+        }
+      });
+
+      const runner = vi.fn<CommandRunner>(async (command, args) => result(command, args, repo, JSON.stringify([])));
+
+      const summary = await runKaizen({
+        cwd: repo,
+        project: 'o-r',
+        scheduled: true,
+        job: 'maintenance',
+        dryRun: false,
+        json: true,
+        runCommand: runner
+      });
+
+      expect(runner).toHaveBeenCalledWith('gh', expect.arrayContaining(['issue', 'list']), expect.any(Object));
+      expect('issues' in summary && summary.trigger).toBe('maintenance');
+      expect('issues' in summary && summary.skipped).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('skips overlapping scheduled poll runs when skipIfRunning is enabled', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
@@ -1298,7 +1359,7 @@ function defaultConfigWith(
 
 function mergeConfig(target: Record<string, unknown>, source: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(source)) {
-    if (isPlainObject(value) && isPlainObject(target[key])) {
+    if (isPlainObject(value) && isPlainObject(target[key]) && !('type' in value)) {
       mergeConfig(target[key], value);
     } else {
       target[key] = value;

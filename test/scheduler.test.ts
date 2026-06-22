@@ -86,9 +86,22 @@ describe('enableScheduler', () => {
     });
 
     expect(scheduler.jobs).toEqual([
-      { name: 'nightly', trigger: 'scheduled', time: '01:30' },
-      { name: 'afternoon', trigger: 'afternoon', time: '14:30' },
-      { name: 'poll', trigger: 'watch', intervalMinutes: 5 }
+      {
+        name: 'maintenance',
+        config: {
+          enabled: true,
+          schedule: { type: 'times', times: ['01:30', '14:30'] },
+          run: { mode: 'maintenance', lateStartGuard: true }
+        }
+      },
+      {
+        name: 'issue-watch',
+        config: {
+          enabled: true,
+          schedule: { type: 'interval', everyMinutes: 5 },
+          run: { mode: 'watch', skipIfRunning: true }
+        }
+      }
     ]);
     const crontabInput = String(runner.mock.calls.find(([command, args]) => command === 'crontab' && args[0] === '-')?.[2]?.input);
     expect(crontabInput).not.toContain('node kaizen run --project owner-repo --scheduled --trigger scheduled');
@@ -96,12 +109,55 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('30 1 * * * ');
     expect(crontabInput).toContain('30 14 * * * ');
     expect(crontabInput).toContain('*/5 * * * * ');
-    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --trigger 'scheduled'");
-    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --trigger 'afternoon'");
-    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --trigger 'watch'");
-    expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) nightly');
-    expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) afternoon');
-    expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) poll');
+    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'maintenance'");
+    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'issue-watch'");
+    expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) maintenance');
+    expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) issue-watch');
+  });
+
+  it('installs scheduler jobs with anchored hourly cron schedules', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: command === 'crontab' && args[0] === '-l' ? '' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const project: RegistryProject = {
+      repo: 'owner/repo',
+      localPath: '/repo',
+      workspacePath: '/workspace',
+      schedule: '02:00',
+      enabled: false,
+      createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await enableScheduler({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({
+        version: 1,
+        scheduler: {
+          jobs: {
+            maintenance: {
+              schedule: { type: 'interval', everyHours: 8, anchorTime: '02:45' },
+              run: { mode: 'maintenance', lateStartGuard: false }
+            }
+          }
+        }
+      }),
+      runCommand: runner,
+      platform: 'linux'
+    });
+
+    const crontabInput = String(runner.mock.calls.find(([command, args]) => command === 'crontab' && args[0] === '-')?.[2]?.input);
+    expect(crontabInput).toContain("45 2 * * * ");
+    expect(crontabInput).toContain("45 10 * * * ");
+    expect(crontabInput).toContain("45 18 * * * ");
+    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'maintenance'");
   });
 
   it('installs configured poll launchd job with StartInterval', async () => {
@@ -145,7 +201,7 @@ describe('enableScheduler', () => {
     expect(bootoutCalls).toHaveLength(4);
     const plist = await fs.readFile(scheduler.paths![0], 'utf8');
     expect(plist).toContain('<key>StartInterval</key><integer>300</integer>');
-    expect(plist).toContain('<string>--trigger</string><string>watch</string>');
+    expect(plist).toContain('<string>--job</string><string>issue-watch</string>');
   });
 
   it('installs configured afternoon launchd job with StartCalendarInterval', async () => {
@@ -187,9 +243,9 @@ describe('enableScheduler', () => {
 
     expect(scheduler.paths).toHaveLength(1);
     const plist = await fs.readFile(scheduler.paths![0], 'utf8');
-    expect(plist).toContain('<key>Label</key><string>com.kaizen-loop.owner-repo.afternoon</string>');
+    expect(plist).toContain('<key>Label</key><string>com.kaizen-loop.owner-repo.maintenance</string>');
     expect(plist).toContain('<dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>');
-    expect(plist).toContain('<string>--trigger</string><string>afternoon</string>');
+    expect(plist).toContain('<string>--job</string><string>maintenance</string>');
   });
 
   it('fails when launchd bootstrap fails', async () => {

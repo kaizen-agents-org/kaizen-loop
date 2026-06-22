@@ -37,16 +37,24 @@ run:
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
 scheduler:
-  nightly:
-    enabled: true
-    time: "02:00"            # `kaizen run --scheduled --trigger scheduled`
-  afternoon:
-    enabled: false
-    time: "14:00"            # `kaizen run --scheduled --trigger afternoon`
-  poll:
-    enabled: false
-    intervalMinutes: 5       # `kaizen run --scheduled --trigger watch`
-    skipIfRunning: true      # 実体は run.lock。前回run中なら次の起動は即終了
+  jobs:
+    maintenance:
+      enabled: true
+      schedule:
+        type: interval       # `kaizen run --scheduled --job maintenance`
+        everyHours: 8
+        anchorTime: "02:45"  # 02:45 / 10:45 / 18:45
+      run:
+        mode: maintenance
+        lateStartGuard: false
+    issue-watch:
+      enabled: false
+      schedule:
+        type: interval       # `kaizen run --scheduled --job issue-watch`
+        everyMinutes: 5
+      run:
+        mode: watch
+        skipIfRunning: true  # 実体は run.lock。前回run中なら次の起動は即終了
 
 commands:
   # ワークスペース reset 後、ベースライン検証前と作業ブランチ作成前に実行(依存インストール等)。null ならスキップ

@@ -60,14 +60,15 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 
 ```
 kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
-           [--trigger manual|scheduled|afternoon|instant|watch]
+           [--job <job-id>] [--trigger manual|scheduled|afternoon|instant|watch]
            [--max-issues <N>] [--agent claude|codex]
 ```
 
 | オプション | 意味 |
 |---|---|
 | `--scheduled` | 無人実行モード。対話なし。スケジューラからの呼び出し専用 |
-| `--trigger <trigger>` | 実行契機を明示する。`scheduled` は nightly job、`afternoon` は afternoon job、`watch` は poll job、`instant` は即時実行、`manual` は手動実行 |
+| `--job <job-id>` | `scheduler.jobs.<job-id>` の run policy で実行する。provider-aware scheduler が生成するジョブはこれを使う |
+| `--trigger <trigger>` | 既存の明示実行契機。`instant` は即時実行、`manual` は手動実行。旧 scheduler 互換以外では `--job` を使う |
 | `--issue <番号>` | 指定 Issue のみ処理(優先度選択をスキップ)。デバッグ・即時修正用 |
 | `--dry-run` | Issue 取得・除外フィルタ・優先順位による選択までを実行し、**ワークスペース変更・push・コメントは行わない**。リスク判定は実 diff が必要なため実行しない |
 | `--max-issues <N>` | この実行に限り処理上限を上書き |
@@ -219,16 +220,22 @@ kaizen status [--project <slug>] [--metrics] [--json]
 スケジューラ登録の有効化・無効化。`disable` は**キルスイッチ**であり、即座に確実に止まることを最優先とする。
 
 ```
-kaizen enable [--project <slug>] [--schedule "HH:MM"]
-kaizen disable [--project <slug>] [--all]
+kaizen scheduler status [--project <slug>]
+kaizen scheduler plan [--project <slug>]
+kaizen scheduler sync [--project <slug>]
+kaizen scheduler set-schedule --job <job-id> (--daily <HH:MM> | --times <HH:MM,...> | --every-hours <N> [--anchor-time <HH:MM>] | --every-minutes <N>)
+kaizen scheduler disable [--project <slug>] [--all]
 ```
 
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
-- `enable` は `.kaizen/config.yml` の `scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` を読み、nightly、afternoon、poll をそれぞれ登録する。`--schedule` は nightly の時刻だけを一時上書きする
-- Codex Automations / Claude Code routines などを含む provider-aware scheduler では、`kaizen scheduler plan|sync|status|adopt|disable` に操作を統一する。新仕様では `enable` / `disable` は置き換え対象とする(→ [12-scheduler-providers.md](./12-scheduler-providers.md))
+- `sync` は `.kaizen/config.yml` の `scheduler.jobs` を読み、job ごとの plist / cron 行を登録する
+- `plan` は登録対象の desired state を表示し、変更はしない
+- `set-schedule` は job の schedule expression を `.kaizen/config.yml` に書き込む
 - `disable --all`: 登録済み全プロジェクトを無効化
 - `disable` は実行中の run があれば、ロックファイルの PID に SIGTERM を送って中断させる(中断時の安全性は [07-safety.md](./07-safety.md) §4)
+
+`kaizen enable` / `kaizen disable` は既存互換として残るが、新しい scheduler 操作は `kaizen scheduler ...` に統一する。
 
 ---
 

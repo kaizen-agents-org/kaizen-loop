@@ -2,6 +2,62 @@ import { z } from 'zod';
 
 const nullableString = z.string().nullable().optional();
 const timeString = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+const jobIdString = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+
+const schedulerScheduleSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('interval'),
+      everyMinutes: z.number().int().min(1).max(1439).optional(),
+      everyHours: z.number().int().min(1).max(23).optional(),
+      anchorTime: timeString.optional()
+    })
+    .strict()
+    .superRefine((value, context) => {
+      const units = Number(value.everyMinutes !== undefined) + Number(value.everyHours !== undefined);
+      if (units !== 1) {
+        context.addIssue({
+          code: 'custom',
+          message: 'interval schedule must set exactly one of everyMinutes or everyHours'
+        });
+      }
+    }),
+  z.object({ type: z.literal('times'), times: z.array(timeString).min(1) }).strict(),
+  z.object({ type: z.literal('daily'), time: timeString }).strict(),
+  z
+    .object({
+      type: z.literal('weekly'),
+      days: z.array(z.enum(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'])).min(1),
+      time: timeString
+    })
+    .strict(),
+  z.object({ type: z.literal('rrule'), value: z.string().min(1) }).strict()
+]);
+
+const schedulerRunSchema = z.discriminatedUnion('mode', [
+  z
+    .object({
+      mode: z.literal('maintenance'),
+      lateStartGuard: z.boolean().default(false),
+      maxIssues: z.number().int().positive().optional()
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal('watch'),
+      skipIfRunning: z.boolean().default(true),
+      maxIssues: z.number().int().positive().optional()
+    })
+    .strict()
+]);
+
+const schedulerJobSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    schedule: schedulerScheduleSchema,
+    run: schedulerRunSchema
+  })
+  .strict();
 
 export const configSchema = z
   .object({
@@ -42,20 +98,22 @@ export const configSchema = z
       }),
     scheduler: z
       .object({
+        provider: z.enum(['launchd', 'cron', 'codex-automation', 'claude-routine', 'external']).optional(),
+        jobs: z.record(jobIdString, schedulerJobSchema).optional(),
         nightly: z
           .object({
             enabled: z.boolean().default(true),
             time: timeString.default('02:00')
           })
           .strict()
-          .default({ enabled: true, time: '02:00' }),
+          .optional(),
         afternoon: z
           .object({
             enabled: z.boolean().default(false),
             time: timeString.default('14:00')
           })
           .strict()
-          .default({ enabled: false, time: '14:00' }),
+          .optional(),
         poll: z
           .object({
             enabled: z.boolean().default(false),
@@ -63,13 +121,22 @@ export const configSchema = z
             skipIfRunning: z.boolean().default(true)
           })
           .strict()
-          .default({ enabled: false, intervalMinutes: 5, skipIfRunning: true })
+          .optional()
       })
       .strict()
       .default({
-        nightly: { enabled: true, time: '02:00' },
-        afternoon: { enabled: false, time: '14:00' },
-        poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
+        jobs: {
+          maintenance: {
+            enabled: true,
+            schedule: { type: 'daily', time: '02:00' },
+            run: { mode: 'maintenance', lateStartGuard: true }
+          },
+          'issue-watch': {
+            enabled: false,
+            schedule: { type: 'interval', everyMinutes: 5 },
+            run: { mode: 'watch', skipIfRunning: true }
+          }
+        }
       }),
     commands: z
       .object({
@@ -222,6 +289,9 @@ export const configSchema = z
   .strict();
 
 export type KaizenConfig = z.infer<typeof configSchema>;
+export type SchedulerSchedule = z.infer<typeof schedulerScheduleSchema>;
+export type SchedulerRun = z.infer<typeof schedulerRunSchema>;
+export type SchedulerJobConfig = z.infer<typeof schedulerJobSchema>;
 
 export const registryProjectSchema = z
   .object({

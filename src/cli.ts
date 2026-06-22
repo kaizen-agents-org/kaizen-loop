@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { parse, stringify } from 'yaml';
 import { initProject } from './init/init.js';
 import { type DirectCommitConfirmation, runKaizen } from './orchestrator/run.js';
 import { loadRegistry, resolveProject, saveRegistry } from './config/registry.js';
@@ -14,7 +17,7 @@ import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './c
 import { statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
-import { disableScheduler, enableScheduler } from './scheduler/scheduler.js';
+import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
 
 const program = new Command();
 
@@ -54,6 +57,7 @@ program
   .option('--json', 'print machine-readable output')
   .option('--scheduled', 'scheduled unattended mode', false)
   .option('--trigger <trigger>', 'trigger override: manual, scheduled, afternoon, instant, or watch')
+  .option('--job <job>', 'scheduler job id to run')
   .option('--issue <number>', 'process only one issue')
   .option('--dry-run', 'select issues without modifying workspaces or GitHub', false)
   .option('--max-issues <number>', 'override max issues for this run')
@@ -66,6 +70,7 @@ program
       project: options.project ?? globals.project,
       scheduled: Boolean(options.scheduled),
       trigger: parseTrigger(options.trigger),
+      job: parseJob(options.job),
       issue: options.issue ? Number(options.issue) : undefined,
       dryRun: Boolean(options.dryRun),
       maxIssues: options.maxIssues ? Number(options.maxIssues) : undefined,
@@ -84,6 +89,112 @@ program
     const globals = program.opts<{ json?: boolean }>();
     const registry = await loadRegistry();
     print(registry, Boolean(options.json ?? globals.json));
+  });
+
+const scheduler = program
+  .command('scheduler')
+  .description('manage scheduler provider jobs');
+
+scheduler
+  .command('status')
+  .description('show configured scheduler jobs')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
+    const config = await loadConfig(resolved.project.localPath);
+    print({
+      slug: resolved.slug,
+      provider: config.scheduler.provider ?? defaultSchedulerProvider(),
+      enabled: resolved.project.enabled,
+      jobs: schedulerJobs(config)
+    }, Boolean(options.json ?? globals.json));
+  });
+
+scheduler
+  .command('plan')
+  .description('show scheduler jobs that sync would install')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
+    const config = await loadConfig(resolved.project.localPath);
+    print({
+      slug: resolved.slug,
+      provider: config.scheduler.provider ?? defaultSchedulerProvider(),
+      actions: schedulerJobs(config).map((job) => ({ action: 'sync', job: job.name, schedule: job.config.schedule, run: job.config.run }))
+    }, Boolean(options.json ?? globals.json));
+  });
+
+scheduler
+  .command('sync')
+  .description('sync configured scheduler jobs to launchd or cron')
+  .option('--project <slug>', 'target project slug')
+  .option('--schedule <HH:MM>', 'legacy maintenance schedule override')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
+    const registry = await loadRegistry();
+    const project = registry.projects[resolved.slug];
+    const config = await loadConfig(project.localPath);
+    const schedule = parseSchedule(options.schedule ?? config.scheduler.nightly?.time ?? project.schedule);
+    const result = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
+    project.enabled = true;
+    project.schedule = schedule;
+    await saveRegistry(registry);
+    print({ slug: resolved.slug, enabled: true, scheduler: result }, Boolean(options.json ?? globals.json));
+  });
+
+scheduler
+  .command('set-schedule')
+  .description('update a scheduler job schedule in .kaizen/config.yml')
+  .requiredOption('--job <job>', 'scheduler job id')
+  .option('--project <slug>', 'target project slug')
+  .option('--daily <HH:MM>', 'run once per day at HH:MM')
+  .option('--times <HH:MM,...>', 'run daily at comma-separated times')
+  .option('--every-hours <number>', 'run every N hours')
+  .option('--every-minutes <number>', 'run every N minutes')
+  .option('--anchor-time <HH:MM>', 'anchor time for hourly intervals')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
+    const job = parseJob(options.job);
+    if (!job) throw new KaizenError('--job is required', 2);
+    const schedule = parseSchedulerScheduleOptions(options);
+    const configPath = path.join(resolved.project.localPath, '.kaizen', 'config.yml');
+    const raw = parse(await fs.readFile(configPath, 'utf8')) as Record<string, unknown>;
+    const schedulerConfig = ensureRecord(raw, 'scheduler');
+    const jobs = ensureRecord(schedulerConfig, 'jobs');
+    const jobConfig = ensureRecord(jobs, job);
+    jobConfig.schedule = schedule;
+    await fs.writeFile(configPath, stringify(raw));
+    print({ slug: resolved.slug, job, schedule }, Boolean(options.json ?? globals.json));
+  });
+
+scheduler
+  .command('disable')
+  .description('disable scheduler jobs for a project')
+  .option('--project <slug>', 'target project slug')
+  .option('--all', 'disable all registered projects', false)
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const registry = await loadRegistry();
+    const targets = options.all
+      ? Object.entries(registry.projects)
+      : [[(await resolveProject(options.project ?? globals.project, process.cwd())).slug, (await resolveProject(options.project ?? globals.project, process.cwd())).project] as const];
+    const results = [];
+    for (const [slug, project] of targets) {
+      const schedulerResult = await disableScheduler({ slug, runCommand, terminateRunning: true });
+      project.enabled = false;
+      results.push({ slug, enabled: false, scheduler: schedulerResult });
+    }
+    await saveRegistry(registry);
+    print(results, Boolean(options.json ?? globals.json));
   });
 
 program
@@ -403,7 +514,7 @@ program
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
-    const schedule = parseSchedule(options.schedule ?? config.scheduler.nightly.time);
+    const schedule = parseSchedule(options.schedule ?? config.scheduler.nightly?.time ?? project.schedule);
     const scheduler = await enableScheduler({ slug: resolved.slug, project, config, schedule, runCommand });
     project.enabled = true;
     project.schedule = schedule;
@@ -510,9 +621,57 @@ function parseTrigger(value: unknown): 'manual' | 'scheduled' | 'afternoon' | 'i
   throw new KaizenError(`Invalid trigger: ${String(value)}`, 2);
 }
 
+function parseJob(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value)) return value;
+  throw new KaizenError(`Invalid scheduler job: ${String(value)}`, 2);
+}
+
 function parseSchedule(value: unknown): string {
   if (typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) return value;
   throw new KaizenError(`Invalid schedule: ${String(value)}`, 2);
+}
+
+function parseSchedulerScheduleOptions(options: {
+  daily?: string;
+  times?: string;
+  everyHours?: string;
+  everyMinutes?: string;
+  anchorTime?: string;
+}) {
+  const selected = [options.daily, options.times, options.everyHours, options.everyMinutes].filter((value) => value !== undefined);
+  if (selected.length !== 1) throw new KaizenError('Specify exactly one of --daily, --times, --every-hours, or --every-minutes.', 2);
+  if (options.daily !== undefined) return { type: 'daily' as const, time: parseSchedule(options.daily) };
+  if (options.times !== undefined) {
+    const times = options.times.split(',').map((time) => parseSchedule(time.trim()));
+    if (times.length === 0) throw new KaizenError('Invalid --times: no times provided', 2);
+    return { type: 'times' as const, times };
+  }
+  if (options.everyHours !== undefined) {
+    const everyHours = parsePositiveInteger(options.everyHours, 'every-hours');
+    if (everyHours > 23) throw new KaizenError('Invalid every-hours: must be between 1 and 23', 2);
+    return {
+      type: 'interval' as const,
+      everyHours,
+      ...(options.anchorTime ? { anchorTime: parseSchedule(options.anchorTime) } : {})
+    };
+  }
+  if (options.everyMinutes === undefined) throw new KaizenError('Specify --every-minutes.', 2);
+  const everyMinutes = parsePositiveInteger(options.everyMinutes, 'every-minutes');
+  if (everyMinutes > 1439) throw new KaizenError('Invalid every-minutes: must be between 1 and 1439', 2);
+  return { type: 'interval' as const, everyMinutes };
+}
+
+function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = parent[key];
+  if (typeof current === 'object' && current !== null && !Array.isArray(current)) return current as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  parent[key] = next;
+  return next;
+}
+
+function defaultSchedulerProvider(): 'launchd' | 'cron' {
+  return process.platform === 'darwin' ? 'launchd' : 'cron';
 }
 
 function parseIssueNumbers(value: unknown): number[] | undefined {
