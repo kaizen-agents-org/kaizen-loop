@@ -41,9 +41,10 @@ scheduler:
     maintenance:
       enabled: true
       schedule:
-        type: interval       # `kaizen run --scheduled --job maintenance`
-        everyHours: 8
-        anchorTime: "02:45"  # 02:45 / 10:45 / 18:45
+        type: times          # `kaizen run --scheduled --job maintenance`
+        times:
+          - "02:45"
+          - "14:45"
       run:
         mode: maintenance
         lateStartGuard: false

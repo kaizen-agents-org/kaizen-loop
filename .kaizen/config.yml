@@ -20,9 +20,10 @@ scheduler:
     maintenance:
       enabled: true
       schedule:
-        type: interval
-        everyHours: 8
-        anchorTime: "02:45"
+        type: times
+        times:
+          - "02:45"
+          - "14:45"
       run:
         mode: maintenance
         lateStartGuard: false
