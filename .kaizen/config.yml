@@ -17,7 +17,7 @@ run:
 
 scheduler:
   jobs:
-    scheduled:
+    maintenance:
       enabled: true
       schedule:
         type: daily
@@ -25,7 +25,7 @@ scheduler:
       run:
         mode: maintenance
         lateStartGuard: true
-    afternoon:
+    maintenance-followup:
       enabled: true
       schedule:
         type: daily
