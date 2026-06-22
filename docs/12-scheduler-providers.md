@@ -37,7 +37,7 @@
 
 ## 3. Desired State モデル
 
-provider 対応後の推奨設定は、固定フィールドではなく `scheduler.jobs` に任意 job を定義する。
+provider 対応後の設定は、固定フィールドではなく `scheduler.jobs` に任意 job を定義する。起動回数は job 数ではなく `schedule` で表現する。たとえば「1日3回」は `everyHours: 8`、「1日12回」は `everyHours: 2` であり、起動回数が増えても Kaizen Loop 本体のコードは変えない。
 
 ```yaml
 scheduler:
@@ -46,17 +46,9 @@ scheduler:
     maintenance:
       enabled: true
       schedule:
-        type: daily
-        time: "02:45"
-      run:
-        mode: maintenance
-        lateStartGuard: true
-
-    workday-followup:
-      enabled: true
-      schedule:
-        type: daily
-        time: "14:45"
+        type: interval
+        everyHours: 8
+        anchorTime: "02:45"
       run:
         mode: maintenance
         lateStartGuard: false
@@ -71,26 +63,53 @@ scheduler:
         skipIfRunning: true
 ```
 
-この形では `maintenance`、`workday-followup`、`issue-watch` はユーザーが選ぶ任意の job id である。Kaizen Loop は job id の名前に意味を持たせない。
+この形では `maintenance`、`issue-watch` はユーザーが選ぶ任意の job id である。Kaizen Loop は job id の名前に意味を持たせない。同じ run policy を複数時刻で動かしたいだけなら、job を増やさず schedule expression を変える。
 
 ### Schedule
 
-最初に扱う schedule type は次の2種類とする。
+schedule は「いつ起動するか」だけを表す。`run` policy とは分離する。
 
 ```ts
 type SchedulerSchedule =
+  | { type: 'interval'; everyMinutes?: number; everyHours?: number; anchorTime?: string }
+  | { type: 'times'; times: string[] }
   | { type: 'daily'; time: string }
-  | { type: 'interval'; everyMinutes: number };
+  | { type: 'weekly'; days: string[]; time: string }
+  | { type: 'rrule'; value: string };
 ```
 
-将来、必要になった時点で `weekly` や provider 固有の高度な schedule を追加する。
+推奨する使い分け:
 
-```ts
-type SchedulerSchedule =
-  | { type: 'daily'; time: string }
-  | { type: 'interval'; everyMinutes: number }
-  | { type: 'weekly'; days: string[]; time: string };
+| type | 用途 |
+|---|---|
+| `interval` | 「N分ごと」「N時間ごと」。1日3回なら `everyHours: 8`、1日12回なら `everyHours: 2` |
+| `times` | 毎日決まった複数時刻に起動する。例: `["02:00", "10:00", "18:00"]` |
+| `daily` | 毎日1回の単純な時刻指定。`times` の要素1個と等価だが読みやすさのため許可する |
+| `weekly` | 曜日と時刻を指定する |
+| `rrule` | provider で表現できる高度な繰り返し。portable ではない場合があるため、可能なら上記 type を優先する |
+
+例:
+
+```yaml
+# 1日3回
+schedule:
+  type: interval
+  everyHours: 8
+  anchorTime: "02:45"
+
+# 1日12回
+schedule:
+  type: interval
+  everyHours: 2
+  anchorTime: "00:00"
+
+# 時刻を明示した1日3回
+schedule:
+  type: times
+  times: ["02:45", "10:45", "18:45"]
 ```
+
+`anchorTime` は1日内の起点時刻である。`everyHours: 8` と `anchorTime: "02:45"` は、ローカルタイムで `02:45`, `10:45`, `18:45` に起動する。`everyHours` が24を割り切らない場合や `anchorTime` から日をまたぐ場合は、provider は24時間周期の繰り返しとして扱う。provider で正確に表現できない schedule は `plan` で `unsupported` として報告する。
 
 ### Run policy
 
@@ -156,15 +175,15 @@ kaizen migrate scheduler-jobs [--project <slug>] [--write]
 
 | 旧設定 | 新 job への変換 |
 |---|---|
-| `scheduler.nightly` | `id: maintenance`, `schedule.type: daily`, `run.mode: maintenance`, `lateStartGuard: true` |
-| `scheduler.afternoon` | `id: followup`, `schedule.type: daily`, `run.mode: maintenance`, `lateStartGuard: false` |
+| `scheduler.nightly` + `scheduler.afternoon` | `id: maintenance`, `schedule.type: times`, `times: [nightly.time, afternoon.time]`, `run.mode: maintenance` |
+| `scheduler.nightly` のみ | `id: maintenance`, `schedule.type: daily`, `time: nightly.time`, `run.mode: maintenance`, `lateStartGuard: true` |
 | `scheduler.poll` | `id: issue-watch`, `schedule.type: interval`, `run.mode: watch`, `skipIfRunning: true` |
 
 移行ルール:
 
 - migration は既存設定を読み、`scheduler.jobs` を生成し、旧フィールドを削除する
 - provider 未指定の既存プロジェクトは、macOS なら `launchd`、Linux なら `cron` を migration 時に明示する
-- `--schedule <HH:MM>` は固定 job 前提のため廃止する。時刻変更は `kaizen scheduler set-time --job <id> --time <HH:MM>` または config 編集で行う
+- `--schedule <HH:MM>` は固定 job 前提のため廃止する。schedule 変更は `kaizen scheduler set-schedule --job <id> ...` または config 編集で行う
 - provider-aware scheduler は `scheduler.jobs` がない config をエラーにする
 
 ## 5. Provider Adapter
@@ -187,8 +206,9 @@ interface SchedulerProvider {
 現行の macOS 実装を adapter 化する。
 
 - job ごとに `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job-id>.plist` を管理する
-- `schedule.type: daily` は `StartCalendarInterval`
+- `schedule.type: daily` / `times` / `weekly` は `StartCalendarInterval`
 - `schedule.type: interval` は `StartInterval`
+- `schedule.type: rrule` は launchd で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする
 - `launchctl bootstrap` / `bootout` で有効化・無効化する
 
 ### cron provider
@@ -196,8 +216,9 @@ interface SchedulerProvider {
 現行の Linux 実装を adapter 化する。
 
 - crontab に Kaizen 管理マーカー付きの行を追加する
-- `schedule.type: daily` は日次時刻指定
-- `schedule.type: interval` は `*/N * * * *`
+- `schedule.type: daily` / `times` / `weekly` は cron の時刻指定へ展開する
+- `schedule.type: interval` は cron で表現できる範囲へ変換する
+- `schedule.type: rrule` は cron で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする
 - Kaizen 管理マーカーが一致する行だけを更新・削除する
 
 ### codex-automation provider
@@ -348,7 +369,7 @@ kaizen scheduler status [--project <slug>] [--json]
 kaizen scheduler plan [--project <slug>] [--json]
 kaizen scheduler sync [--project <slug>] [--force] [--json]
 kaizen scheduler adopt [--project <slug>] [--provider <provider>] [--json]
-kaizen scheduler set-time --job <job-id> --time <HH:MM> [--project <slug>] [--json]
+kaizen scheduler set-schedule --job <job-id> [--project <slug>] [--json]
 kaizen scheduler disable [--project <slug>] [--all] [--json]
 ```
 
@@ -360,7 +381,7 @@ kaizen scheduler disable [--project <slug>] [--all] [--json]
 | `plan` | 外部実体に加える変更を表示し、変更はしない |
 | `sync` | config に合わせて外部実体を作成・更新・無効化する |
 | `adopt` | 既存外部ジョブを Kaizen 管理下に取り込む |
-| `set-time` | `schedule.type: daily` の job 時刻を変更する |
+| `set-schedule` | job の schedule expression を変更する |
 | `disable` | Kaizen 管理ジョブを無効化する |
 
 既存の `kaizen enable` / `kaizen disable` は provider-aware scheduler の導入時に `kaizen scheduler sync` / `kaizen scheduler disable` へ置き換える。ユーザー向けの新しい scheduler 操作は `kaizen scheduler ...` に統一する。
@@ -376,17 +397,9 @@ scheduler:
     maintenance:
       enabled: true
       schedule:
-        type: daily
-        time: "02:45"
-      run:
-        mode: maintenance
-        lateStartGuard: true
-
-    followup:
-      enabled: true
-      schedule:
-        type: daily
-        time: "14:45"
+        type: interval
+        everyHours: 8
+        anchorTime: "02:45"
       run:
         mode: maintenance
         lateStartGuard: false
@@ -403,16 +416,35 @@ scheduler:
       "action": "create",
       "job": "maintenance",
       "externalId": "kaizen-loop-kaizen-agents-org-kaizen-loop-maintenance",
-      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=2;BYMINUTE=45;BYSECOND=0"
-    },
-    {
-      "action": "create",
-      "job": "followup",
-      "externalId": "kaizen-loop-kaizen-agents-org-kaizen-loop-followup",
-      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=14;BYMINUTE=45;BYSECOND=0"
+      "rrule": "FREQ=DAILY;BYHOUR=2,10,18;BYMINUTE=45;BYSECOND=0"
     }
   ]
 }
+```
+
+1日12回に変える場合は、同じ job の schedule だけを変更する。
+
+```yaml
+scheduler:
+  provider: codex-automation
+  jobs:
+    maintenance:
+      enabled: true
+      schedule:
+        type: interval
+        everyHours: 2
+        anchorTime: "00:00"
+      run:
+        mode: maintenance
+        lateStartGuard: false
+```
+
+時刻を固定したい場合は `times` を使う。
+
+```yaml
+schedule:
+  type: times
+  times: ["00:00", "02:00", "04:00", "06:00", "08:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"]
 ```
 
 Codex Automation は job 実行基盤であり、Issue 選択、排他制御、PR 作成、結果コメントは従来どおり Kaizen Loop 本体が行う。
