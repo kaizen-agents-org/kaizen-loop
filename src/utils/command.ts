@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { envWithKaizenTemp } from './temp.js';
 
 export interface CommandResult {
   command: string;
@@ -24,13 +25,14 @@ export type CommandRunner = (
   options?: RunCommandOptions
 ) => Promise<CommandResult>;
 
-export const runCommand: CommandRunner = (command, args, options = {}) => {
+export const runCommand: CommandRunner = async (command, args, options = {}) => {
   const started = Date.now();
+  const env = await envWithKaizenTemp(options.env ?? process.env, options.cwd);
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: false
     });

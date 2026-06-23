@@ -4,6 +4,7 @@ import { minimatch } from 'minimatch';
 import type { KaizenConfig } from '../config/schema.js';
 import type { CommandRunner } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from './git.js';
 
 export interface DiffStats {
@@ -115,9 +116,10 @@ export class WorkspaceManager {
     };
   }
 
-  private runShell(command: string, timeoutMs: number | undefined) {
+  private async runShell(command: string, timeoutMs: number | undefined) {
     return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
       cwd: this.workspacePath,
+      env: await envWithKaizenTemp(process.env, this.workspacePath),
       timeoutMs,
       rejectOnNonZero: false
     });

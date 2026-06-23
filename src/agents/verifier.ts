@@ -3,6 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { CommandRunner } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
 
 /**
  * Conservative PR-creation gate statuses. The verifier decides whether opening a
@@ -75,16 +76,20 @@ export class VerifierAgentAdapter {
     await fs.mkdir(path.dirname(resultPath), { recursive: true });
 
     try {
+      const env = await envWithKaizenTemp(
+        {
+          ...process.env,
+          KAIZEN_VERIFIER_RESULT_PATH: resultPath,
+          KAIZEN_WORKSPACE_DIR: req.workspaceDir
+        },
+        req.workspaceDir
+      );
       const result = await this.runCommand(this.options.command, [], {
         cwd: req.workspaceDir,
         input: req.prompt,
         timeoutMs: this.options.timeoutMinutes * 60_000,
         rejectOnNonZero: false,
-        env: {
-          ...process.env,
-          KAIZEN_VERIFIER_RESULT_PATH: resultPath,
-          KAIZEN_WORKSPACE_DIR: req.workspaceDir
-        }
+        env
       });
       const raw = `${result.stdout}${result.stderr}`;
       const payload = (await readVerifierPayload(resultPath)) ?? parseVerifierPayload(raw);

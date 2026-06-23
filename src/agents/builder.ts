@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { CommandRunner } from '../utils/command.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
 import type { AgentAdapter, AgentRequest, AgentResult } from './types.js';
 
 const builderPayloadSchema = z
@@ -56,18 +57,22 @@ export class BuilderAgentAdapter implements AgentAdapter {
     await fs.mkdir(path.dirname(resultPath), { recursive: true });
 
     try {
-      const result = await this.runCommand(this.options.command, [], {
-        cwd: req.workspaceDir,
-        input: req.prompt,
-        timeoutMs: req.timeoutMs,
-        rejectOnNonZero: false,
-        env: {
+      const env = await envWithKaizenTemp(
+        {
           ...process.env,
           KAIZEN_BUILD_RESULT_PATH: resultPath,
           KAIZEN_WORKSPACE_DIR: req.workspaceDir,
           ...(req.preferredBackend ? { KAIZEN_PREFERRED_AGENT: req.preferredBackend } : {}),
           ...(req.model ? { KAIZEN_AGENT_MODEL: req.model } : {})
-        }
+        },
+        req.workspaceDir
+      );
+      const result = await this.runCommand(this.options.command, [], {
+        cwd: req.workspaceDir,
+        input: req.prompt,
+        timeoutMs: req.timeoutMs,
+        rejectOnNonZero: false,
+        env
       });
       const raw = `${result.stdout}${result.stderr}`;
       const payload = await readBuilderPayload(resultPath);
