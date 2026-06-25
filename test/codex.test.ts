@@ -27,8 +27,9 @@ describe('CodexAdapter', () => {
     expect(result.status).toBe('fixed');
     expect(runner.mock.calls[0][0]).toBe('codex');
     expect(runner.mock.calls[0][1]).toEqual(
-      expect.arrayContaining(['exec', '--json', '--sandbox', 'workspace-write', '--ask-for-approval', 'never', '-C', workspaceDir])
+      expect.arrayContaining(['exec', '--json', '--sandbox', 'workspace-write', '-C', workspaceDir])
     );
     expect(runner.mock.calls[0][2]?.cwd).toBe(workspaceDir);
+    expect(runner.mock.calls[0][1]).not.toContain('--ask-for-approval');
   });
 });

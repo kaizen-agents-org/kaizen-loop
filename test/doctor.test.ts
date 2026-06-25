@@ -15,7 +15,17 @@ afterEach(() => {
 describe('doctorProject', () => {
   it('repairs core state labels even when exclude labels are customized', async () => {
     const { repo } = await setupProject();
-    const runner = vi.fn<CommandRunner>(async (command, args, options) => result(command, args, options?.cwd, 'ok'));
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: 'doctor smoke ok',
+          notes: '',
+          discoveredIssues: []
+        });
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
 
     const output = await doctorProject({
       cwd: repo,
@@ -50,6 +60,36 @@ describe('doctorProject', () => {
     expect(output.checks.find((item) => item.name === 'workspace')?.ok).toBe(false);
     expect(output.checks.find((item) => item.name === 'temporary directory')?.ok).toBe(false);
     await expect(fs.access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails when the builder command exists but runtime smoke test cannot execute', async () => {
+    const { repo } = await setupProject();
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'blocked',
+          summary: 'Builder agent exited with code 1.',
+          notes: 'usage limit',
+          blockedReason: 'Builder agent exited with code 1.',
+          discoveredIssues: []
+        });
+        return result(command, args, options?.cwd, 'Builder agent exited with code 1.', 2);
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
+
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: runner
+    });
+
+    expect(output.ok).toBe(false);
+    const runtimeCheck = output.checks.find((check) => check.name === 'builder agent runtime');
+    expect(runtimeCheck).toMatchObject({ ok: false });
+    expect(runtimeCheck?.message).toContain('Builder agent exited with code 1.');
+    expect(runtimeCheck?.message).toContain('usage limit');
   });
 });
 
@@ -86,12 +126,18 @@ async function setupProject(options: { createWorkspace?: boolean } = {}) {
   return { repo, workspace };
 }
 
-function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
+async function writeBuilderResult(resultPath: unknown, payload: unknown) {
+  if (typeof resultPath !== 'string') throw new Error('missing KAIZEN_BUILD_RESULT_PATH');
+  await fs.mkdir(path.dirname(resultPath), { recursive: true });
+  await fs.writeFile(resultPath, `${JSON.stringify(payload)}\n`);
+}
+
+function result(command: string, args: string[], cwd: string | undefined, stdout: string, exitCode = 0) {
   return {
     command,
     args,
     cwd,
-    exitCode: 0,
+    exitCode,
     stdout,
     stderr: '',
     durationMs: 1

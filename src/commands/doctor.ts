@@ -33,10 +33,32 @@ export async function doctorProject(options: { cwd: string; project?: string; re
       if (!(await adapter.isAvailable())) throw new Error('unavailable');
     });
   }
-  await check(checks, 'builder agent', async () => {
+  await check(checks, 'builder agent command', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     if (!(await new BuilderAgentAdapter(options.runCommand, loaded.builder).isAvailable())) throw new Error('unavailable');
+  });
+  await check(checks, 'builder agent runtime', async () => {
+    const loaded = config;
+    if (!loaded) throw new Error('config unavailable');
+    const preferredBackend = loaded.agent.default;
+    const result = await new BuilderAgentAdapter(options.runCommand, loaded.builder).run({
+      workspaceDir: resolved.project.localPath,
+      prompt: [
+        'Kaizen doctor smoke test.',
+        'Do not inspect or edit files.',
+        'Return only this JSON in a json code fence:',
+        '{"status":"fixed","summary":"doctor smoke ok","notes":"","discoveredIssues":[]}'
+      ].join('\n'),
+      timeoutMs: 60_000,
+      preferredBackend,
+      model: loaded.agent.model[preferredBackend]
+    });
+    if (result.status !== 'fixed') {
+      const reason = result.blockedReason || result.summary || 'builder agent did not complete smoke test';
+      const notes = result.notes.trim();
+      throw new Error(notes ? `${reason}: ${tail(notes, 500)}` : reason);
+    }
   });
   await check(checks, 'verifier agent', async () => {
     const loaded = config;
@@ -66,7 +88,7 @@ function configuredAgents(config: KaizenConfig | undefined): Array<'claude' | 'c
   return agents;
 }
 
-function requiredLabels(config: KaizenConfig): string[] {
+export function requiredLabels(config: KaizenConfig): string[] {
   return [...new Set([
     config.issues.label,
     ...config.issues.priorityOrder,
@@ -89,4 +111,9 @@ async function check(checks: Array<{ name: string; ok: boolean; message?: string
   } catch (error) {
     checks.push({ name, ok: false, message: String(error) });
   }
+}
+
+function tail(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(text.length - maxLength);
 }
