@@ -44,9 +44,9 @@ Issue creation and execution authorization are separate:
 
 - Add `kaizen` by default when the label exists, but do not add `kaizen:ready` or any other execution-selection label by default.
 - Add the execution authorization label only when the user asks to queue, approve, run, execute, or put the issue on the Kaizen Loop.
-- In opt-in selection mode, prefer `kaizen:ready` as the execution authorization label when it exists.
+- In opt-in selection mode, add the repository's configured execution authorization label only when it exists.
 - If the user asks for immediate execution, file the issue, add the execution authorization label when available, then report the explicit command that should run next, such as `kaizen fix <issue>`.
-- If the issue needs human clarification before automation, prefer `kaizen:needs-human` instead of `kaizen:ready`.
+- If the issue needs human clarification before automation, do not add an execution authorization label; state what clarification is needed.
 
 ## Issue Body
 
