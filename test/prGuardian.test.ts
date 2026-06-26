@@ -35,6 +35,8 @@ describe('runPrGuardianSkill', () => {
     expect(prompt).toContain('Do not require reviewDecision=APPROVED or human approval');
     expect(prompt).toContain('PullRequest.reviewThreads');
     expect(prompt).toContain('hasNextPage=false');
+    expect(prompt).toContain('Reply in the same review thread or comment');
+    expect(prompt).toContain('links to the original comment or review');
     expect(prompt).toContain('no non-outdated unresolved review threads or actionable PR comments remain');
     expect(prompt).toContain('missing approval or reviewDecision other than APPROVED is not a blocker');
     expect(prompt).toContain('required checks are passing');
