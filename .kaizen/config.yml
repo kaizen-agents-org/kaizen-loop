@@ -13,6 +13,7 @@ run:
   runTimeoutMinutes: 180
   maxVerifyRetries: 1
   maxAttemptsPerIssue: 3
+  maxOpenPullRequests: 3
   latestStartHour: 7
 
 scheduler:

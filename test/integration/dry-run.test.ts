@@ -221,6 +221,120 @@ describe('runKaizen dry-run', () => {
     ]);
   });
 
+  it('does not count fixed-branch sync PRs toward the automatic open PR limit', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ run: { maxOpenPullRequests: 1 } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1)]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(
+          command,
+          args,
+          repo,
+          JSON.stringify([
+            { number: 3, headRefName: 'codex/daily-dogfood-sync', url: 'https://github.com/o/r/pull/3' },
+            { number: 4, headRefName: 'codex/sync-kaizen-shared-skills', url: 'https://github.com/o/r/pull/4' },
+            { number: 5, headRefName: 'codex/sync-kaizen-dogfood', url: 'https://github.com/o/r/pull/5' }
+          ])
+        );
+      }
+      return result(command, args, repo, '');
+    });
+
+    const resultSummary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'afternoon',
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in resultSummary && resultSummary.selected.map((item) => item.number)).toEqual([1]);
+    expect('selected' in resultSummary && resultSummary.skipped).toEqual([]);
+  });
+
+  it('fetches enough open PRs before applying the sync PR exemption', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ run: { maxOpenPullRequests: 1 } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1)]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        const limit = Number(args[args.indexOf('--limit') + 1]);
+        const syncPullRequests = Array.from({ length: 100 }, (_, index) => ({
+          number: index + 1,
+          headRefName: 'codex/sync-kaizen-shared-skills',
+          url: `https://github.com/o/r/pull/${index + 1}`
+        }));
+        const nonSyncPullRequest = { number: 101, headRefName: 'kaizen/issue-9-x', url: 'https://github.com/o/r/pull/101' };
+        return result(command, args, repo, JSON.stringify(limit > 100 ? [...syncPullRequests, nonSyncPullRequest] : syncPullRequests));
+      }
+      return result(command, args, repo, '');
+    });
+
+    const resultSummary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'afternoon',
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in resultSummary && resultSummary.selected).toEqual([]);
+    expect('selected' in resultSummary && resultSummary.skipped).toEqual([
+      { number: 1, reason: 'open pull request limit reached (1/1)' }
+    ]);
+  });
+
   it('limits automatic selection to the remaining open PR capacity', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
