@@ -19,7 +19,25 @@ describe('statusProject', () => {
         return result(command, args, repo, '[]');
       }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
-        return result(command, args, repo, JSON.stringify([{ number: 4, headRefName: 'kaizen/has-pr', url: 'https://github.com/o/r/pull/4' }]));
+        return result(
+          command,
+          args,
+          repo,
+          JSON.stringify([
+            {
+              number: 4,
+              headRefName: 'kaizen/has-pr',
+              headRepositoryOwner: { login: 'o' },
+              url: 'https://github.com/o/r/pull/4'
+            },
+            {
+              number: 5,
+              headRefName: 'feature/fork-pr',
+              headRepositoryOwner: { login: 'contributor' },
+              url: 'https://github.com/o/r/pull/5'
+            }
+          ])
+        );
       }
       if (command === 'git' && args.join(' ') === 'fetch --prune origin') {
         return result(command, args, workspace, '');
@@ -34,7 +52,8 @@ describe('statusProject', () => {
             'origin/main\t2222222',
             'origin/codex/hidden-work\t3333333',
             'origin/kaizen/has-pr\t4444444',
-            'origin/feature/no-diff\t5555555'
+            'origin/feature/no-diff\t5555555',
+            'origin/feature/fork-pr\t6666666'
           ].join('\n')
         );
       }
@@ -43,6 +62,9 @@ describe('statusProject', () => {
       }
       if (command === 'git' && args.join(' ') === 'rev-list --left-right --count origin/main...origin/feature/no-diff') {
         return result(command, args, workspace, '0\t0\n');
+      }
+      if (command === 'git' && args.join(' ') === 'rev-list --left-right --count origin/main...origin/feature/fork-pr') {
+        return result(command, args, workspace, '1\t3\n');
       }
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
     });
@@ -53,7 +75,7 @@ describe('statusProject', () => {
       runCommand: runner
     });
 
-    expect(output.pullRequests.open).toBe(1);
+    expect(output.pullRequests.open).toBe(2);
     expect(output.branchHygiene).toEqual({
       checked: true,
       unreviewedRemoteBranches: [
@@ -63,6 +85,13 @@ describe('statusProject', () => {
           headSha: '3333333',
           ahead: 2,
           behind: 23
+        },
+        {
+          branch: 'feature/fork-pr',
+          remoteRef: 'origin/feature/fork-pr',
+          headSha: '6666666',
+          ahead: 3,
+          behind: 1
         }
       ]
     });

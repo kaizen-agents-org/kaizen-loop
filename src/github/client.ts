@@ -70,7 +70,7 @@ export class GitHubClient {
       '--state',
       'open',
       '--json',
-      'number,headRefName,url',
+      'number,headRefName,headRepositoryOwner,url',
       '--limit',
       String(limit)
     ]);

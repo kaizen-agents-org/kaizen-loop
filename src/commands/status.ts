@@ -15,6 +15,11 @@ interface UnreviewedRemoteBranch {
   behind: number;
 }
 
+interface OpenPullRequestHead {
+  branch: string;
+  repositoryOwner?: string;
+}
+
 export async function statusProject(options: { cwd: string; project?: string; metrics?: boolean; runCommand: CommandRunner }) {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
@@ -45,7 +50,13 @@ export async function statusProject(options: { cwd: string; project?: string; me
       runCommand: options.runCommand,
       workspacePath: resolved.project.workspacePath,
       defaultBranch: config.git.defaultBranch,
-      openPullRequestBranches: openPullRequests.map((pr) => pr.headRefName).filter((branch): branch is string => Boolean(branch))
+      repoOwner: resolved.project.repo.split('/')[0],
+      openPullRequestHeads: openPullRequests
+        .filter((pr) => Boolean(pr.headRefName))
+        .map((pr) => ({
+          branch: pr.headRefName as string,
+          repositoryOwner: pr.headRepositoryOwner?.login
+        }))
     }),
     metrics: options.metrics ? await collectMetrics(stateDir) : undefined
   };
@@ -94,12 +105,17 @@ async function collectBranchHygiene(options: {
   runCommand: CommandRunner;
   workspacePath: string;
   defaultBranch: string;
-  openPullRequestBranches: string[];
+  repoOwner: string;
+  openPullRequestHeads: OpenPullRequestHead[];
 }): Promise<{ checked: boolean; unreviewedRemoteBranches: UnreviewedRemoteBranch[]; error?: string }> {
   try {
     const git = new GitClient(options.runCommand, options.workspacePath);
     await git.fetchPrune();
-    const openPullRequestBranches = new Set(options.openPullRequestBranches);
+    const openPullRequestBranches = new Set(
+      options.openPullRequestHeads
+        .filter((head) => head.repositoryOwner === options.repoOwner)
+        .map((head) => head.branch)
+    );
     const defaultRemoteRef = `origin/${options.defaultBranch}`;
     const unreviewedRemoteBranches: UnreviewedRemoteBranch[] = [];
 
