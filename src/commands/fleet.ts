@@ -5,7 +5,7 @@ import { loadRegistry, resolveProject } from '../config/registry.js';
 import type { KaizenConfig, RegistryProject } from '../config/schema.js';
 import { RunLock } from '../orchestrator/lock.js';
 import type { CommandRunner } from '../utils/command.js';
-import { projectStateDir } from '../utils/paths.js';
+import { projectStateDir, workspaceDir } from '../utils/paths.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 
@@ -84,7 +84,7 @@ async function refreshProject(
         ? await new GitClient(runCommand, project.localPath).remoteUrl('origin')
         : githubRemote(project.repo);
       const workspace = new WorkspaceManager(runCommand, project.workspacePath, remoteUrl || githubRemote(project.repo));
-      await refreshWorkspace(steps, project, sync, workspace, config);
+      await refreshWorkspace(steps, slug, project, sync, workspace, config);
     } catch (error) {
       if (RunLock.isActiveError(error)) {
         steps.push({ name: 'workspace', ok: false, message: 'skipped because run is already active' });
@@ -111,6 +111,7 @@ async function refreshProject(
 
 async function refreshWorkspace(
   steps: FleetRefreshStep[],
+  slug: string,
   project: RegistryProject,
   sync: boolean,
   workspace: WorkspaceManager,
@@ -119,6 +120,7 @@ async function refreshWorkspace(
   let workspaceReady = false;
   if (sync) {
     const workspaceOk = await runStep(steps, 'workspace', async () => {
+      assertSafeWorkspacePath(slug, project.workspacePath);
       await workspace.ensure();
     });
     const syncOk = workspaceOk
@@ -201,4 +203,10 @@ async function runStep(steps: FleetRefreshStep[], name: string, fn: () => Promis
 function githubRemote(repo: string): string {
   if (/^(?:[a-z]+:\/\/|git@)/i.test(repo)) return repo;
   return `https://github.com/${repo}.git`;
+}
+
+function assertSafeWorkspacePath(slug: string, projectWorkspacePath: string): void {
+  if (path.resolve(projectWorkspacePath) !== path.resolve(workspaceDir(slug))) {
+    throw new Error(`Refusing to refresh unsafe workspace path for ${slug}: ${projectWorkspacePath}`);
+  }
 }

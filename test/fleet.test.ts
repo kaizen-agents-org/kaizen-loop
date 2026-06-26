@@ -89,8 +89,8 @@ describe('refreshFleet', () => {
 
   it('uses the registered checkout origin when cloning a missing workspace', async () => {
     const project = await setupProject('o-r', { setup: null, verify: [] });
-    await fs.rm(project.workspace, { recursive: true, force: true });
     await saveFleet([project]);
+    await fs.rm(project.workspace, { recursive: true, force: true });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'git' && args.join(' ') === 'remote get-url origin') {
         return result(command, args, options?.cwd, 'git@github.com:o/r.git\n');
@@ -133,6 +133,47 @@ describe('refreshFleet', () => {
     const mutatingCommands = runner.mock.calls.map(([, args]) => args.join(' ')).filter((command) => command !== 'remote get-url origin');
     expect(mutatingCommands).toEqual([]);
   });
+
+  it('refuses to repair a workspace outside the managed workspace directory', async () => {
+    const project = await setupProject('o-r', { setup: null, verify: [] });
+    await saveFleet([project]);
+    const unsafeWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'unsafe-workspace-'));
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: project.repo,
+          workspacePath: unsafeWorkspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+        return result(command, args, options?.cwd, 'git@github.com:o/r.git\n');
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const output = await refreshFleet({
+      cwd: project.repo,
+      project: 'o-r',
+      sync: true,
+      runCommand: runner
+    });
+
+    expect(output.ok).toBe(false);
+    expect(output.projects[0].steps).toContainEqual(expect.objectContaining({
+      name: 'workspace',
+      ok: false,
+      message: expect.stringContaining('Refusing to refresh unsafe workspace path for o-r')
+    }));
+    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    expect(gitCommands).not.toContain(`clone git@github.com:o/r.git ${unsafeWorkspace}`);
+  });
 });
 
 async function setupProject(slug: string, options: { setup: string | null; verify: string[] }) {
@@ -148,9 +189,11 @@ async function setupProject(slug: string, options: { setup: string | null; verif
 async function saveFleet(projects: Array<{ slug: string; repo: string; workspace: string }>) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   vi.stubEnv('KAIZEN_HOME', home);
-  await saveRegistry({
-    version: 1,
-    projects: Object.fromEntries(projects.map((project) => [
+  const entries = [];
+  for (const project of projects) {
+    project.workspace = path.join(home, 'workspaces', project.slug);
+    await fs.mkdir(path.join(project.workspace, '.git'), { recursive: true });
+    entries.push([
       project.slug,
       {
         repo: project.slug.replace('-', '/'),
@@ -160,7 +203,11 @@ async function saveFleet(projects: Array<{ slug: string; repo: string; workspace
         enabled: false,
         createdAt: '2026-06-12T00:00:00Z'
       }
-    ]))
+    ]);
+  }
+  await saveRegistry({
+    version: 1,
+    projects: Object.fromEntries(entries)
   });
   return home;
 }

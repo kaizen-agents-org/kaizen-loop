@@ -17,7 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "dev": "tsx src/cli.ts",
-    "dogfood:fleet-refresh": "scripts/dogfood-fleet-refresh.sh"
+    "dogfood:fleet-refresh": "sh scripts/dogfood-fleet-refresh.sh"
   },
   "engines": {
     "node": ">=20"

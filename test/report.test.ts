@@ -275,7 +275,8 @@ async function setupFakeBins() {
 }
 
 async function runCli(options: { cwd: string; binDir: string; args: string[] }) {
-  const tmpDir = await fs.mkdtemp(path.join('/tmp', 'kaizen-cli-'));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-cli-'));
+  const ipcTmpDir = cliIpcTmpDir();
   return execFileAsync(
     process.execPath,
     [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
@@ -283,13 +284,20 @@ async function runCli(options: { cwd: string; binDir: string; args: string[] }) 
       cwd: options.cwd,
       env: {
         ...process.env,
-        TMPDIR: tmpDir,
-        TMP: tmpDir,
-        TEMP: tmpDir,
+        KAIZEN_TMPDIR: tmpDir,
+        TMPDIR: ipcTmpDir,
+        TMP: ipcTmpDir,
+        TEMP: ipcTmpDir,
         PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`
       }
     }
   );
+}
+
+function cliIpcTmpDir(): string {
+  const tmpDir = os.tmpdir();
+  if (process.platform !== 'win32' && tmpDir.length > 60) return '/tmp';
+  return tmpDir;
 }
 
 async function readCalls(logPath: string) {
