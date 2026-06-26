@@ -7,6 +7,11 @@ describe('text helpers', () => {
     expect(tailLines('one\ntwo\nthree', 2)).toBe('two\nthree');
   });
 
+  it('returns an empty string for non-positive line counts', () => {
+    expect(tailLines('one\ntwo\n', 0)).toBe('');
+    expect(tailLines('one\ntwo\n', -1)).toBe('');
+  });
+
   it('returns the tail of long text by character count', () => {
     expect(tailText('abcdef', 3)).toBe('def');
     expect(tailText('abc', 5)).toBe('abc');

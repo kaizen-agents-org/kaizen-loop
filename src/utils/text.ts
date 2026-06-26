@@ -4,6 +4,7 @@ export function tailText(text: string, maxLength: number): string {
 }
 
 export function tailLines(text: string, lines: number): string {
+  if (lines <= 0) return '';
   const parts = text.split('\n');
   while (parts.at(-1) === '') parts.pop();
   return parts.slice(-lines).join('\n');
