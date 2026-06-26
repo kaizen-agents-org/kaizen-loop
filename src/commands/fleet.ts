@@ -3,7 +3,10 @@ import path from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject } from '../config/registry.js';
 import type { KaizenConfig, RegistryProject } from '../config/schema.js';
+import { RunLock } from '../orchestrator/lock.js';
 import type { CommandRunner } from '../utils/command.js';
+import { projectStateDir } from '../utils/paths.js';
+import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 
 export interface FleetRefreshStep {
@@ -65,44 +68,33 @@ async function refreshProject(
 ): Promise<FleetRefreshProject> {
   const steps: FleetRefreshStep[] = [];
   let config: KaizenConfig | undefined;
-  let workspace: WorkspaceManager | undefined;
 
   try {
     config = await loadConfig(project.localPath);
-    workspace = new WorkspaceManager(runCommand, project.workspacePath, githubRemote(project.repo));
     steps.push({ name: 'config', ok: true });
   } catch (error) {
     steps.push({ name: 'config', ok: false, message: String(error) });
   }
 
-  if (config && workspace) {
-    let workspaceReady = false;
-    if (sync) {
-      const workspaceOk = await runStep(steps, 'workspace', async () => {
-        await workspace!.ensure();
-      });
-      const syncOk = workspaceOk
-        ? await runStep(steps, 'sync', async () => {
-          await workspace!.sync(config!.git.defaultBranch);
-        })
-        : false;
-      workspaceReady = workspaceOk && syncOk;
-    } else {
-      workspaceReady = await runStep(steps, 'workspace', async () => {
-        await fs.access(path.join(project.workspacePath, '.git'));
-      });
-    }
-
-    if (workspaceReady) {
-      const setupOk = await runSetupStep(steps, workspace, config);
-      if (setupOk) {
-        await runVerifySteps(steps, workspace, config);
+  if (config) {
+    let lock: RunLock | undefined;
+    try {
+      lock = await RunLock.acquire(projectStateDir(slug));
+      const remoteUrl = sync
+        ? await new GitClient(runCommand, project.localPath).remoteUrl('origin')
+        : githubRemote(project.repo);
+      const workspace = new WorkspaceManager(runCommand, project.workspacePath, remoteUrl || githubRemote(project.repo));
+      await refreshWorkspace(steps, project, sync, workspace, config);
+    } catch (error) {
+      if (RunLock.isActiveError(error)) {
+        steps.push({ name: 'workspace', ok: false, message: 'skipped because run is already active' });
+        steps.push({ name: 'setup', ok: false, message: 'skipped because run is already active' });
+        steps.push({ name: 'verify', ok: false, message: 'skipped because run is already active' });
       } else {
-        steps.push({ name: 'verify', ok: false, message: 'skipped because setup failed' });
+        throw error;
       }
-    } else {
-      steps.push({ name: 'setup', ok: false, message: 'skipped because workspace is not ready' });
-      steps.push({ name: 'verify', ok: false, message: 'skipped because workspace is not ready' });
+    } finally {
+      await lock?.release();
     }
   }
 
@@ -115,6 +107,43 @@ async function refreshProject(
     ok: steps.every((step) => step.ok),
     steps
   };
+}
+
+async function refreshWorkspace(
+  steps: FleetRefreshStep[],
+  project: RegistryProject,
+  sync: boolean,
+  workspace: WorkspaceManager,
+  config: KaizenConfig
+): Promise<void> {
+  let workspaceReady = false;
+  if (sync) {
+    const workspaceOk = await runStep(steps, 'workspace', async () => {
+      await workspace.ensure();
+    });
+    const syncOk = workspaceOk
+      ? await runStep(steps, 'sync', async () => {
+        await workspace.sync(config.git.defaultBranch);
+      })
+      : false;
+    workspaceReady = workspaceOk && syncOk;
+  } else {
+    workspaceReady = await runStep(steps, 'workspace', async () => {
+      await fs.access(path.join(project.workspacePath, '.git'));
+    });
+  }
+
+  if (workspaceReady) {
+    const setupOk = await runSetupStep(steps, workspace, config);
+    if (setupOk) {
+      await runVerifySteps(steps, workspace, config);
+    } else {
+      steps.push({ name: 'verify', ok: false, message: 'skipped because setup failed' });
+    }
+  } else {
+    steps.push({ name: 'setup', ok: false, message: 'skipped because workspace is not ready' });
+    steps.push({ name: 'verify', ok: false, message: 'skipped because workspace is not ready' });
+  }
 }
 
 async function runSetupStep(steps: FleetRefreshStep[], workspace: WorkspaceManager, config: KaizenConfig): Promise<boolean> {

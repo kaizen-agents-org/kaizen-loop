@@ -86,6 +86,53 @@ describe('refreshFleet', () => {
       { name: 'verify', ok: true, message: 'not configured' }
     ]);
   });
+
+  it('uses the registered checkout origin when cloning a missing workspace', async () => {
+    const project = await setupProject('o-r', { setup: null, verify: [] });
+    await fs.rm(project.workspace, { recursive: true, force: true });
+    await saveFleet([project]);
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+        return result(command, args, options?.cwd, 'git@github.com:o/r.git\n');
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    await refreshFleet({
+      cwd: project.repo,
+      project: 'o-r',
+      sync: true,
+      runCommand: runner
+    });
+
+    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    expect(gitCommands).toContain(`clone git@github.com:o/r.git ${project.workspace}`);
+  });
+
+  it('skips a project when its run lock is active', async () => {
+    const project = await setupProject('o-r', { setup: 'npm ci', verify: ['npm test'] });
+    const home = await saveFleet([project]);
+    await fs.mkdir(path.join(home, 'projects', 'o-r'), { recursive: true });
+    await fs.writeFile(path.join(home, 'projects', 'o-r', 'run.lock'), JSON.stringify({ pid: process.pid }));
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => result(command, args, options?.cwd, ''));
+
+    const output = await refreshFleet({
+      cwd: project.repo,
+      project: 'o-r',
+      sync: true,
+      runCommand: runner
+    });
+
+    expect(output.ok).toBe(false);
+    expect(output.projects[0].steps).toEqual([
+      { name: 'config', ok: true },
+      { name: 'workspace', ok: false, message: 'skipped because run is already active' },
+      { name: 'setup', ok: false, message: 'skipped because run is already active' },
+      { name: 'verify', ok: false, message: 'skipped because run is already active' }
+    ]);
+    const mutatingCommands = runner.mock.calls.map(([, args]) => args.join(' ')).filter((command) => command !== 'remote get-url origin');
+    expect(mutatingCommands).toEqual([]);
+  });
 });
 
 async function setupProject(slug: string, options: { setup: string | null; verify: string[] }) {
@@ -115,6 +162,7 @@ async function saveFleet(projects: Array<{ slug: string; repo: string; workspace
       }
     ]))
   });
+  return home;
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
