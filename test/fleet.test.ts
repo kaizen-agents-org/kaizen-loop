@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parse } from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
-import { migrateLegacySchedulerConfig, syncFleet } from '../src/commands/fleet.js';
+import { fleetHasFailures, migrateLegacySchedulerConfig, syncFleet, type FleetProjectResult } from '../src/commands/fleet.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('migrateLegacySchedulerConfig', () => {
@@ -167,7 +167,53 @@ describe('syncFleet', () => {
     expect(runner.mock.calls.some(([command]) => command === 'launchctl' || command === 'crontab')).toBe(true);
     expect(runner.mock.calls.some(([command]) => command === 'gh')).toBe(true);
   });
+
+  it('reports fleet failures when a project errors or verify fails', () => {
+    expect(fleetHasFailures({
+      root: '/tmp/fleet',
+      owner: 'kaizen-agents-org',
+      dryRun: false,
+      pruned: [],
+      projects: [
+        fleetProject({ verifyPassed: true }),
+        fleetProject({ verifyPassed: false })
+      ]
+    })).toBe(true);
+
+    expect(fleetHasFailures({
+      root: '/tmp/fleet',
+      dryRun: false,
+      pruned: [],
+      projects: [fleetProject({ error: 'failed to sync' })]
+    })).toBe(true);
+
+    expect(fleetHasFailures({
+      root: '/tmp/fleet',
+      dryRun: false,
+      pruned: [],
+      projects: [fleetProject({ verifyPassed: true })]
+    })).toBe(false);
+  });
 });
+
+function fleetProject(overrides: Partial<FleetProjectResult>) {
+  return { ...baseFleetProject(), ...overrides };
+}
+
+function baseFleetProject(): FleetProjectResult {
+  return {
+    slug: 'kaizen-agents-org-builder-agent',
+    repo: 'kaizen-agents-org/builder-agent',
+    localPath: '/tmp/fleet/builder-agent',
+    configMigrated: false,
+    workspaceEnsured: true,
+    labelsEnsured: true,
+    schedulerSynced: true,
+    lockRepaired: false,
+    verified: true,
+    enabled: true
+  };
+}
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
   return {

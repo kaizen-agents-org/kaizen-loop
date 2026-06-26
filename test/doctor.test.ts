@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe('doctorProject', () => {
   it('repairs core state labels even when exclude labels are customized', async () => {
-    const { repo } = await setupProject();
+    const { repo, workspace } = await setupProject();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'builder-agent' && args.length === 0) {
         await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
@@ -43,6 +43,9 @@ describe('doctorProject', () => {
     expect(output.checks.find((item) => item.name === 'temporary directory')?.ok).toBe(true);
     expect(output.checks.find((item) => item.name === 'claude auth')?.ok).toBe(true);
     expect(output.checks.find((item) => item.name === 'codex auth')?.ok).toBe(true);
+    const builderRuntimeCall = runner.mock.calls.find(([command, args]) => command === 'builder-agent' && args.length === 0);
+    expect(builderRuntimeCall?.[2]?.cwd).toBe(workspace);
+    expect(builderRuntimeCall?.[2]?.env?.KAIZEN_WORKSPACE_DIR).toBe(workspace);
   });
 
   it('does not create a missing workspace while checking temporary storage', async () => {

@@ -44,13 +44,15 @@ export interface FleetProjectResult {
   error?: string;
 }
 
-export async function syncFleet(options: FleetSyncOptions): Promise<{
+export interface FleetSyncResult {
   root: string;
   owner?: string;
   dryRun: boolean;
   projects: FleetProjectResult[];
   pruned: string[];
-}> {
+}
+
+export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncResult> {
   const root = await resolveFleetRoot(options.cwd, options.root, options.runCommand);
   const owner = options.owner ?? await ownerFromCwd(options.cwd, options.runCommand);
   const discovered = await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
@@ -74,6 +76,10 @@ export async function syncFleet(options: FleetSyncOptions): Promise<{
 
   if (!options.dryRun) await saveRegistry(registry);
   return { root, owner, dryRun: options.dryRun, projects, pruned };
+}
+
+export function fleetHasFailures(result: FleetSyncResult): boolean {
+  return result.projects.some((project) => project.error || project.verifyPassed === false);
 }
 
 async function syncFleetProject(options: FleetSyncOptions & {

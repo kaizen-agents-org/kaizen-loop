@@ -10,6 +10,7 @@ import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
 import type { CommandRunner } from '../utils/command.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
+import { tailText } from '../utils/text.js';
 
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
@@ -41,9 +42,10 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   await check(checks, 'builder agent runtime', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
+    await fs.access(resolved.project.workspacePath);
     const preferredBackend = loaded.agent.default;
     const result = await new BuilderAgentAdapter(options.runCommand, loaded.builder).run({
-      workspaceDir: resolved.project.localPath,
+      workspaceDir: resolved.project.workspacePath,
       prompt: [
         'Kaizen doctor smoke test.',
         'Do not inspect or edit files.',
@@ -57,7 +59,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (result.status !== 'fixed') {
       const reason = result.blockedReason || result.summary || 'builder agent did not complete smoke test';
       const notes = result.notes.trim();
-      throw new Error(notes ? `${reason}: ${tail(notes, 500)}` : reason);
+      throw new Error(notes ? `${reason}: ${tailText(notes, 500)}` : reason);
     }
   });
   await check(checks, 'verifier agent', async () => {
@@ -111,9 +113,4 @@ async function check(checks: Array<{ name: string; ok: boolean; message?: string
   } catch (error) {
     checks.push({ name, ok: false, message: String(error) });
   }
-}
-
-function tail(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(text.length - maxLength);
 }

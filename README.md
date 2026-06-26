@@ -93,14 +93,19 @@ For a target repository:
 ```sh
 kaizen init --agent codex --schedule 02:00
 kaizen scheduler sync
-npm run dogfood:sync
-npm run dogfood:verify
 kaizen doctor
 kaizen report "Fix stale config reload" --body "Observed during local dogfooding" --priority P2 --queue
 kaizen run --dry-run
 kaizen fix 42 --json
 kaizen goal create "Improve onboarding reliability" --success "npm test and npm run typecheck pass" --json
 kaizen goal run <goal-id> --yes --json
+```
+
+For this repository's own dogfooding loop:
+
+```sh
+npm run dogfood:sync
+npm run dogfood:verify
 ```
 
 ## Runtime Requirements

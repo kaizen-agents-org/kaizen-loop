@@ -13,6 +13,7 @@ import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts
 import type { CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
+import { tailLines } from '../utils/text.js';
 import { WorkspaceManager, type DiffStats } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
@@ -56,6 +57,8 @@ interface PullRequestReflection {
   baseBranch: string;
 }
 
+const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
+
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
@@ -83,7 +86,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       : undefined;
     const issues = requestedIssues ?? await github.listIssues(config.issues.label);
     const automatic = options.scheduled && requestedIssues === undefined;
-    const openPullRequests = automatic ? await github.listOpenPullRequests(Math.max(config.run.maxOpenPullRequests, 100)) : [];
+    const openPullRequests = automatic ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests)) : [];
     const selection = selectIssues({
       issues,
       config,
@@ -250,6 +253,10 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 
 function uniqueIssueNumbers(issueNumbers: number[]): number[] {
   return [...new Set(issueNumbers)];
+}
+
+function openPullRequestFetchLimit(configuredLimit: number): number {
+  return Math.max(configuredLimit + 1, OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT);
 }
 
 async function applyOpenPullRequestLimit(options: {
@@ -449,7 +456,7 @@ async function processIssue(options: {
         if (retry >= options.config.run.maxVerifyRetries) {
           return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
         }
-        previousFailure = `Verification failed: ${failedVerify.command}\n\n${tail(failedVerify.output, 200)}`;
+        previousFailure = `Verification failed: ${failedVerify.command}\n\n${tailLines(failedVerify.output, 200)}`;
         continue;
       }
 
@@ -1149,10 +1156,6 @@ function resultFor(issues: RunIssueSummary[]): RunSummary['result'] {
 
 function toRunId(date: Date): string {
   return date.toISOString().replace(/:/g, '-').replace(/\.\d{3}Z$/, 'Z');
-}
-
-function tail(output: string, lines: number): string {
-  return output.split('\n').slice(-lines).join('\n');
 }
 
 async function persistRunSummary(slug: string, summary: RunSummary): Promise<RunSummary> {

@@ -17,7 +17,7 @@ import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './c
 import { statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
-import { syncFleet } from './commands/fleet.js';
+import { fleetHasFailures, syncFleet } from './commands/fleet.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
 import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
 
@@ -125,6 +125,7 @@ program
       dryRun: Boolean(options.dryRun),
       runCommand
     });
+    if (fleetHasFailures(result)) process.exitCode = 1;
     print(result, Boolean(options.json ?? globals.json));
   });
 
