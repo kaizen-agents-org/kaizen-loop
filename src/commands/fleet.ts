@@ -80,14 +80,13 @@ async function refreshProject(
     let lock: RunLock | undefined;
     try {
       lock = await RunLock.acquire(projectStateDir(slug));
-      const remoteUrl = sync
-        ? await new GitClient(runCommand, project.localPath).remoteUrl('origin')
-        : githubRemote(project.repo);
+      const remoteUrl = sync ? await resolveFleetRemote(runCommand, project) : githubRemote(project.repo);
       const workspace = new WorkspaceManager(runCommand, project.workspacePath, remoteUrl || githubRemote(project.repo));
       await refreshWorkspace(steps, slug, project, sync, workspace, config);
     } catch (error) {
       if (RunLock.isActiveError(error)) {
         steps.push({ name: 'workspace', ok: false, message: 'skipped because run is already active' });
+        if (sync) steps.push({ name: 'sync', ok: false, message: 'skipped because run is already active' });
         steps.push({ name: 'setup', ok: false, message: 'skipped because run is already active' });
         steps.push({ name: 'verify', ok: false, message: 'skipped because run is already active' });
       } else {
@@ -107,6 +106,14 @@ async function refreshProject(
     ok: steps.every((step) => step.ok),
     steps
   };
+}
+
+async function resolveFleetRemote(runCommand: CommandRunner, project: RegistryProject): Promise<string> {
+  try {
+    return await new GitClient(runCommand, project.localPath).remoteUrl('origin');
+  } catch {
+    return githubRemote(project.repo);
+  }
 }
 
 async function refreshWorkspace(

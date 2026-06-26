@@ -109,6 +109,28 @@ describe('refreshFleet', () => {
     expect(gitCommands).toContain(`clone git@github.com:o/r.git ${project.workspace}`);
   });
 
+  it('falls back to the registered repo when the checkout origin cannot be read', async () => {
+    const project = await setupProject('o-r', { setup: null, verify: [] });
+    await saveFleet([project]);
+    await fs.rm(project.workspace, { recursive: true, force: true });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+        throw new Error('missing origin');
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    await refreshFleet({
+      cwd: project.repo,
+      project: 'o-r',
+      sync: true,
+      runCommand: runner
+    });
+
+    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    expect(gitCommands).toContain(`clone https://github.com/o/r.git ${project.workspace}`);
+  });
+
   it('skips a project when its run lock is active', async () => {
     const project = await setupProject('o-r', { setup: 'npm ci', verify: ['npm test'] });
     const home = await saveFleet([project]);
@@ -127,6 +149,7 @@ describe('refreshFleet', () => {
     expect(output.projects[0].steps).toEqual([
       { name: 'config', ok: true },
       { name: 'workspace', ok: false, message: 'skipped because run is already active' },
+      { name: 'sync', ok: false, message: 'skipped because run is already active' },
       { name: 'setup', ok: false, message: 'skipped because run is already active' },
       { name: 'verify', ok: false, message: 'skipped because run is already active' }
     ]);
