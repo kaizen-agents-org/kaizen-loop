@@ -10,6 +10,7 @@ import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
 import type { CommandRunner } from '../utils/command.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
+import { tailText } from '../utils/text.js';
 
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
@@ -33,10 +34,33 @@ export async function doctorProject(options: { cwd: string; project?: string; re
       if (!(await adapter.isAvailable())) throw new Error('unavailable');
     });
   }
-  await check(checks, 'builder agent', async () => {
+  await check(checks, 'builder agent command', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     if (!(await new BuilderAgentAdapter(options.runCommand, loaded.builder).isAvailable())) throw new Error('unavailable');
+  });
+  await check(checks, 'builder agent runtime', async () => {
+    const loaded = config;
+    if (!loaded) throw new Error('config unavailable');
+    await fs.access(resolved.project.workspacePath);
+    const preferredBackend = loaded.agent.default;
+    const result = await new BuilderAgentAdapter(options.runCommand, loaded.builder).run({
+      workspaceDir: resolved.project.workspacePath,
+      prompt: [
+        'Kaizen doctor smoke test.',
+        'Do not inspect or edit files.',
+        'Return only this JSON in a json code fence:',
+        '{"status":"fixed","summary":"doctor smoke ok","notes":"","discoveredIssues":[]}'
+      ].join('\n'),
+      timeoutMs: 60_000,
+      preferredBackend,
+      model: loaded.agent.model[preferredBackend]
+    });
+    if (result.status !== 'fixed') {
+      const reason = result.blockedReason || result.summary || 'builder agent did not complete smoke test';
+      const notes = result.notes.trim();
+      throw new Error(notes ? `${reason}: ${tailText(notes, 500)}` : reason);
+    }
   });
   await check(checks, 'verifier agent', async () => {
     const loaded = config;
@@ -66,7 +90,7 @@ function configuredAgents(config: KaizenConfig | undefined): Array<'claude' | 'c
   return agents;
 }
 
-function requiredLabels(config: KaizenConfig): string[] {
+export function requiredLabels(config: KaizenConfig): string[] {
   return [...new Set([
     config.issues.label,
     ...config.issues.priorityOrder,

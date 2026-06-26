@@ -16,10 +16,10 @@ export function slugFromRepo(repo: string): string {
 
 export function repoFromRemote(remote: string): string | undefined {
   const trimmed = remote.trim();
-  const https = trimmed.match(/^https:\/\/github\.com\/([^/]+\/[^/.]+)(?:\.git)?$/);
+  const https = trimmed.match(/^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/);
   if (https) return https[1];
 
-  const ssh = trimmed.match(/^git@github\.com:([^/]+\/[^/.]+)(?:\.git)?$/);
+  const ssh = trimmed.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/);
   if (ssh) return ssh[1];
 
   return undefined;

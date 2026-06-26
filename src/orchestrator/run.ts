@@ -8,11 +8,12 @@ import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
 import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
-import type { GitHubIssue } from '../github/types.js';
+import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts } from '../report/comments.js';
 import type { CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
+import { tailLines } from '../utils/text.js';
 import { WorkspaceManager, type DiffStats } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
@@ -56,6 +57,8 @@ interface PullRequestReflection {
   baseBranch: string;
 }
 
+const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
+
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
@@ -83,7 +86,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       : undefined;
     const issues = requestedIssues ?? await github.listIssues(config.issues.label);
     const automatic = options.scheduled && requestedIssues === undefined;
-    const openPullRequests = automatic ? await github.listOpenPullRequests(Math.max(config.run.maxOpenPullRequests, 100)) : [];
+    const openPullRequests = automatic ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests)) : [];
     const selection = selectIssues({
       issues,
       config,
@@ -252,11 +255,15 @@ function uniqueIssueNumbers(issueNumbers: number[]): number[] {
   return [...new Set(issueNumbers)];
 }
 
+function openPullRequestFetchLimit(configuredLimit: number): number {
+  return Math.max(configuredLimit + 1, OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT);
+}
+
 async function applyOpenPullRequestLimit(options: {
   config: KaizenConfig;
   selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> };
   automatic: boolean;
-  openPullRequests: Array<{ number: number }>;
+  openPullRequests: GitHubPullRequest[];
 }): Promise<{ selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   if (!options.automatic || options.selection.selected.length === 0) return options.selection;
   const limit = options.config.run.maxOpenPullRequests;
@@ -264,9 +271,11 @@ async function applyOpenPullRequestLimit(options: {
     return skipSelectedForOpenPrLimit(options.selection, 'open pull request limit reached (0/0)');
   }
 
-  const remaining = limit - options.openPullRequests.length;
+  const countedOpenPullRequests = options.openPullRequests.filter((pullRequest) => !isSyncPullRequest(pullRequest));
+  const openCount = countedOpenPullRequests.length;
+  const remaining = limit - openCount;
   if (remaining <= 0) {
-    return skipSelectedForOpenPrLimit(options.selection, `open pull request limit reached (${options.openPullRequests.length}/${limit})`);
+    return skipSelectedForOpenPrLimit(options.selection, `open pull request limit reached (${openCount}/${limit})`);
   }
   if (options.selection.selected.length <= remaining) return options.selection;
   return {
@@ -275,10 +284,18 @@ async function applyOpenPullRequestLimit(options: {
       ...options.selection.skipped,
       ...options.selection.selected.slice(remaining).map((issue) => ({
         number: issue.number,
-        reason: `open pull request limit would be exceeded (${options.openPullRequests.length}/${limit})`
+        reason: `open pull request limit would be exceeded (${openCount}/${limit})`
       }))
     ]
   };
+}
+
+function isSyncPullRequest(pullRequest: GitHubPullRequest): boolean {
+  return [
+    'codex/daily-dogfood-sync',
+    'codex/sync-kaizen-dogfood',
+    'codex/sync-kaizen-shared-skills'
+  ].includes(pullRequest.headRefName ?? '');
 }
 
 function skipSelectedForOpenPrLimit(
@@ -439,7 +456,7 @@ async function processIssue(options: {
         if (retry >= options.config.run.maxVerifyRetries) {
           return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
         }
-        previousFailure = `Verification failed: ${failedVerify.command}\n\n${tail(failedVerify.output, 200)}`;
+        previousFailure = `Verification failed: ${failedVerify.command}\n\n${tailLines(failedVerify.output, 200)}`;
         continue;
       }
 
@@ -1139,10 +1156,6 @@ function resultFor(issues: RunIssueSummary[]): RunSummary['result'] {
 
 function toRunId(date: Date): string {
   return date.toISOString().replace(/:/g, '-').replace(/\.\d{3}Z$/, 'Z');
-}
-
-function tail(output: string, lines: number): string {
-  return output.split('\n').slice(-lines).join('\n');
 }
 
 async function persistRunSummary(slug: string, summary: RunSummary): Promise<RunSummary> {

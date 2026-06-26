@@ -64,6 +64,7 @@ flowchart TB
 | `kaizen goal` | Create and run a multi-iteration goal that plans scoped issues, processes them, evaluates progress, and stops when done or blocked. |
 | `kaizen status` | Show registry state and latest run summary. Use `--metrics` for aggregate counters. |
 | `kaizen scheduler` | Inspect, update, sync, and disable scheduled jobs. |
+| `kaizen fleet` | Rebuild registry, workspaces, labels, scheduler jobs, and optionally verify fleet workspaces after upgrading Kaizen Loop. |
 | `kaizen logs` | Print latest or selected run logs from `~/.kaizen`. |
 | `kaizen doctor` | Check local setup, required labels, workspaces, and external commands. |
 | `kaizen list` | List registered projects. |
@@ -98,6 +99,13 @@ kaizen run --dry-run
 kaizen fix 42 --json
 kaizen goal create "Improve onboarding reliability" --success "npm test and npm run typecheck pass" --json
 kaizen goal run <goal-id> --yes --json
+```
+
+For this repository's own dogfooding loop:
+
+```sh
+npm run dogfood:sync
+npm run dogfood:verify
 ```
 
 ## Runtime Requirements

@@ -16,7 +16,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/cli.ts",
+    "dogfood:plan": "npm run build && node dist/cli.js fleet --root .. --owner kaizen-agents-org --prune --dry-run",
+    "dogfood:sync": "npm run build && node dist/cli.js fleet --root .. --owner kaizen-agents-org --prune",
+    "dogfood:verify": "npm run build && node dist/cli.js fleet --root .. --owner kaizen-agents-org --prune --verify"
   },
   "engines": {
     "node": ">=20"
