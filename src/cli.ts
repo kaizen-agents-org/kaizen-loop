@@ -104,6 +104,7 @@ program
   .option('--no-labels', 'do not create or repair GitHub labels')
   .option('--no-scheduler', 'do not sync launchd or cron jobs')
   .option('--no-lock-repair', 'do not remove stale run locks')
+  .option('--verify', 'sync each fleet workspace to its default branch and run setup plus verify commands', false)
   .option('--prune', 'remove registry entries that were not discovered under --root', false)
   .option('--dry-run', 'plan changes without modifying files, registry, GitHub, workspaces, or scheduler jobs', false)
   .option('--json', 'print machine-readable output')
@@ -119,6 +120,7 @@ program
       ensureLabels: options.labels !== false,
       syncScheduler: options.scheduler !== false,
       repairLocks: options.lockRepair !== false,
+      verify: Boolean(options.verify),
       prune: Boolean(options.prune),
       dryRun: Boolean(options.dryRun),
       runCommand

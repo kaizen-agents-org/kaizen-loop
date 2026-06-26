@@ -22,6 +22,7 @@ export interface FleetSyncOptions {
   ensureLabels: boolean;
   syncScheduler: boolean;
   repairLocks: boolean;
+  verify: boolean;
   prune: boolean;
   dryRun: boolean;
   runCommand: CommandRunner;
@@ -36,6 +37,9 @@ export interface FleetProjectResult {
   labelsEnsured: boolean;
   schedulerSynced: boolean;
   lockRepaired: boolean;
+  verified: boolean;
+  verifyPassed?: boolean;
+  verifyResults?: Array<{ command: string; ok: boolean; output: string }>;
   enabled: boolean;
   error?: string;
 }
@@ -85,6 +89,7 @@ async function syncFleetProject(options: FleetSyncOptions & {
     labelsEnsured: false,
     schedulerSynced: false,
     lockRepaired: false,
+    verified: false,
     enabled: options.syncScheduler
   };
 
@@ -122,6 +127,19 @@ async function syncFleetProject(options: FleetSyncOptions & {
           config,
           runCommand: options.runCommand
         });
+      }
+    }
+
+    if (options.verify) {
+      result.verified = true;
+      if (!options.dryRun) {
+        const workspace = new WorkspaceManager(options.runCommand, registryProject.workspacePath, options.project.remoteUrl);
+        await workspace.ensure();
+        await workspace.sync(config.git.defaultBranch);
+        await workspace.runSetup(config);
+        const verifyResults = await workspace.runVerify(config);
+        result.verifyResults = verifyResults;
+        result.verifyPassed = verifyResults.every((item) => item.ok);
       }
     }
   } catch (error) {

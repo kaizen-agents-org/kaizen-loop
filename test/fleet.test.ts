@@ -76,8 +76,9 @@ describe('syncFleet', () => {
         '    enabled: false',
         '    intervalMinutes: 5',
         'commands:',
-        '  setup: null',
-        '  verify: []',
+        '  setup: "npm ci"',
+        '  verify:',
+        '    - "npm test"',
         ''
       ].join('\n')
     );
@@ -110,8 +111,14 @@ describe('syncFleet', () => {
         return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/builder-agent.git\n');
       }
       if (command === 'git' && args[0] === 'clone') return result(command, args, options?.cwd, '');
+      if (command === 'git' && args[0] === 'fetch') return result(command, args, options?.cwd, '');
+      if (command === 'git' && args[0] === 'checkout') return result(command, args, options?.cwd, '');
+      if (command === 'git' && args[0] === 'reset') return result(command, args, options?.cwd, '');
+      if (command === 'git' && args[0] === 'clean') return result(command, args, options?.cwd, '');
       if (command === 'gh') return result(command, args, options?.cwd, '');
       if (command === 'launchctl') return result(command, args, options?.cwd, '');
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') return result(command, args, options?.cwd, 'setup ok\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, options?.cwd, 'tests ok\n');
       return result(command, args, options?.cwd, '');
     });
 
@@ -124,6 +131,7 @@ describe('syncFleet', () => {
       ensureLabels: true,
       syncScheduler: true,
       repairLocks: true,
+      verify: true,
       prune: true,
       dryRun: false,
       runCommand: runner
@@ -137,7 +145,10 @@ describe('syncFleet', () => {
         configMigrated: true,
         workspaceEnsured: true,
         labelsEnsured: true,
-        schedulerSynced: true
+        schedulerSynced: true,
+        verified: true,
+        verifyPassed: true,
+        verifyResults: [{ command: 'npm test', ok: true, output: 'tests ok\n' }]
       }
     ]);
 
@@ -153,7 +164,7 @@ describe('syncFleet', () => {
     const migrated = parse(await fs.readFile(path.join(repoDir, '.kaizen', 'config.yml'), 'utf8'));
     expect(migrated.scheduler.jobs.maintenance.schedule).toEqual({ type: 'times', times: ['02:15', '14:15'] });
     expect(migrated.scheduler.nightly).toBeUndefined();
-    expect(runner.mock.calls.some(([command]) => command === 'launchctl')).toBe(true);
+    expect(runner.mock.calls.some(([command]) => command === 'launchctl' || command === 'crontab')).toBe(true);
     expect(runner.mock.calls.some(([command]) => command === 'gh')).toBe(true);
   });
 });
