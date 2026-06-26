@@ -17,6 +17,7 @@ Commands:
   status      ループの状態・直近の実行結果を表示する
   fleet       登録済みリポジトリ群のワークスペース更新・検証
   scheduler   スケジューラ job を管理する
+  fleet       repo 群の registry/workspace/label/scheduler を再構築する
   logs        実行ログを表示する
   doctor      環境診断・修復
   list        登録済みプロジェクト一覧
@@ -260,6 +261,40 @@ kaizen scheduler disable [--project <slug>] [--all]
 
 ---
 
+## `kaizen fleet`
+
+Kaizen Loop 自体を更新したあとに、複数 repo のローカル実行環境を desired state へ戻す。`~/.kaizen/registry.json` が消えた、古い scheduler config が残った、launchd / cron が古い `dist/cli.js` を呼んでいる、workspace が欠けている、といった状態をまとめて修復する。
+
+```
+kaizen fleet [--root <path>] [--owner <owner>] [--repo <name|owner/name>...]
+             [--verify] [--prune] [--dry-run]
+             [--no-config] [--no-workspace] [--no-labels] [--no-scheduler] [--no-lock-repair]
+```
+
+- `--root`: repo checkout が並ぶディレクトリ。省略時はカレント Git repo の親ディレクトリ
+- `--owner`: 対象 GitHub owner。省略時はカレント repo の origin から推定
+- `--repo`: 対象を一部 repo に絞る。省略時は `--root` 直下の `.kaizen/config.yml` を持つ repo を owner で絞って発見する
+- `--prune`: 発見できなかった registry entry を削除する。registry 破損復旧時に使う
+- `--dry-run`: 計画だけ表示し、ファイル・registry・GitHub・scheduler を変更しない
+- `--no-config`: 旧 `scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` から `scheduler.jobs` への移行をしない
+- `--no-workspace`: `~/.kaizen/workspaces/<slug>` を作成・修復しない
+- `--no-labels`: GitHub labels を作成・修復しない
+- `--no-scheduler`: launchd / cron を同期しない
+- `--no-lock-repair`: PID が存在しない stale `run.lock` を削除しない
+- `--verify`: 各 fleet workspace を default branch に同期し、`commands.setup` と `commands.verify` を実行してローカル runner のテスト準備状態を確認する
+
+標準の dogfood 復旧手順:
+
+```sh
+npm run dogfood:sync
+npm run dogfood:verify
+node dist/cli.js run --project kaizen-agents-org-kaizen-loop --dry-run --json
+```
+
+`fleet` は registry を source of truth として扱わず、repo checkout と `.kaizen/config.yml` から registry を再構築できる。Kaizen Loop の config schema や scheduler 生成物を変更した場合は、リリース後または dogfood 更新後に必ず `fleet` を実行する。
+
+---
+
 ## `kaizen logs`
 
 ```
@@ -282,7 +317,7 @@ kaizen doctor [--project <slug>] [--repair]
 
 検査項目: gh 認証、設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。
 
-`--repair`: 設定から必要な GitHub ラベルを再作成する。壊れたワークスペースの再クローン、stale ロックの削除、スケジューラ定義の再生成は今後の拡張対象。
+`--repair`: 設定から必要な GitHub ラベルを再作成する。複数 repo の registry 再構築、stale ロック削除、ワークスペース再作成、スケジューラ定義の再生成は `kaizen fleet` を使う。
 
 ---
 

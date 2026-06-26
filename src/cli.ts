@@ -17,7 +17,7 @@ import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './c
 import { statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
-import { refreshFleet } from './commands/fleet.js';
+import { fleetHasFailures, refreshFleet, syncFleet } from './commands/fleet.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
 import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
 
@@ -95,7 +95,39 @@ program
 
 const fleet = program
   .command('fleet')
-  .description('manage the registered repository fleet');
+  .description('rebuild registry, workspaces, labels, and scheduler jobs for a repo fleet')
+  .option('--root <path>', 'directory containing target repository checkouts')
+  .option('--owner <owner>', 'GitHub owner to include')
+  .option('--repo <repo...>', 'repo name or owner/repo to include; repeat for multiple repos')
+  .option('--no-config', 'do not migrate legacy .kaizen/config.yml scheduler settings')
+  .option('--no-workspace', 'do not create or repair Kaizen workspaces')
+  .option('--no-labels', 'do not create or repair GitHub labels')
+  .option('--no-scheduler', 'do not sync launchd or cron jobs')
+  .option('--no-lock-repair', 'do not remove stale run locks')
+  .option('--verify', 'sync each fleet workspace to its default branch and run setup plus verify commands', false)
+  .option('--prune', 'remove registry entries that were not discovered under --root', false)
+  .option('--dry-run', 'plan changes without modifying files, registry, GitHub, workspaces, or scheduler jobs', false)
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ json?: boolean }>();
+    const result = await syncFleet({
+      cwd: process.cwd(),
+      root: options.root,
+      owner: options.owner,
+      repos: options.repo,
+      migrateConfig: options.config !== false,
+      ensureWorkspace: options.workspace !== false,
+      ensureLabels: options.labels !== false,
+      syncScheduler: options.scheduler !== false,
+      repairLocks: options.lockRepair !== false,
+      verify: Boolean(options.verify),
+      prune: Boolean(options.prune),
+      dryRun: Boolean(options.dryRun),
+      runCommand
+    });
+    if (fleetHasFailures(result)) process.exitCode = 1;
+    print(result, Boolean(options.json ?? globals.json));
+  });
 
 fleet
   .command('refresh')

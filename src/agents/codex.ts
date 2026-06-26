@@ -28,8 +28,6 @@ export class CodexAdapter implements AgentAdapter {
       '--json',
       '--sandbox',
       'workspace-write',
-      '--ask-for-approval',
-      'never',
       '-C',
       req.workspaceDir,
       '--output-last-message',

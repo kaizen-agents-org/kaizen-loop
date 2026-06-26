@@ -167,10 +167,10 @@ interface DesiredSchedulerJob {
 
 現行 scheduler schema は `scheduler.jobs` に一本化している。`scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` は読み続けない。
 
-既存プロジェクト向けの migration コマンドは未実装である。必要になった場合は、以下のようなコマンドで `scheduler.jobs` へ書き換える想定とする。
+既存プロジェクト向けの migration は `kaizen fleet` が担う。repo checkout から registry を再構築しながら、旧 scheduler 設定を `scheduler.jobs` へ書き換える。
 
 ```sh
-kaizen migrate scheduler-jobs [--project <slug>] [--write]
+kaizen fleet --root /path/to/repos --owner kaizen-agents-org --prune
 ```
 
 変換例:
@@ -184,7 +184,7 @@ kaizen migrate scheduler-jobs [--project <slug>] [--write]
 移行ルール:
 
 - migration は既存設定を読み、`scheduler.jobs` を生成し、旧フィールドを削除する
-- provider 未指定の既存プロジェクトは、macOS なら `launchd`、Linux なら `cron` を migration 時に明示する
+- provider 未指定の既存プロジェクトは provider を明示しない。`scheduler sync` / `fleet` 実行時に OS に応じて `launchd` / `cron` を選ぶ
 - `--schedule <HH:MM>` は固定 job 前提のため、新しい schedule 変更では `kaizen scheduler set-schedule --job <id> ...` または config 編集を使う。現行 CLI の `init --schedule` と `scheduler sync --schedule` は互換用に残っている
 - provider-aware scheduler は `scheduler.jobs` がない config をエラーにする
 
