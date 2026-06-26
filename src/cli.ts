@@ -17,6 +17,7 @@ import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './c
 import { statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { doctorProject } from './commands/doctor.js';
+import { refreshFleet } from './commands/fleet.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
 import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
 
@@ -90,6 +91,28 @@ program
     const globals = program.opts<{ json?: boolean }>();
     const registry = await loadRegistry();
     print(registry, Boolean(options.json ?? globals.json));
+  });
+
+const fleet = program
+  .command('fleet')
+  .description('manage the registered repository fleet');
+
+fleet
+  .command('refresh')
+  .description('verify registered workspaces are ready for the next monitor pass')
+  .option('--project <slug>', 'target project slug')
+  .option('--sync', 'fetch, reset to the default branch, and clean each workspace before verification', false)
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await refreshFleet({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      sync: Boolean(options.sync),
+      runCommand
+    });
+    print(result, Boolean(options.json ?? globals.json));
+    if (!result.ok) process.exitCode = 1;
   });
 
 const scheduler = program

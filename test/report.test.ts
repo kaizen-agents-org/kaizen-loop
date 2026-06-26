@@ -275,6 +275,7 @@ async function setupFakeBins() {
 }
 
 async function runCli(options: { cwd: string; binDir: string; args: string[] }) {
+  const tmpDir = await fs.mkdtemp(path.join('/tmp', 'kaizen-cli-'));
   return execFileAsync(
     process.execPath,
     [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
@@ -282,6 +283,9 @@ async function runCli(options: { cwd: string; binDir: string; args: string[] }) 
       cwd: options.cwd,
       env: {
         ...process.env,
+        TMPDIR: tmpDir,
+        TMP: tmpDir,
+        TEMP: tmpDir,
         PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`
       }
     }
