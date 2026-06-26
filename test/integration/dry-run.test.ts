@@ -987,7 +987,8 @@ describe('runKaizen PR flow', () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
     const verifierRepo = await fs.mkdtemp(path.join(os.tmpdir(), 'verifier-repo-'));
     const verifierWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'verifier-workspace-'));
-    const verifierWorktree = path.join(path.dirname(verifierWorkspace), `${path.basename(verifierWorkspace)}-worktrees`, '2026-06-26T05-45-05Z', 'issue-7');
+    const verifierWorktreeRoot = path.join(path.dirname(verifierWorkspace), `${path.basename(verifierWorkspace)}-worktrees`);
+    const verifierWorktree = path.join(verifierWorktreeRoot, '2026-06-26T05-45-05Z', 'issue-7');
     vi.stubEnv('KAIZEN_HOME', home);
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
@@ -1037,6 +1038,14 @@ describe('runKaizen PR flow', () => {
               expected: 'The follow-up issue should be processed by verifier.',
               evidence: `pnpm test failed under ${verifierWorktree}/packages/core/test/cli.test.ts`,
               severity: 'P2'
+            },
+            {
+              title: 'Verifier-old workspace verification failed',
+              repo: 'kaizen-loop',
+              body: 'A similarly named workspace should not be treated as verifier evidence.',
+              expected: 'The follow-up issue should stay with kaizen-loop.',
+              evidence: `pnpm test failed under ${verifierWorktreeRoot}-old/2026-06-26T05-45-05Z/issue-7/packages/core/test/cli.test.ts`,
+              severity: 'P2'
             }
           ]
         });
@@ -1067,13 +1076,21 @@ describe('runKaizen PR flow', () => {
     });
 
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
-    const issueCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
-    expect(issueCreate).toBeDefined();
-    expect(issueCreate![1]).toContain('--repo');
-    expect(issueCreate![1]).toContain('kaizen-agents-org/verifier');
-    const body = String(issueCreate![1].at(issueCreate![1].indexOf('--body') + 1));
-    expect(body).toContain('evidence matched registered project path');
-    expect(body).toContain('kaizen-agents-org/kaizen-loop#1');
+    const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
+    expect(issueCreates).toHaveLength(2);
+    const verifierCreate = issueCreates.find(([, args]) => args.includes('Verifier workspace verification failed'));
+    expect(verifierCreate).toBeDefined();
+    expect(verifierCreate![1]).toContain('--repo');
+    expect(verifierCreate![1]).toContain('kaizen-agents-org/verifier');
+    const verifierBody = String(verifierCreate![1].at(verifierCreate![1].indexOf('--body') + 1));
+    expect(verifierBody).toContain('evidence matched a registered project path for this repository');
+    expect(verifierBody).not.toContain('registered project path `');
+    expect(verifierBody).toContain('kaizen-agents-org/kaizen-loop#1');
+
+    const oldWorkspaceCreate = issueCreates.find(([, args]) => args.includes('Verifier-old workspace verification failed'));
+    expect(oldWorkspaceCreate).toBeDefined();
+    expect(oldWorkspaceCreate![1]).toContain('--repo');
+    expect(oldWorkspaceCreate![1]).toContain('kaizen-agents-org/kaizen-loop');
   });
 
   it('retries builder-discovered issue creation with the base label when the priority label is missing', async () => {

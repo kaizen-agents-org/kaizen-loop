@@ -1127,7 +1127,7 @@ function resolveDiscoveredIssueRepo(options: {
   if (inferred) {
     return {
       repo: inferred.repo,
-      reason: `because the evidence matched registered project path \`${inferred.path}\``
+      reason: 'because the evidence matched a registered project path for this repository'
     };
   }
 
@@ -1175,7 +1175,24 @@ function inferRegisteredRepoFromIssueText(issue: DiscoveredIssue, registry: Regi
     .flatMap((project) => projectPaths(project.localPath, project.workspacePath).map((item) => ({ repo: project.repo, path: item })))
     .filter((item) => item.path.length > 1)
     .sort((a, b) => b.path.length - a.path.length);
-  return candidates.find((item) => text.includes(item.path));
+  return candidates.find((item) => containsPathCandidate(text, item.path));
+}
+
+function containsPathCandidate(text: string, candidatePath: string): boolean {
+  let start = 0;
+  while (start < text.length) {
+    const index = text.indexOf(candidatePath, start);
+    if (index === -1) return false;
+    const before = index === 0 ? undefined : text[index - 1];
+    const after = text[index + candidatePath.length];
+    if (isPathTextBoundary(before) && isPathTextBoundary(after)) return true;
+    start = index + candidatePath.length;
+  }
+  return false;
+}
+
+function isPathTextBoundary(char: string | undefined): boolean {
+  return char === undefined || char === '/' || char === '\\' || !/[A-Za-z0-9._-]/.test(char);
 }
 
 function projectPaths(localPath: string, workspacePath: string): string[] {
