@@ -6,7 +6,7 @@ import type { AgentAdapter, AgentResult, DiscoveredIssue } from '../agents/types
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
-import type { KaizenConfig } from '../config/schema.js';
+import type { KaizenConfig, Registry } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts } from '../report/comments.js';
@@ -1022,9 +1022,15 @@ async function fileDiscoveredIssues(options: {
   filedKeys: Set<string>;
 }): Promise<void> {
   const filed: Array<{ title: string; repo: string; url?: string; duplicate?: boolean }> = [];
+  const registry = await loadRegistry();
 
   for (const issue of options.discoveredIssues) {
-    const repo = resolveDiscoveredIssueRepo(issue.repo, options.projectRepo);
+    const routing = resolveDiscoveredIssueRepo({
+      issue,
+      fallbackRepo: options.projectRepo,
+      registry
+    });
+    const repo = routing.repo;
     const key = `${repo}\n${issue.title.trim().toLowerCase()}`;
     if (options.filedKeys.has(key)) continue;
 
@@ -1045,6 +1051,7 @@ async function fileDiscoveredIssues(options: {
         body: buildDiscoveredIssueBody({
           issue,
           repo,
+          routingReason: routing.reason,
           sourceIssue: options.sourceIssue,
           sourceRepo: options.projectRepo,
           runId: options.runId
@@ -1083,6 +1090,7 @@ These were reported by the builder agent as separate bugs and filed by kaizen-lo
 function buildDiscoveredIssueBody(options: {
   issue: DiscoveredIssue;
   repo: string;
+  routingReason: string;
   sourceIssue: GitHubIssue;
   sourceRepo: string;
   runId: string;
@@ -1101,7 +1109,7 @@ ${evidence}
 ${expected}
 
 ## Routing
-Filed in \`${options.repo}\` because the builder agent reported this target while processing \`${options.sourceRepo}#${options.sourceIssue.number}\`.
+Filed in \`${options.repo}\` ${options.routingReason} while processing \`${options.sourceRepo}#${options.sourceIssue.number}\`.
 
 ## Notes
 - Source issue: ${options.sourceIssue.url ?? `${options.sourceRepo}#${options.sourceIssue.number}`}
@@ -1110,7 +1118,33 @@ Filed in \`${options.repo}\` because the builder agent reported this target whil
 ${options.issue.severity ? `- Reported severity: ${options.issue.severity}` : ''}`;
 }
 
-function resolveDiscoveredIssueRepo(repo: string | undefined, fallbackRepo: string): string {
+function resolveDiscoveredIssueRepo(options: {
+  issue: DiscoveredIssue;
+  fallbackRepo: string;
+  registry: Registry;
+}): { repo: string; reason: string } {
+  const inferred = inferRegisteredRepoFromIssueText(options.issue, options.registry);
+  if (inferred) {
+    return {
+      repo: inferred.repo,
+      reason: `because the evidence matched registered project path \`${inferred.path}\``
+    };
+  }
+
+  const reported = resolveReportedDiscoveredIssueRepo(options.issue.repo, options.fallbackRepo);
+  if (options.issue.repo?.trim()) {
+    return {
+      repo: reported,
+      reason: `because the builder agent reported this target`
+    };
+  }
+  return {
+    repo: reported,
+    reason: `because the builder agent did not report a target repository`
+  };
+}
+
+function resolveReportedDiscoveredIssueRepo(repo: string | undefined, fallbackRepo: string): string {
   if (!repo?.trim()) return fallbackRepo;
   const normalized = repo.trim();
   if (normalized.includes('/')) return normalized;
@@ -1126,6 +1160,31 @@ function resolveDiscoveredIssueRepo(repo: string | undefined, fallbackRepo: stri
     renovate: 'kaizen-agents-org/renovate-config'
   };
   return aliases[key] ?? fallbackRepo;
+}
+
+function inferRegisteredRepoFromIssueText(issue: DiscoveredIssue, registry: Registry): { repo: string; path: string } | undefined {
+  const text = [
+    issue.title,
+    issue.body,
+    issue.expected,
+    issue.evidence
+  ].filter(Boolean).join('\n');
+  if (!text) return undefined;
+
+  const candidates = Object.values(registry.projects)
+    .flatMap((project) => projectPaths(project.localPath, project.workspacePath).map((item) => ({ repo: project.repo, path: item })))
+    .filter((item) => item.path.length > 1)
+    .sort((a, b) => b.path.length - a.path.length);
+  return candidates.find((item) => text.includes(item.path));
+}
+
+function projectPaths(localPath: string, workspacePath: string): string[] {
+  const resolvedWorkspace = path.resolve(workspacePath);
+  return [
+    path.resolve(localPath),
+    resolvedWorkspace,
+    path.join(path.dirname(resolvedWorkspace), `${path.basename(resolvedWorkspace)}-worktrees`)
+  ];
 }
 
 function labelsForDiscoveredIssue(issue: DiscoveredIssue): string[] {

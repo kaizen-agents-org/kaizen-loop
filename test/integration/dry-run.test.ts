@@ -981,6 +981,101 @@ describe('runKaizen PR flow', () => {
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Kaizen discovered follow-up issue'))).toBe(true);
   });
 
+  it('routes builder-discovered issues to the registered repo named by evidence paths', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    const verifierRepo = await fs.mkdtemp(path.join(os.tmpdir(), 'verifier-repo-'));
+    const verifierWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'verifier-workspace-'));
+    const verifierWorktree = path.join(path.dirname(verifierWorkspace), `${path.basename(verifierWorkspace)}-worktrees`, '2026-06-26T05-45-05Z', 'issue-7');
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'kaizen-agents-org-kaizen-loop': {
+          repo: 'kaizen-agents-org/kaizen-loop',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        },
+        'kaizen-agents-org-verifier': {
+          repo: 'kaizen-agents-org/verifier',
+          localPath: verifierRepo,
+          workspacePath: verifierWorkspace,
+          schedule: '03:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+        const targetRepo = String(args.at(args.indexOf('--repo') + 1));
+        return result(command, args, repo, `https://github.com/${targetRepo}/issues/77\n`);
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/kaizen-agents-org/kaizen-loop/pull/4\n');
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: '直した',
+          notes: '',
+          discoveredIssues: [
+            {
+              title: 'Verifier workspace verification failed',
+              repo: 'kaizen-loop',
+              body: 'A fleet verification failure belongs to the verifier repository.',
+              expected: 'The follow-up issue should be processed by verifier.',
+              evidence: `pnpm test failed under ${verifierWorktree}/packages/core/test/cli.test.ts`,
+              severity: 'P2'
+            }
+          ]
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/kaizen-agents-org/kaizen-loop.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'kaizen-agents-org-kaizen-loop',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    const issueCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
+    expect(issueCreate).toBeDefined();
+    expect(issueCreate![1]).toContain('--repo');
+    expect(issueCreate![1]).toContain('kaizen-agents-org/verifier');
+    const body = String(issueCreate![1].at(issueCreate![1].indexOf('--body') + 1));
+    expect(body).toContain('evidence matched registered project path');
+    expect(body).toContain('kaizen-agents-org/kaizen-loop#1');
+  });
+
   it('retries builder-discovered issue creation with the base label when the priority label is missing', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

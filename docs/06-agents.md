@@ -137,7 +137,7 @@ builder-agent の結果は `.kaizen/builder/build-result.json` から読む。
 
 `status` は `fixed` / `partial` / `blocked`。`discoveredIssues` は任意で、省略時は空配列として扱う。結果ファイルがない、またはパースできない場合は `error` 扱いにする。
 
-`discoveredIssues[].repo` は `kaizen-loop` / `builder-agent` / `verifier` / `.github` / `coderabbit` / `renovate-config` の短縮名、または `owner/repo` を受け付ける。`github` は `.github`、`renovate` は `renovate-config` の alias として扱う。未指定または不明な短縮名の場合は処理中プロジェクトのリポジトリへ起票する。起票ラベルは `kaizen` と、`severity: P0|P1|P2` がある場合の `kaizen:P*` に限定する。
+`discoveredIssues[].repo` はバグを修正すべき対象リポジトリを指定する。処理中 Issue のリポジトリではなく、fleet / cross-repository 検証で失敗した checkout・workspace・ログが指す repository を入れること。値は `kaizen-loop` / `builder-agent` / `verifier` / `.github` / `coderabbit` / `renovate-config` の短縮名、または `owner/repo` を受け付ける。`github` は `.github`、`renovate` は `renovate-config` の alias として扱う。未指定または不明な短縮名の場合は処理中プロジェクトのリポジトリへ起票する。ただし本文・証拠・期待値に registry 登録済み repo の checkout/workspace/worktree パスが含まれる場合は、その repo へ補正して起票する。起票ラベルは `kaizen` と、`severity: P0|P1|P2` がある場合の `kaizen:P*` に限定する。
 
 ## 5. バックエンド比較
 
