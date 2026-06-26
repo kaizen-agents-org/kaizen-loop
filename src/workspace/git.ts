@@ -34,6 +34,10 @@ export class GitClient {
     await this.git(['fetch', 'origin']);
   }
 
+  async fetchPrune(): Promise<void> {
+    await this.git(['fetch', '--prune', 'origin']);
+  }
+
   async checkout(branch: string, options: { ignoreOtherWorktrees?: boolean } = {}): Promise<void> {
     await this.git(['checkout', ...(options.ignoreOtherWorktrees ? ['--ignore-other-worktrees'] : []), branch]);
   }
@@ -94,6 +98,29 @@ export class GitClient {
   async statusPorcelain(): Promise<string> {
     const result = await this.git(['status', '--porcelain']);
     return result.stdout;
+  }
+
+  async remoteBranches(remote = 'origin'): Promise<Array<{ ref: string; name: string; sha: string }>> {
+    const result = await this.git(['for-each-ref', '--format=%(refname:short)%09%(objectname:short)', `refs/remotes/${remote}`]);
+    return result.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [ref, sha] = line.split('\t');
+        const prefix = `${remote}/`;
+        return {
+          ref,
+          name: ref.startsWith(prefix) ? ref.slice(prefix.length) : ref,
+          sha
+        };
+      });
+  }
+
+  async divergence(base: string, head: string): Promise<{ behind: number; ahead: number }> {
+    const result = await this.git(['rev-list', '--left-right', '--count', `${base}...${head}`]);
+    const [behind, ahead] = result.stdout.trim().split(/\s+/).map((value) => Number(value) || 0);
+    return { behind, ahead };
   }
 
   async diffNameOnly(base: string): Promise<string[]> {

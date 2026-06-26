@@ -275,17 +275,25 @@ async function setupFakeBins() {
 }
 
 async function runCli(options: { cwd: string; binDir: string; args: string[] }) {
-  return execFileAsync(
-    process.execPath,
-    [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
-    {
-      cwd: options.cwd,
-      env: {
-        ...process.env,
-        PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`
+  const tmpDir = await fs.mkdtemp(path.join('/tmp', 'kaizen-tsx-'));
+  try {
+    return await execFileAsync(
+      process.execPath,
+      [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
+      {
+        cwd: options.cwd,
+        env: {
+          ...process.env,
+          PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+          TMPDIR: tmpDir,
+          TMP: tmpDir,
+          TEMP: tmpDir
+        }
       }
-    }
-  );
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 }
 
 async function readCalls(logPath: string) {

@@ -5,12 +5,27 @@ import { loadConfig } from '../config/config.js';
 import { GitHubClient } from '../github/client.js';
 import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
+import { GitClient } from '../workspace/git.js';
+
+interface UnreviewedRemoteBranch {
+  branch: string;
+  remoteRef: string;
+  headSha: string;
+  ahead: number;
+  behind: number;
+}
+
+interface OpenPullRequestHead {
+  branch: string;
+  repositoryOwner?: string;
+}
 
 export async function statusProject(options: { cwd: string; project?: string; metrics?: boolean; runCommand: CommandRunner }) {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const issues = await github.listIssues(config.issues.label);
+  const openPullRequests = await github.listOpenPullRequests();
   const stateDir = projectStateDir(resolved.slug);
   const lastSummary = await readLatestSummary(stateDir);
   return {
@@ -28,6 +43,21 @@ export async function statusProject(options: { cwd: string; project?: string; me
       p2: countLabel(issues, 'kaizen:P2'),
       needsHuman: countLabel(issues, 'kaizen:needs-human')
     },
+    pullRequests: {
+      open: openPullRequests.length
+    },
+    branchHygiene: await collectBranchHygiene({
+      runCommand: options.runCommand,
+      workspacePath: resolved.project.workspacePath,
+      defaultBranch: config.git.defaultBranch,
+      repoOwner: resolved.project.repo.split('/')[0].toLowerCase(),
+      openPullRequestHeads: openPullRequests
+        .filter((pr) => Boolean(pr.headRefName))
+        .map((pr) => ({
+          branch: pr.headRefName as string,
+          repositoryOwner: pr.headRepositoryOwner?.login?.toLowerCase()
+        }))
+    }),
     metrics: options.metrics ? await collectMetrics(stateDir) : undefined
   };
 }
@@ -69,4 +99,48 @@ async function collectMetrics(stateDir: string) {
 
 function countLabel(issues: Array<{ labels: Array<{ name: string }> }>, label: string): number {
   return issues.filter((issue) => issue.labels.some((item) => item.name === label)).length;
+}
+
+async function collectBranchHygiene(options: {
+  runCommand: CommandRunner;
+  workspacePath: string;
+  defaultBranch: string;
+  repoOwner: string;
+  openPullRequestHeads: OpenPullRequestHead[];
+}): Promise<{ checked: boolean; unreviewedRemoteBranches: UnreviewedRemoteBranch[]; error?: string }> {
+  try {
+    const git = new GitClient(options.runCommand, options.workspacePath);
+    await git.fetchPrune();
+    const openPullRequestBranches = new Set(
+      options.openPullRequestHeads
+        .filter((head) => head.repositoryOwner === options.repoOwner)
+        .map((head) => head.branch)
+    );
+    const defaultRemoteRef = `origin/${options.defaultBranch}`;
+    const unreviewedRemoteBranches: UnreviewedRemoteBranch[] = [];
+
+    for (const branch of await git.remoteBranches('origin')) {
+      if (branch.ref === 'origin/HEAD' || branch.ref === defaultRemoteRef || branch.name === options.defaultBranch) continue;
+      if (openPullRequestBranches.has(branch.name)) continue;
+
+      const divergence = await git.divergence(defaultRemoteRef, branch.ref);
+      if (divergence.ahead === 0) continue;
+
+      unreviewedRemoteBranches.push({
+        branch: branch.name,
+        remoteRef: branch.ref,
+        headSha: branch.sha,
+        ahead: divergence.ahead,
+        behind: divergence.behind
+      });
+    }
+
+    return { checked: true, unreviewedRemoteBranches };
+  } catch (error) {
+    return {
+      checked: false,
+      unreviewedRemoteBranches: [],
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
 }

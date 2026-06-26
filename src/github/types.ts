@@ -26,5 +26,6 @@ export interface PullRequestResult {
 export interface GitHubPullRequest {
   number: number;
   headRefName?: string;
+  headRepositoryOwner?: { login?: string };
   url: string;
 }
