@@ -191,6 +191,13 @@ describe('syncFleet', () => {
       root: '/tmp/fleet',
       dryRun: false,
       pruned: [],
+      projects: [fleetProject({ error: '' })]
+    })).toBe(true);
+
+    expect(fleetHasFailures({
+      root: '/tmp/fleet',
+      dryRun: false,
+      pruned: [],
       projects: [fleetProject({ verifyPassed: true })]
     })).toBe(false);
   });

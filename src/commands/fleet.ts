@@ -79,7 +79,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
 }
 
 export function fleetHasFailures(result: FleetSyncResult): boolean {
-  return result.projects.some((project) => project.error || project.verifyPassed === false);
+  return result.projects.some((project) => Object.hasOwn(project, 'error') || project.verifyPassed === false);
 }
 
 async function syncFleetProject(options: FleetSyncOptions & {
