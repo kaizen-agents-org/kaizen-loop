@@ -50,12 +50,12 @@ export async function statusProject(options: { cwd: string; project?: string; me
       runCommand: options.runCommand,
       workspacePath: resolved.project.workspacePath,
       defaultBranch: config.git.defaultBranch,
-      repoOwner: resolved.project.repo.split('/')[0],
+      repoOwner: resolved.project.repo.split('/')[0].toLowerCase(),
       openPullRequestHeads: openPullRequests
         .filter((pr) => Boolean(pr.headRefName))
         .map((pr) => ({
           branch: pr.headRefName as string,
-          repositoryOwner: pr.headRepositoryOwner?.login
+          repositoryOwner: pr.headRepositoryOwner?.login?.toLowerCase()
         }))
     }),
     metrics: options.metrics ? await collectMetrics(stateDir) : undefined

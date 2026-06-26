@@ -27,7 +27,7 @@ describe('statusProject', () => {
             {
               number: 4,
               headRefName: 'kaizen/has-pr',
-              headRepositoryOwner: { login: 'o' },
+              headRepositoryOwner: { login: 'O' },
               url: 'https://github.com/o/r/pull/4'
             },
             {
