@@ -220,7 +220,8 @@ export function migrateLegacySchedulerConfig(config: Record<string, unknown>): b
   const nightly = legacyTimeJob(scheduler.nightly);
   const afternoon = legacyTimeJob(scheduler.afternoon);
   const poll = legacyPollJob(scheduler.poll);
-  const maintenanceTimes = [nightly, afternoon].filter((job): job is LegacyTimeJob => Boolean(job?.enabled)).map((job) => job.time);
+  const maintenanceJobs = [nightly, afternoon].filter((job): job is LegacyTimeJob => Boolean(job));
+  const maintenanceTimes = maintenanceJobs.filter((job) => job.enabled).map((job) => job.time);
 
   const jobs: Record<string, unknown> = {};
   if (maintenanceTimes.length === 1) {
@@ -234,6 +235,12 @@ export function migrateLegacySchedulerConfig(config: Record<string, unknown>): b
       enabled: true,
       schedule: { type: 'times', times: [...new Set(maintenanceTimes)] },
       run: { mode: 'maintenance', lateStartGuard: false }
+    };
+  } else if (maintenanceJobs.some((job) => !job.enabled)) {
+    jobs.maintenance = {
+      enabled: false,
+      schedule: legacyMaintenanceSchedule(maintenanceJobs),
+      run: { mode: 'maintenance', lateStartGuard: true }
     };
   }
 
@@ -328,8 +335,13 @@ function legacyTimeJob(value: unknown): LegacyTimeJob | undefined {
   const item = record(value);
   if (!item) return undefined;
   const time = typeof item.time === 'string' ? item.time : undefined;
-  if (!time) return undefined;
-  return { enabled: item.enabled !== false, time };
+  return { enabled: item.enabled !== false, time: time ?? '02:00' };
+}
+
+function legacyMaintenanceSchedule(jobs: LegacyTimeJob[]): { type: 'daily'; time: string } | { type: 'times'; times: string[] } {
+  const times = [...new Set(jobs.map((job) => job.time))];
+  if (times.length > 1) return { type: 'times', times };
+  return { type: 'daily', time: times[0] ?? '02:00' };
 }
 
 function legacyPollJob(value: unknown): { enabled: boolean; intervalMinutes: number; skipIfRunning: boolean } | undefined {

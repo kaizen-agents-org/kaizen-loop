@@ -34,6 +34,32 @@ describe('migrateLegacySchedulerConfig', () => {
     });
   });
 
+  it('preserves explicitly disabled legacy maintenance schedules', () => {
+    const config = {
+      version: 1,
+      scheduler: {
+        nightly: { enabled: false, time: '02:15' },
+        poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
+      }
+    };
+
+    expect(migrateLegacySchedulerConfig(config)).toBe(true);
+    expect(config.scheduler).toEqual({
+      jobs: {
+        maintenance: {
+          enabled: false,
+          schedule: { type: 'daily', time: '02:15' },
+          run: { mode: 'maintenance', lateStartGuard: true }
+        },
+        'issue-watch': {
+          enabled: false,
+          schedule: { type: 'interval', everyMinutes: 5 },
+          run: { mode: 'watch', skipIfRunning: true }
+        }
+      }
+    });
+  });
+
   it('leaves current scheduler jobs unchanged', () => {
     const config = {
       version: 1,
