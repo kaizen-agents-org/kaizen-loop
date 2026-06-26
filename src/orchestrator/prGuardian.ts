@@ -238,11 +238,11 @@ Requirements:
 - Read and follow skills/pr-guardian/SKILL.md.
 - Check the PR with gh pr view and gh pr checks.
 - Watch relevant workflow runs with gh run watch --exit-status when a run exists.
-- Always inspect PR review feedback before declaring the PR mergeable, even when mergeStateStatus is CLEAN.
+- Always inspect PR review feedback before declaring the PR ready to merge. Do not require reviewDecision=APPROVED or human approval unless GitHub branch protection explicitly requires it.
 - Fetch inline review threads and PR comments with resolution state using paginated GraphQL/API reads, iterating until hasNextPage=false, for example via PullRequest.reviewThreads, so unresolved actionable feedback cannot be missed.
 - Address every unresolved actionable review thread, PR comment, and check annotation with focused commits or an explicit disposition, then push any fixes. If you can resolve an addressed review thread, resolve it after replying with the disposition.
 - Reply or comment on each addressed review item with the action taken.
-- Stop only when mergeStateStatus is CLEAN, required checks are passing, and no non-outdated unresolved review threads or actionable PR comments remain. CLEAN/checks passing alone is not enough; inspect comments again after every pushed fix.
+- Stop only when the PR is non-conflicting, required checks are passing, and no non-outdated unresolved review threads or actionable PR comments remain. A missing approval or reviewDecision other than APPROVED is not a blocker by itself; inspect comments again after every pushed fix.
 - Do not merge the PR.
 - Before finishing, comment on the PR with final mergeability, watched runs, fixes pushed, feedback addressed, unresolved/skipped feedback with reasons, and remaining blockers.`;
 }

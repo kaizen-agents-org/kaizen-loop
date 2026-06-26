@@ -31,11 +31,12 @@ describe('runPrGuardianSkill', () => {
 
     const prompt = String(runner.mock.calls[0][1].at(-1));
 
-    expect(prompt).toContain('Always inspect PR review feedback before declaring the PR mergeable');
+    expect(prompt).toContain('Always inspect PR review feedback before declaring the PR ready to merge');
+    expect(prompt).toContain('Do not require reviewDecision=APPROVED or human approval');
     expect(prompt).toContain('PullRequest.reviewThreads');
     expect(prompt).toContain('hasNextPage=false');
     expect(prompt).toContain('no non-outdated unresolved review threads or actionable PR comments remain');
-    expect(prompt).toContain('CLEAN/checks passing alone is not enough');
+    expect(prompt).toContain('missing approval or reviewDecision other than APPROVED is not a blocker');
     expect(prompt).toContain('required checks are passing');
     expect(prompt).toContain('unresolved/skipped feedback with reasons');
   });

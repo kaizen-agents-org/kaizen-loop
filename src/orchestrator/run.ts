@@ -1123,7 +1123,12 @@ function resolveDiscoveredIssueRepo(options: {
   fallbackRepo: string;
   registry: Registry;
 }): { repo: string; reason: string } {
-  const inferred = inferRegisteredRepoFromIssueText(options.issue, options.registry);
+  const reported = resolveReportedDiscoveredIssueRepo(options.issue.repo, options.fallbackRepo);
+  const inferred = inferRegisteredRepoFromIssueText(options.issue, options.registry, {
+    reportedRepo: reported,
+    fallbackRepo: options.fallbackRepo,
+    hasReportedRepo: Boolean(options.issue.repo?.trim())
+  });
   if (inferred) {
     return {
       repo: inferred.repo,
@@ -1131,7 +1136,6 @@ function resolveDiscoveredIssueRepo(options: {
     };
   }
 
-  const reported = resolveReportedDiscoveredIssueRepo(options.issue.repo, options.fallbackRepo);
   if (options.issue.repo?.trim()) {
     return {
       repo: reported,
@@ -1162,7 +1166,15 @@ function resolveReportedDiscoveredIssueRepo(repo: string | undefined, fallbackRe
   return aliases[key] ?? fallbackRepo;
 }
 
-function inferRegisteredRepoFromIssueText(issue: DiscoveredIssue, registry: Registry): { repo: string; path: string } | undefined {
+function inferRegisteredRepoFromIssueText(
+  issue: DiscoveredIssue,
+  registry: Registry,
+  options: {
+    reportedRepo: string;
+    fallbackRepo: string;
+    hasReportedRepo: boolean;
+  }
+): { repo: string; path: string } | undefined {
   const text = [
     issue.title,
     issue.body,
@@ -1171,11 +1183,24 @@ function inferRegisteredRepoFromIssueText(issue: DiscoveredIssue, registry: Regi
   ].filter(Boolean).join('\n');
   if (!text) return undefined;
 
-  const candidates = Object.values(registry.projects)
+  const projects = Object.values(registry.projects);
+  if (options.hasReportedRepo && options.reportedRepo !== options.fallbackRepo) {
+    return findRegisteredPathMatch(text, projects.filter((project) => project.repo === options.reportedRepo));
+  }
+
+  return findRegisteredPathMatch(text, projects.filter((project) => project.repo !== options.fallbackRepo))
+    ?? findRegisteredPathMatch(text, projects.filter((project) => project.repo === options.fallbackRepo));
+}
+
+function findRegisteredPathMatch(
+  text: string,
+  projects: Array<{ repo: string; localPath: string; workspacePath: string }>
+): { repo: string; path: string } | undefined {
+  return projects
     .flatMap((project) => projectPaths(project.localPath, project.workspacePath).map((item) => ({ repo: project.repo, path: item })))
     .filter((item) => item.path.length > 1)
-    .sort((a, b) => b.path.length - a.path.length);
-  return candidates.find((item) => containsPathCandidate(text, item.path));
+    .sort((a, b) => b.path.length - a.path.length)
+    .find((item) => containsPathCandidate(text, item.path));
 }
 
 function containsPathCandidate(text: string, candidatePath: string): boolean {

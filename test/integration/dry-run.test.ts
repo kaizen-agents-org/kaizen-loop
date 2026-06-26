@@ -1004,6 +1004,7 @@ describe('runKaizen PR flow', () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
     const verifierRepo = await fs.mkdtemp(path.join(os.tmpdir(), 'verifier-repo-'));
     const verifierWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'verifier-workspace-'));
+    const sourceWorktree = path.join(path.dirname(workspace), `${path.basename(workspace)}-worktrees`, '2026-06-26T05-45-05Z', 'issue-1');
     const verifierWorktreeRoot = path.join(path.dirname(verifierWorkspace), `${path.basename(verifierWorkspace)}-worktrees`);
     const verifierWorktree = path.join(verifierWorktreeRoot, '2026-06-26T05-45-05Z', 'issue-7');
     vi.stubEnv('KAIZEN_HOME', home);
@@ -1063,6 +1064,14 @@ describe('runKaizen PR flow', () => {
               expected: 'The follow-up issue should stay with kaizen-loop.',
               evidence: `pnpm test failed under ${verifierWorktreeRoot}-old/2026-06-26T05-45-05Z/issue-7/packages/core/test/cli.test.ts`,
               severity: 'P2'
+            },
+            {
+              title: 'Verifier reported target with source worktree evidence',
+              repo: 'verifier',
+              body: 'The reported verifier target should not be overridden by source worktree paths.',
+              expected: 'The follow-up issue should be processed by verifier.',
+              evidence: `kaizen-loop ran from ${sourceWorktree}/src/orchestrator/run.ts and verifier failed under ${verifierRepo}/packages/core/test/cli.test.ts`,
+              severity: 'P2'
             }
           ]
         });
@@ -1094,7 +1103,7 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
-    expect(issueCreates).toHaveLength(2);
+    expect(issueCreates).toHaveLength(3);
     const verifierCreate = issueCreates.find(([, args]) => args.includes('Verifier workspace verification failed'));
     expect(verifierCreate).toBeDefined();
     expect(verifierCreate![1]).toContain('--repo');
@@ -1108,6 +1117,11 @@ describe('runKaizen PR flow', () => {
     expect(oldWorkspaceCreate).toBeDefined();
     expect(oldWorkspaceCreate![1]).toContain('--repo');
     expect(oldWorkspaceCreate![1]).toContain('kaizen-agents-org/kaizen-loop');
+
+    const reportedVerifierCreate = issueCreates.find(([, args]) => args.includes('Verifier reported target with source worktree evidence'));
+    expect(reportedVerifierCreate).toBeDefined();
+    expect(reportedVerifierCreate![1]).toContain('--repo');
+    expect(reportedVerifierCreate![1]).toContain('kaizen-agents-org/verifier');
   });
 
   it('retries builder-discovered issue creation with the base label when the priority label is missing', async () => {
