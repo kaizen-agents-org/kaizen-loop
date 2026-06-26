@@ -754,6 +754,23 @@ describe('runKaizen PR flow', () => {
 
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
+        return result(command, args, repo, JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  pageInfo: {
+                    hasNextPage: false,
+                    endCursor: null
+                  },
+                  nodes: []
+                }
+              }
+            }
+          }
+        }));
+      }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
       if (command === 'gh') return result(command, args, repo, '');
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
