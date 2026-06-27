@@ -68,10 +68,12 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     let settled = false;
     let timeout: NodeJS.Timeout | undefined;
     let forceKillTimeout: NodeJS.Timeout | undefined;
+    let timeoutKillStarted = false;
 
     if (options.timeoutMs && options.timeoutMs > 0) {
       timeout = setTimeout(() => {
         if (settled) return;
+        timeoutKillStarted = true;
         terminateProcessTree(child, 'SIGTERM');
         forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000);
         forceKillTimeout.unref();
@@ -92,7 +94,7 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
-      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+      if (!timeoutKillStarted && forceKillTimeout) clearTimeout(forceKillTimeout);
       activeChildren.delete(child);
       reject(error);
     });
@@ -101,7 +103,7 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
-      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+      if (!timeoutKillStarted && forceKillTimeout) clearTimeout(forceKillTimeout);
       activeChildren.delete(child);
       const result: CommandResult = {
         command,
