@@ -81,6 +81,8 @@ export async function runSandboxSmoke(options: SandboxSmokeOptions): Promise<San
   const startedAt = new Date().toISOString();
   const title = options.title ?? defaultSmokeTitle(startedAt);
   const body = options.body ?? defaultSmokeBody(startedAt);
+  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+  await github.createLabels([config.issues.label, config.issues.selection.includeLabel, 'kaizen:pr-only']);
   const result = await reportIssueNow({
     cwd: options.cwd,
     project: resolved.slug,
@@ -109,7 +111,6 @@ export async function runSandboxSmoke(options: SandboxSmokeOptions): Promise<San
   const verifierLogPath = path.join(issueLogDir, 'verifier.log');
   const artifactDir = path.join(stateDir, 'smoke-runs');
   const artifactPath = path.join(artifactDir, `${runId}-issue-${result.issue.number}.json`);
-  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const prLinkage = issueSummary?.pr ? await maybeGetPullRequestLinkage(github, issueSummary.pr) : undefined;
   const defaultBranch = issueSummary?.pr ? await maybeGetDefaultBranch(github) : undefined;
 
