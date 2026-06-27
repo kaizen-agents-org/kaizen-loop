@@ -286,6 +286,7 @@ async function refreshWorkspace(
     workspaceReady = workspaceOk && syncOk;
   } else {
     workspaceReady = await runStep(steps, 'workspace', async () => {
+      assertSafeWorkspacePath(slug, project.workspacePath);
       await fs.access(path.join(project.workspacePath, '.git'));
     });
   }

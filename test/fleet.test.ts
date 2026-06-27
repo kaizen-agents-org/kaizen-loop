@@ -420,6 +420,46 @@ describe('refreshFleet', () => {
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands).not.toContain(`clone git@github.com:o/r.git ${unsafeWorkspace}`);
   });
+
+  it('refuses to run no-sync setup or verify in an unsafe workspace', async () => {
+    const project = await setupProject('o-r', { setup: 'npm ci', verify: ['npm test'] });
+    await saveFleet([project]);
+    const unsafeWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'unsafe-workspace-'));
+    await fs.mkdir(path.join(unsafeWorkspace, '.git'), { recursive: true });
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: project.repo,
+          workspacePath: unsafeWorkspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => result(command, args, options?.cwd, ''));
+
+    const output = await refreshFleet({
+      cwd: project.repo,
+      project: 'o-r',
+      runCommand: runner
+    });
+
+    expect(output.ok).toBe(false);
+    expect(output.projects[0].steps).toEqual([
+      { name: 'config', ok: true },
+      expect.objectContaining({
+        name: 'workspace',
+        ok: false,
+        message: expect.stringContaining('Refusing to refresh unsafe workspace path for o-r')
+      }),
+      { name: 'setup', ok: false, message: 'skipped because workspace is not ready' },
+      { name: 'verify', ok: false, message: 'skipped because workspace is not ready' }
+    ]);
+    expect(runner).not.toHaveBeenCalled();
+  });
 });
 
 function fleetProject(overrides: Partial<FleetProjectResult>) {
