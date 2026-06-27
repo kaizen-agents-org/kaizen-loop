@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { configSchema } from '../src/config/schema.js';
-import { runPrGuardianSkill } from '../src/orchestrator/prGuardian.js';
+import { enqueuePrGuardianJob, listPrGuardianJobs, runPendingPrGuardianJobs, runPrGuardianSkill } from '../src/orchestrator/prGuardian.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('runPrGuardianSkill', () => {
@@ -75,6 +78,212 @@ describe('runPrGuardianSkill', () => {
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(2);
+  });
+
+  it('persists one guardian job per PR head SHA', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+    });
+
+    const first = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    const duplicate = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    const changedHead = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'def123456789'
+    });
+
+    expect(duplicate.id).toBe(first.id);
+    expect(changedHead.id).not.toBe(first.id);
+    expect(await listPrGuardianJobs(stateDir)).toHaveLength(2);
+  });
+
+  it('skips corrupt guardian job files when listing jobs', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(path.join(stateDir, 'guardian', 'jobs', 'corrupt.json'), '{not json');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const jobs = await listPrGuardianJobs(stateDir);
+
+      expect(jobs.map((item) => item.id)).toEqual([job.id]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Skipping unreadable PR Guardian job file'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('runs pending guardian jobs and records the final state', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+    });
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].status).toBe('success');
+    expect(jobs[0].attemptCount).toBe(1);
+    expect((await listPrGuardianJobs(stateDir))[0].status).toBe('success');
+  });
+
+  it('resumes stale running guardian jobs', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({
+        ...job,
+        status: 'running',
+        attemptCount: 1,
+        updatedAt: '2026-06-12T00:00:00Z',
+        lastCheckedAt: '2026-06-12T00:00:00Z'
+      }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].status).toBe('success');
+    expect(jobs[0].attemptCount).toBe(2);
+  });
+
+  it('leaves active running guardian jobs alone', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 60, maxAttempts: 2 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({
+        ...job,
+        status: 'running',
+        attemptCount: 1,
+        updatedAt: new Date().toISOString(),
+        lastCheckedAt: new Date().toISOString()
+      }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toEqual([]);
+    expect(runner).not.toHaveBeenCalled();
   });
 });
 

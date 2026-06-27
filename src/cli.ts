@@ -16,6 +16,7 @@ import { planImprove, runImprove } from './commands/improve.js';
 import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './commands/goal.js';
 import { statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
+import { listGuardianJobs, runGuardianForPullRequest, watchGuardianJobs } from './commands/guardian.js';
 import { doctorProject } from './commands/doctor.js';
 import { fleetHasFailures, refreshFleet, syncFleet } from './commands/fleet.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
@@ -610,6 +611,7 @@ program
   .option('--project <slug>', 'target project slug')
   .option('--run <timestamp>', 'run timestamp')
   .option('--issue <number>', 'issue number')
+  .option('--guardian', 'show PR Guardian job state', false)
   .option('--follow', 'follow log output until interrupted', false)
   .action(async (options) => {
     const globals = program.opts<{ project?: string }>();
@@ -617,7 +619,8 @@ program
       cwd: process.cwd(),
       project: options.project ?? globals.project,
       run: options.run,
-      issue: parseOptionalPositiveInteger(options.issue, 'issue')
+      issue: parseOptionalPositiveInteger(options.issue, 'issue'),
+      guardian: Boolean(options.guardian)
     };
     if (options.follow) {
       const controller = new AbortController();
@@ -627,6 +630,56 @@ program
       return;
     }
     console.log(await readLogs(logOptions));
+  });
+
+const guardian = program
+  .command('guardian')
+  .description('manage asynchronous PR Guardian jobs');
+
+guardian
+  .command('list')
+  .description('list PR Guardian jobs')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await listGuardianJobs({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project
+    });
+    print(result, Boolean(options.json ?? globals.json));
+  });
+
+guardian
+  .command('run')
+  .description('run PR Guardian for one pull request')
+  .argument('<pr>', 'pull request number')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (pr, options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await runGuardianForPullRequest({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      pr: parsePositiveInteger(pr, 'pr'),
+      runCommand
+    });
+    print(result, Boolean(options.json ?? globals.json));
+  });
+
+guardian
+  .command('watch')
+  .description('run pending PR Guardian jobs')
+  .option('--project <slug>', 'target project slug')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const result = await watchGuardianJobs({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      runCommand
+    });
+    print(result, Boolean(options.json ?? globals.json));
   });
 
 program

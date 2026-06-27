@@ -18,7 +18,13 @@ import { WorkspaceManager, type DiffStats } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
 import { RunLock } from './lock.js';
-import { runPrGuardianSkill, type PrGuardianSkillResult } from './prGuardian.js';
+import { enqueuePrGuardianJob, runPrGuardianSkill, type PrGuardianSkillResult } from './prGuardian.js';
+import {
+  buildIssueIntakeComment,
+  evaluateIssueIntake,
+  hasIssueIntakeDecisionComment,
+  type IssueIntakeDecision
+} from './issueIntake.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
 import type { RunIssueSummary, RunSummary } from './summary.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
@@ -55,6 +61,13 @@ interface PullRequestReflection {
   reason: string;
   branch: string;
   baseBranch: string;
+  headSha: string;
+}
+
+interface RunIssueSelection {
+  selected: GitHubIssue[];
+  skipped: Array<{ number: number; reason: string }>;
+  openPullRequests: GitHubPullRequest[];
 }
 
 const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
@@ -86,7 +99,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       : undefined;
     const issues = requestedIssues ?? await github.listIssues(config.issues.label);
     const automatic = options.scheduled && requestedIssues === undefined;
-    const openPullRequests = automatic ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests)) : [];
+    const openPullRequests = automatic || issues.some(hasPullRequestResultMarker)
+      ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
+      : [];
     const selection = selectIssues({
       issues,
       config,
@@ -94,15 +109,19 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       explicit: requestedIssues !== undefined,
       openPullRequests
     });
-    return applyOpenPullRequestLimit({
+    const limited = await applyOpenPullRequestLimit({
       config,
       selection,
       automatic,
       openPullRequests
     });
+    return { ...limited, openPullRequests };
   };
 
-  if (options.dryRun) return selectRunIssues();
+  if (options.dryRun) {
+    const { openPullRequests: _openPullRequests, ...selection } = await selectRunIssues();
+    return selection;
+  }
 
   const stateDir = projectStateDir(resolved.slug);
   await fs.mkdir(stateDir, { recursive: true });
@@ -166,8 +185,18 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 
   let runFailed = false;
   try {
-    const selection = await selectRunIssues();
+    let selection = await selectRunIssues();
     summary.skipped = selection.skipped;
+    if (selection.selected.length > 0) {
+      selection = await applyIssueIntakeGate({
+        selection,
+        repo: resolved.project.repo,
+        runId,
+        github,
+        openPullRequests: selection.openPullRequests
+      });
+      summary.skipped = selection.skipped;
+    }
     if (selection.selected.length > 0) {
       const remoteUrl = await new GitClient(options.runCommand, resolved.project.localPath).remoteUrl('origin');
       const baseWorkspace = new WorkspaceManager(options.runCommand, resolved.project.workspacePath, remoteUrl);
@@ -204,6 +233,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
                 runId,
                 runDir,
                 project: resolved.project,
+                stateDir,
                 worktree,
                 github,
                 requestedAgent: options.agent,
@@ -249,6 +279,63 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 
   return summary;
+}
+
+async function applyIssueIntakeGate(options: {
+  selection: RunIssueSelection;
+  repo: string;
+  runId: string;
+  github: GitHubClient;
+  openPullRequests: GitHubPullRequest[];
+}): Promise<RunIssueSelection> {
+  const selected: GitHubIssue[] = [];
+  const skipped = [...options.selection.skipped];
+
+  for (const issue of options.selection.selected) {
+    const decision = evaluateIssueIntake({
+      issue,
+      repo: options.repo,
+      openPullRequests: options.openPullRequests
+    });
+    if (decision.status === 'proceed') {
+      selected.push(issue);
+      continue;
+    }
+
+    await recordIntakeSkip({
+      issue,
+      decision,
+      runId: options.runId,
+      github: options.github
+    });
+    skipped.push({ number: issue.number, reason: `intake ${decision.status}: ${decision.reason}` });
+  }
+
+  return { selected, skipped, openPullRequests: options.openPullRequests };
+}
+
+async function recordIntakeSkip(options: {
+  issue: GitHubIssue;
+  decision: IssueIntakeDecision;
+  runId: string;
+  github: GitHubClient;
+}): Promise<void> {
+  if (
+    options.decision.status === 'already_resolved' &&
+    hasIssueIntakeDecisionComment(options.issue, options.decision.status)
+  ) {
+    return;
+  }
+  await options.github.comment(options.issue.number, buildIssueIntakeComment(options.runId, options.decision));
+  if (options.decision.status !== 'already_resolved') {
+    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  }
+}
+
+function hasPullRequestResultMarker(issue: GitHubIssue): boolean {
+  return (issue.comments ?? []).some((comment) =>
+    comment.body.includes('kaizen-loop:result') && comment.body.includes('pr-created')
+  );
 }
 
 function uniqueIssueNumbers(issueNumbers: number[]): number[] {
@@ -343,6 +430,7 @@ async function processIssueInWorktree(options: {
   runId: string;
   runDir: string;
   project: { repo: string; localPath: string; workspacePath: string };
+  stateDir: string;
   worktree: { branch: string; path: string };
   github: GitHubClient;
   requestedAgent?: 'claude' | 'codex';
@@ -361,6 +449,7 @@ async function processIssueInWorktree(options: {
       ...options.project,
       workspacePath: options.worktree.path
     },
+    stateDir: options.stateDir,
     github: options.github,
     requestedAgent: options.requestedAgent,
     trigger: options.trigger,
@@ -378,6 +467,7 @@ async function processIssue(options: {
   runId: string;
   runDir: string;
   project: { repo: string; localPath: string; workspacePath: string };
+  stateDir: string;
   github: GitHubClient;
   requestedAgent?: 'claude' | 'codex';
   trigger: RunSummary['trigger'];
@@ -654,6 +744,7 @@ async function finishPr(
     github: GitHubClient;
     trigger: RunSummary['trigger'];
     project: { repo: string; workspacePath: string };
+    stateDir: string;
     runCommand: CommandRunner;
   },
   agent: AgentAdapter,
@@ -678,6 +769,7 @@ async function finishPr(
     issue: options.issue,
     config: options.config,
     project: options.project,
+    stateDir: options.stateDir,
     github: options.github,
     runCommand: options.runCommand,
     pr
@@ -718,7 +810,8 @@ async function finishPr(
     prUrl: pr.url,
     guardian: {
       status: guardian.status,
-      summary: guardian.summary
+      summary: guardian.summary,
+      jobId: guardian.jobId
     },
     reason,
     changedFiles: finalDiff.changedFiles,
@@ -954,22 +1047,24 @@ async function reflectPullRequest(options: {
   reason: string;
 }): Promise<PullRequestReflection> {
   await options.workspace.git().push(options.branch, { forceWithLease: true });
+  const headSha = await options.workspace.git().revParse('HEAD');
   const pr = await options.github.createPullRequest({
     base: options.config.git.defaultBranch,
     head: options.branch,
     title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
     body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason)
   });
-  return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch };
+  return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch, headSha };
 }
 
 async function runPrGuardianAfterPullRequest(options: {
   issue: GitHubIssue;
   config: KaizenConfig;
   project: { repo: string; workspacePath: string };
+  stateDir: string;
   github: GitHubClient;
   runCommand: CommandRunner;
-  pr: { url: string; number?: number; branch: string; baseBranch: string };
+  pr: { url: string; number?: number; branch: string; baseBranch: string; headSha: string };
 }): Promise<PrGuardianSkillResult> {
   if (!options.pr.number) {
     return {
@@ -977,6 +1072,26 @@ async function runPrGuardianAfterPullRequest(options: {
       summary: 'PR number could not be parsed; skipped mergeability monitoring.',
       raw: '',
       durationMs: 0
+    };
+  }
+
+  if (options.config.guardian.mode === 'async') {
+    const job = await enqueuePrGuardianJob({
+      stateDir: options.stateDir,
+      config: options.config,
+      repo: options.project.repo,
+      prUrl: options.pr.url,
+      prNumber: options.pr.number,
+      branch: options.pr.branch,
+      baseBranch: options.pr.baseBranch,
+      headSha: options.pr.headSha
+    });
+    return {
+      status: 'queued',
+      summary: `PR guardian job ${job.id} is ${job.status}.`,
+      raw: '',
+      durationMs: 0,
+      jobId: job.id
     };
   }
 

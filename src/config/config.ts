@@ -88,6 +88,7 @@ export function defaultConfigYaml(options: {
     },
     guardian: {
       enabled: true,
+      mode: 'sync',
       command: 'codex',
       timeoutMinutes: 60,
       maxAttempts: 5

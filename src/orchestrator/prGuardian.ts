@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { KaizenConfig } from '../config/schema.js';
 import type { CommandRunner } from '../utils/command.js';
 
@@ -11,11 +13,143 @@ export interface PrGuardianSkillRequest {
   baseBranch: string;
 }
 
+export type PrGuardianJobStatus = 'pending' | 'running' | 'success' | 'blocked' | 'skipped';
+
+export interface PrGuardianJob {
+  version: 1;
+  id: string;
+  repo: string;
+  prUrl: string;
+  prNumber: number;
+  branch: string;
+  baseBranch: string;
+  headSha: string;
+  retryBudget: number;
+  attemptCount: number;
+  status: PrGuardianJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  lastCheckedAt?: string;
+  lastBlocker?: string;
+}
+
 export interface PrGuardianSkillResult {
-  status: 'success' | 'failed' | 'skipped';
+  status: 'success' | 'failed' | 'skipped' | 'queued';
   summary: string;
   raw: string;
   durationMs: number;
+  jobId?: string;
+}
+
+export function guardianJobsDir(stateDir: string): string {
+  return path.join(stateDir, 'guardian', 'jobs');
+}
+
+export async function enqueuePrGuardianJob(options: {
+  stateDir: string;
+  config: KaizenConfig;
+  repo: string;
+  prUrl: string;
+  prNumber: number;
+  branch: string;
+  baseBranch: string;
+  headSha: string;
+}): Promise<PrGuardianJob> {
+  const now = new Date().toISOString();
+  const job: PrGuardianJob = {
+    version: 1,
+    id: guardianJobId(options.repo, options.prNumber, options.headSha),
+    repo: options.repo,
+    prUrl: options.prUrl,
+    prNumber: options.prNumber,
+    branch: options.branch,
+    baseBranch: options.baseBranch,
+    headSha: options.headSha,
+    retryBudget: options.config.guardian.maxAttempts,
+    attemptCount: 0,
+    status: options.config.guardian.enabled ? 'pending' : 'skipped',
+    createdAt: now,
+    updatedAt: now,
+    lastBlocker: options.config.guardian.enabled ? undefined : 'PR guardian is disabled.'
+  };
+  const existing = await readGuardianJob(options.stateDir, job.id);
+  if (existing) return existing;
+  await writeGuardianJob(options.stateDir, job);
+  return job;
+}
+
+export async function listPrGuardianJobs(stateDir: string): Promise<PrGuardianJob[]> {
+  try {
+    const dir = guardianJobsDir(stateDir);
+    const files = (await fs.readdir(dir)).filter((file) => file.endsWith('.json')).sort();
+    return (await Promise.all(files.map((file) => readGuardianJobFile(path.join(dir, file))))).filter((job): job is PrGuardianJob => Boolean(job));
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+export async function findPrGuardianJob(stateDir: string, pr: number): Promise<PrGuardianJob | undefined> {
+  return (await listPrGuardianJobs(stateDir))
+    .filter((job) => job.prNumber === pr)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .at(0);
+}
+
+export async function runPrGuardianJob(options: {
+  stateDir: string;
+  config: KaizenConfig;
+  workspaceDir: string;
+  runCommand: CommandRunner;
+  job: PrGuardianJob;
+}): Promise<PrGuardianJob> {
+  const running = {
+    ...options.job,
+    status: 'running' as const,
+    attemptCount: options.job.attemptCount + 1,
+    updatedAt: new Date().toISOString(),
+    lastCheckedAt: new Date().toISOString()
+  };
+  await writeGuardianJob(options.stateDir, running);
+
+  const result = await runPrGuardianSkill(options.runCommand, {
+    config: options.config,
+    workspaceDir: options.workspaceDir,
+    repo: running.repo,
+    prUrl: running.prUrl,
+    prNumber: running.prNumber,
+    branch: running.branch,
+    baseBranch: running.baseBranch
+  });
+  const finished: PrGuardianJob = {
+    ...running,
+    status: result.status === 'success' ? 'success' : result.status === 'skipped' ? 'skipped' : 'blocked',
+    updatedAt: new Date().toISOString(),
+    lastCheckedAt: new Date().toISOString(),
+    lastBlocker: result.status === 'success' ? undefined : result.summary
+  };
+  await writeGuardianJob(options.stateDir, finished);
+  return finished;
+}
+
+export async function runPendingPrGuardianJobs(options: {
+  stateDir: string;
+  config: KaizenConfig;
+  workspaceDir: string;
+  runCommand: CommandRunner;
+}): Promise<PrGuardianJob[]> {
+  const jobs = await listPrGuardianJobs(options.stateDir);
+  const runnable = jobs.filter(
+    (job) =>
+      job.status === 'pending' ||
+      isStaleRunningJob(job, options.config.guardian.timeoutMinutes) ||
+      (job.status === 'blocked' && job.attemptCount < job.retryBudget)
+  );
+  const results: PrGuardianJob[] = [];
+  for (const job of runnable) {
+    results.push(await runPrGuardianJob({ ...options, job }));
+  }
+  return results;
 }
 
 export async function runPrGuardianSkill(
@@ -82,6 +216,38 @@ export async function runPrGuardianSkill(
       durationMs: Date.now() - startMs
     };
   }
+}
+
+async function readGuardianJob(stateDir: string, id: string): Promise<PrGuardianJob | undefined> {
+  return readGuardianJobFile(path.join(guardianJobsDir(stateDir), `${id}.json`));
+}
+
+async function readGuardianJobFile(file: string): Promise<PrGuardianJob | undefined> {
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8')) as PrGuardianJob;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    console.warn(`Skipping unreadable PR Guardian job file ${file}: ${String(error)}`);
+    return undefined;
+  }
+}
+
+async function writeGuardianJob(stateDir: string, job: PrGuardianJob): Promise<void> {
+  const dir = guardianJobsDir(stateDir);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, `${job.id}.json`), `${JSON.stringify(job, null, 2)}\n`);
+}
+
+function guardianJobId(repo: string, prNumber: number, headSha: string): string {
+  const safeRepo = repo.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+  return `${safeRepo}-pr-${prNumber}-${headSha.slice(0, 12)}`;
+}
+
+function isStaleRunningJob(job: PrGuardianJob, timeoutMinutes: number): boolean {
+  if (job.status !== 'running') return false;
+  const lastCheckedAtMs = Date.parse(job.lastCheckedAt ?? job.updatedAt);
+  if (Number.isNaN(lastCheckedAtMs)) return true;
+  return Date.now() - lastCheckedAtMs > timeoutMinutes * 60_000;
 }
 
 export async function isPrGuardianSkillRunnerAvailable(config: KaizenConfig, runCommand: CommandRunner): Promise<boolean> {

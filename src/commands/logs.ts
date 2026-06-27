@@ -9,6 +9,7 @@ interface LogOptions {
   project?: string;
   run?: string;
   issue?: number;
+  guardian?: boolean;
 }
 
 export async function readLogs(options: LogOptions): Promise<string> {
@@ -44,12 +45,26 @@ export async function followLogs(
 
 async function logFiles(options: LogOptions): Promise<string[]> {
   const resolved = await resolveProject(options.project, options.cwd);
+  if (options.guardian) return guardianLogFiles(resolved.slug);
   const runsDir = path.join(projectStateDir(resolved.slug), 'runs');
   const run = options.run ?? (await latestRun(runsDir));
   if (!run) return [];
   if (!options.issue) return [path.join(runsDir, run, 'summary.json')];
   const issueDir = path.join(runsDir, run, `issue-${options.issue}`);
   return [path.join(issueDir, 'agent.log'), path.join(issueDir, 'verify.log')];
+}
+
+async function guardianLogFiles(slug: string): Promise<string[]> {
+  const jobsDir = path.join(projectStateDir(slug), 'guardian', 'jobs');
+  try {
+    return (await fs.readdir(jobsDir))
+      .filter((file) => file.endsWith('.json'))
+      .sort()
+      .map((file) => path.join(jobsDir, file));
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
 }
 
 async function readOptional(file: string): Promise<string> {

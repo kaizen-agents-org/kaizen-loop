@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { CommandRunner } from '../utils/command.js';
-import type { GitHubIssue, GitHubPullRequest, PullRequestResult } from './types.js';
+import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestDetails, PullRequestResult } from './types.js';
 
 export const KAIZEN_LABELS = [
   'kaizen',
@@ -75,6 +75,17 @@ export class GitHubClient {
       String(limit)
     ]);
     return JSON.parse(result.stdout || '[]') as GitHubPullRequest[];
+  }
+
+  async getPullRequest(number: number): Promise<GitHubPullRequestDetails> {
+    const result = await this.gh([
+      'pr',
+      'view',
+      String(number),
+      '--json',
+      'number,headRefName,headRepositoryOwner,url,baseRefName,headRefOid'
+    ]);
+    return JSON.parse(result.stdout) as GitHubPullRequestDetails;
   }
 
   async addLabels(issue: number, labels: string[]): Promise<void> {
