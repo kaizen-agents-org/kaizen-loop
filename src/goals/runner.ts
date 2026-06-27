@@ -5,8 +5,9 @@ import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import { runKaizen, type DirectCommitConfirmation } from '../orchestrator/run.js';
 import type { RunSummary } from '../orchestrator/summary.js';
-import type { CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { goalDir, loadGoalState, saveGoalState, touchGoal } from './state.js';
 import { GoalAgentAdapter } from './agent.js';
@@ -33,7 +34,10 @@ export async function runGoal(options: RunGoalOptions): Promise<GoalState> {
     throw new KaizenError(`Goal ${goal.id} is ${goal.status}; only active goals can run.`, 2);
   }
 
-  const agent = new GoalAgentAdapter(options.runCommand, config.goal.agent);
+  const agent = new GoalAgentAdapter(options.runCommand, {
+    ...config.goal.agent,
+    envAllowlist: config.safety.envAllowlist
+  });
   const stateDir = goalDir(resolved.slug, goal.id);
   const lock = await GoalLock.acquire(stateDir);
 
@@ -239,6 +243,7 @@ async function runMechanicalEvaluation(options: {
   try {
     const result = await options.runCommand(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
       cwd: options.workspacePath,
+      env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, options.config.safety.envAllowlist), options.workspacePath),
       timeoutMs: options.config.goal.evaluation.timeoutMinutes * 60_000,
       rejectOnNonZero: false
     });

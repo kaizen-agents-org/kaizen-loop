@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
+import { DEFAULT_ENV_ALLOWLIST } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { configSchema, type KaizenConfig } from './schema.js';
 
@@ -44,6 +45,10 @@ export function defaultConfigYaml(options: {
       maxAttemptsPerIssue: 3,
       maxOpenPullRequests: 1,
       latestStartHour: 7
+    },
+    safety: {
+      minFreeDiskMb: 1024,
+      envAllowlist: DEFAULT_ENV_ALLOWLIST
     },
     scheduler: {
       jobs: {

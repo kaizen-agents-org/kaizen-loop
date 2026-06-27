@@ -36,6 +36,29 @@ run:
   maxOpenPullRequests: 1     # 自動実行で新規 PR 作成を許可する repo 別 open PR 上限
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
+safety:
+  # workspace / worktree 作成前に必要な空き容量(MB)
+  minFreeDiskMb: 1024
+  # setup / verify / builder / verifier / guardian へ渡す process.env の allowlist
+  # Kaizen 専用変数と workspace-local TMPDIR は実行時に追加される
+  envAllowlist:
+    - PATH
+    - HOME
+    - USER
+    - LOGNAME
+    - SHELL
+    - TERM
+    - LANG
+    - LC_ALL
+    - LC_CTYPE
+    - TMPDIR
+    - TMP
+    - TEMP
+    - KAIZEN_HOME
+    - GH_CONFIG_DIR
+    - SSH_AUTH_SOCK
+    - GIT_SSH_COMMAND
+
 scheduler:
   jobs:
     maintenance:
@@ -166,6 +189,8 @@ issues:
 - `scheduler.provider` は省略可能。省略時、`kaizen scheduler status` / `plan` は macOS なら `launchd`、Linux なら `cron` と表示する。schema は `codex-automation` / `claude-routine` / `external` も受け付けるが、現行の `scheduler sync` は OS に応じた launchd / cron 生成だけを行う
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
+- `safety.minFreeDiskMb` は workspace / worktree 作成前の空き容量 preflight。対象パスがまだ存在しない場合は既存の親ディレクトリを検査する
+- `safety.envAllowlist` は agent と shell command へ渡す環境変数名の allowlist。`KAIZEN_BUILD_RESULT_PATH` などの Kaizen 専用変数と workspace-local `TMPDIR` / `TMP` / `TEMP` は実行時に追加される
 - `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `run.maxOpenPullRequests` は scheduler job などの自動実行にだけ適用する repo 別 backpressure。未レビュー PR が溜まりすぎて競合やレビュー滞留を増やすのを避けるため、open PR 数が上限以上なら新しい Issue は選択せず、`kaizen fix` / `--issue` の明示実行は止めない。固定ブランチを再利用する sync PR (`codex/daily-dogfood-sync`、`codex/sync-kaizen-dogfood`、`codex/sync-kaizen-shared-skills`) はこのカウントから除外する

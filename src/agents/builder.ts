@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import type { AgentAdapter, AgentRequest, AgentResult } from './types.js';
 
@@ -32,6 +32,7 @@ const builderPayloadSchema = z
 export interface BuilderAgentOptions {
   command: string;
   resultPath: string;
+  envAllowlist: string[];
 }
 
 export class BuilderAgentAdapter implements AgentAdapter {
@@ -44,7 +45,11 @@ export class BuilderAgentAdapter implements AgentAdapter {
 
   async isAvailable(): Promise<boolean> {
     try {
-      await this.runCommand(this.options.command, ['--version'], { rejectOnNonZero: true, timeoutMs: 30_000 });
+      await this.runCommand(this.options.command, ['--version'], {
+        rejectOnNonZero: true,
+        timeoutMs: 30_000,
+        env: buildAllowlistedEnv(process.env, this.options.envAllowlist)
+      });
       return true;
     } catch {
       return false;
@@ -58,13 +63,12 @@ export class BuilderAgentAdapter implements AgentAdapter {
 
     try {
       const env = await envWithKaizenTemp(
-        {
-          ...process.env,
+        buildAllowlistedEnv(process.env, this.options.envAllowlist, {
           KAIZEN_BUILD_RESULT_PATH: resultPath,
           KAIZEN_WORKSPACE_DIR: req.workspaceDir,
           ...(req.preferredBackend ? { KAIZEN_PREFERRED_AGENT: req.preferredBackend } : {}),
           ...(req.model ? { KAIZEN_AGENT_MODEL: req.model } : {})
-        },
+        }),
         req.workspaceDir
       );
       const result = await this.runCommand(this.options.command, [], {

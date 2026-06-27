@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 
@@ -37,11 +37,13 @@ export interface VerifierAgentOptions {
   command: string;
   resultPath: string;
   timeoutMinutes: number;
+  envAllowlist: string[];
 }
 
 export interface VerifierRequest {
   workspaceDir: string;
   prompt: string;
+  timeoutMs?: number;
 }
 
 export interface VerifierResult {
@@ -63,7 +65,11 @@ export class VerifierAgentAdapter {
 
   async isAvailable(): Promise<boolean> {
     try {
-      await this.runCommand(this.options.command, ['--version'], { rejectOnNonZero: true, timeoutMs: 30_000 });
+      await this.runCommand(this.options.command, ['--version'], {
+        rejectOnNonZero: true,
+        timeoutMs: 30_000,
+        env: buildAllowlistedEnv(process.env, this.options.envAllowlist)
+      });
       return true;
     } catch {
       return false;
@@ -77,17 +83,16 @@ export class VerifierAgentAdapter {
 
     try {
       const env = await envWithKaizenTemp(
-        {
-          ...process.env,
+        buildAllowlistedEnv(process.env, this.options.envAllowlist, {
           KAIZEN_VERIFIER_RESULT_PATH: resultPath,
           KAIZEN_WORKSPACE_DIR: req.workspaceDir
-        },
+        }),
         req.workspaceDir
       );
       const result = await this.runCommand(this.options.command, [], {
         cwd: req.workspaceDir,
         input: req.prompt,
-        timeoutMs: this.options.timeoutMinutes * 60_000,
+        timeoutMs: req.timeoutMs ?? this.options.timeoutMinutes * 60_000,
         rejectOnNonZero: false,
         env
       });
@@ -126,7 +131,7 @@ export class VerifierAgentAdapter {
         summary: String(error),
         notes: '',
         raw: String(error),
-        durationMs: this.options.timeoutMinutes * 60_000
+        durationMs: req.timeoutMs ?? this.options.timeoutMinutes * 60_000
       };
     }
   }

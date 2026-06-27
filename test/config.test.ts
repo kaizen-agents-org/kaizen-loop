@@ -25,6 +25,9 @@ describe('configSchema', () => {
     });
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.run.maxOpenPullRequests).toBe(1);
+    expect(config.safety.minFreeDiskMb).toBe(1024);
+    expect(config.safety.envAllowlist).toContain('PATH');
+    expect(config.safety.envAllowlist).not.toContain('SECRET_TOKEN');
     expect(config.scheduler.jobs?.maintenance).toEqual({
       enabled: true,
       schedule: { type: 'daily', time: '02:00' },

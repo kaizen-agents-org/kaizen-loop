@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_ENV_ALLOWLIST } from '../utils/command.js';
 import { isProjectSlug } from '../utils/slug.js';
 
 const nullableString = z.string().nullable().optional();
@@ -102,6 +103,16 @@ export const configSchema = z
         maxAttemptsPerIssue: 3,
         maxOpenPullRequests: 1,
         latestStartHour: 7
+      }),
+    safety: z
+      .object({
+        minFreeDiskMb: z.number().int().nonnegative().default(1024),
+        envAllowlist: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default(DEFAULT_ENV_ALLOWLIST)
+      })
+      .strict()
+      .default({
+        minFreeDiskMb: 1024,
+        envAllowlist: DEFAULT_ENV_ALLOWLIST
       }),
     scheduler: z
       .object({

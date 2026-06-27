@@ -40,6 +40,7 @@ describe('BuilderAgentAdapter', () => {
       expect(command).toBe('builder-agent');
       expect(args).toEqual([]);
       if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
+      expect(options.env.SECRET_TOKEN).toBeUndefined();
       await fs.writeFile(
         options.env.KAIZEN_BUILD_RESULT_PATH,
         JSON.stringify({
@@ -54,9 +55,16 @@ describe('BuilderAgentAdapter', () => {
 
     const adapter = new BuilderAgentAdapter(runner, {
       command: 'builder-agent',
-      resultPath: '.kaizen/builder/build-result.json'
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
     });
-    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+    process.env.SECRET_TOKEN = 'do-not-pass';
+    let result: Awaited<ReturnType<BuilderAgentAdapter['run']>>;
+    try {
+      result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+    } finally {
+      delete process.env.SECRET_TOKEN;
+    }
 
     expect(result.status).toBe('fixed');
     expect(result.summary).toBe('直した');
@@ -76,7 +84,8 @@ describe('VerifierAgentAdapter', () => {
     const adapter = new VerifierAgentAdapter(runner, {
       command: 'verifier',
       resultPath: '.kaizen/verifier/verify-result.json',
-      timeoutMinutes: 1
+      timeoutMinutes: 1,
+      envAllowlist: ['PATH']
     });
     return adapter.run({ workspaceDir: workspace, prompt: 'review' });
   }

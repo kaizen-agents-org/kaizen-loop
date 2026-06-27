@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
 import type { GoalEvaluation, GoalPlan } from './types.js';
 
@@ -37,6 +37,7 @@ export interface GoalAgentOptions {
   args: string[];
   resultPath: string;
   timeoutMinutes: number;
+  envAllowlist: string[];
 }
 
 export interface GoalAgentRequest {
@@ -75,11 +76,10 @@ export class GoalAgentAdapter {
       input: req.prompt,
       timeoutMs: this.options.timeoutMinutes * 60_000,
       rejectOnNonZero: false,
-      env: {
-        ...process.env,
+      env: buildAllowlistedEnv(process.env, this.options.envAllowlist, {
         KAIZEN_GOAL_RESULT_PATH: resultPath,
         KAIZEN_GOAL_MODE: mode
-      }
+      })
     });
     const raw = `${result.stdout}${result.stderr}`;
     const payload = (await readPayload(resultPath, schema)) ?? parsePayload(raw, schema);
