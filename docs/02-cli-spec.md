@@ -10,6 +10,7 @@ Commands:
   run         夜間メンテナンスパイプラインを実行する(スケジューラからも呼ばれる)
   fix         Issue を即時修正する(夜間を待たない。→ 09-instant-run.md)
   report      Kaizen Issue を素早く登録する(人間・AI 共用)
+  smoke       sandbox issue-to-PR E2E smoke run を実行し証跡を保存する
   queue       既存 Issue を queued 実行対象にする
   unqueue     既存 Issue を queued 実行対象から外す
   improve     queued/backlog Issue をユーザー操作で即時処理する
@@ -179,6 +180,22 @@ echo "$BODY" | kaizen report "起動時に config 検証エラーの行番号が
 - `--now` は未指定時の `--queue` と同じく実行許可ラベルを付ける。即時実行だけにしたい場合は `--now --no-queue`
 - `--json` 時は作成された Issue の番号と URL を JSON で返す(AI が後続処理に使える)
 - 本文が Issue テンプレートの必須セクション(再現手順 / 期待動作)を欠く場合は警告を出すが登録は通す(夜間エージェントが「情報不足」と判断した場合の挙動は [04-nightly-pipeline.md](./04-nightly-pipeline.md) §6)
+
+---
+
+## `kaizen smoke`
+
+Sandbox repository で実 GitHub 境界を含む issue-to-PR smoke run を 1 件実行し、readiness review 用の証跡 JSON を保存する。内部は `report --now` と同じ instant pipeline を使うが、作成 Issue には `kaizen:pr-only` を付け、GitHub の closing issue 認識を `gh pr view --json closingIssuesReferences` で確認する。
+
+```
+kaizen smoke [--project <slug>] [--title <title>] [--body <body>]
+             [--body-file <path|->] [--priority P0|P1|P2]
+             [--agent claude|codex] [--yes] [--json]
+```
+
+証跡は `~/.kaizen/projects/<slug>/smoke-runs/<run-id>-issue-<番号>.json` に保存する。artifact には Issue、branch、PR、mechanical verification log、verifier verdict/log、closing issue recognition、guardian outcome を含める。詳細は [13-sandbox-smoke.md](./13-sandbox-smoke.md)。
+
+非 TTY / `--json` で実行する場合は `--yes` が必須。production repository ではなく、harmless なテスト PR を許容する sandbox repository に対して実行する。
 
 ---
 

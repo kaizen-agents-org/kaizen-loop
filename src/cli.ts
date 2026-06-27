@@ -19,6 +19,7 @@ import { followLogs, readLogs } from './commands/logs.js';
 import { listGuardianJobs, runGuardianForPullRequest, watchGuardianJobs } from './commands/guardian.js';
 import { doctorProject } from './commands/doctor.js';
 import { fleetHasFailures, refreshFleet, syncFleet } from './commands/fleet.js';
+import { runSandboxSmoke } from './commands/smoke.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
 import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
 
@@ -304,6 +305,37 @@ program
           : undefined
       })
       : await reportIssue(reportOptions);
+    print(result, json);
+  });
+
+program
+  .command('smoke')
+  .description('run a controlled sandbox issue-to-PR smoke test and save an artifact')
+  .option('--project <slug>', 'target project slug')
+  .option('--title <title>', 'smoke issue title')
+  .option('--body <body>', 'smoke issue body')
+  .option('--body-file <path>', 'read smoke issue body from file or stdin with -')
+  .option('--priority <P0|P1|P2>', 'priority label', 'P2')
+  .option('--agent <agent>', 'agent override: claude or codex')
+  .option('--yes', 'run non-interactively', false)
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ project?: string; json?: boolean }>();
+    const json = Boolean(options.json ?? globals.json);
+    if (!options.yes && (json || !process.stdin.isTTY || !process.stdout.isTTY)) {
+      throw new KaizenError('Use --yes to run smoke non-interactively', 2);
+    }
+    const result = await runSandboxSmoke({
+      cwd: process.cwd(),
+      project: options.project ?? globals.project,
+      title: options.title,
+      body: await resolveBody(options.body ?? '', options.bodyFile) || undefined,
+      priority: parsePriority(options.priority),
+      agent: parseAgent(options.agent),
+      json,
+      assumeYes: Boolean(options.yes),
+      runCommand
+    });
     print(result, json);
   });
 

@@ -1,6 +1,12 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { CommandRunner } from '../utils/command.js';
-import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestDetails, PullRequestResult } from './types.js';
+import type {
+  GitHubIssue,
+  GitHubPullRequest,
+  GitHubPullRequestDetails,
+  GitHubPullRequestLinkage,
+  PullRequestResult
+} from './types.js';
 
 export const KAIZEN_LABELS = [
   'kaizen',
@@ -86,6 +92,23 @@ export class GitHubClient {
       'number,headRefName,headRepositoryOwner,url,baseRefName,headRefOid'
     ]);
     return JSON.parse(result.stdout) as GitHubPullRequestDetails;
+  }
+
+  async getRepositoryDefaultBranch(): Promise<string> {
+    const result = await this.gh(['repo', 'view', '--json', 'defaultBranchRef']);
+    const payload = JSON.parse(result.stdout || '{}') as { defaultBranchRef?: { name?: string } };
+    return payload.defaultBranchRef?.name ?? '';
+  }
+
+  async getPullRequestLinkage(number: number): Promise<GitHubPullRequestLinkage> {
+    const result = await this.gh([
+      'pr',
+      'view',
+      String(number),
+      '--json',
+      'number,url,baseRefName,isDraft,closingIssuesReferences'
+    ]);
+    return JSON.parse(result.stdout) as GitHubPullRequestLinkage;
   }
 
   async addLabels(issue: number, labels: string[]): Promise<void> {
