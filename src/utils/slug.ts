@@ -1,3 +1,13 @@
+export function isProjectSlug(slug: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(slug) && !slug.includes('..');
+}
+
+export function assertProjectSlug(slug: string): void {
+  if (!isProjectSlug(slug)) {
+    throw new Error(`Invalid Kaizen project slug: ${slug}`);
+  }
+}
+
 export function slugify(input: string, maxLength = 48): string {
   const slug = input
     .normalize('NFKD')
@@ -11,7 +21,9 @@ export function slugify(input: string, maxLength = 48): string {
 }
 
 export function slugFromRepo(repo: string): string {
-  return repo.replace(/\//g, '-');
+  const slug = repo.replace(/\//g, '-');
+  assertProjectSlug(slug);
+  return slug;
 }
 
 export function repoFromRemote(remote: string): string | undefined {

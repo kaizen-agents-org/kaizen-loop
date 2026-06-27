@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isProjectSlug } from '../utils/slug.js';
 
 const nullableString = z.string().nullable().optional();
 const timeString = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
@@ -303,7 +304,7 @@ export const registryProjectSchema = z
 export const registrySchema = z
   .object({
     version: z.literal(1),
-    projects: z.record(z.string(), registryProjectSchema)
+    projects: z.record(z.string().refine(isProjectSlug, { message: 'Invalid project slug' }), registryProjectSchema)
   })
   .strict();
 

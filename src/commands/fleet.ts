@@ -10,7 +10,7 @@ import { RunLock } from '../orchestrator/lock.js';
 import { enableScheduler } from '../scheduler/scheduler.js';
 import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir, workspaceDir } from '../utils/paths.js';
-import { repoFromRemote, slugFromRepo } from '../utils/slug.js';
+import { assertProjectSlug, repoFromRemote, slugFromRepo } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 
@@ -574,6 +574,7 @@ function githubRemote(repo: string): string {
 }
 
 function assertSafeWorkspacePath(slug: string, projectWorkspacePath: string): void {
+  assertProjectSlug(slug);
   if (path.resolve(projectWorkspacePath) !== path.resolve(workspaceDir(slug))) {
     throw new Error(`Refusing to refresh unsafe workspace path for ${slug}: ${projectWorkspacePath}`);
   }
