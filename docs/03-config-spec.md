@@ -169,7 +169,7 @@ issues:
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `run.maxOpenPullRequests` は scheduler job などの自動実行にだけ適用する repo 別 backpressure。未レビュー PR が溜まりすぎて競合やレビュー滞留を増やすのを避けるため、open PR 数が上限以上なら新しい Issue は選択せず、`kaizen fix` / `--issue` の明示実行は止めない。固定ブランチを再利用する sync PR (`codex/daily-dogfood-sync`、`codex/sync-kaizen-dogfood`、`codex/sync-kaizen-shared-skills`) はこのカウントから除外する
 - `verifier.enabled: true` の場合、`open_pr` / `open_pr_with_warning` は常に ready-for-review の PR 作成へ進む。直接コミット判定は行わない。verifier は PR 作成可否のゲートであり、マージ承認ではない
-- `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、未解決の actionable review feedback 対応、レビューコメントへの返信は skill 側の責務
+- `guardian.enabled: true` の場合、PR 作成後に vendored `skills/pr-guardian/SKILL.md` を `guardian.command exec` で実行する。PR の mergeable 化、`gh run watch` による CI 監視、未解決の actionable review feedback 対応、レビューコメントへの返信は skill 側の責務。各 pass 後に Kaizen Loop 本体が未解決・非 outdated の review thread を確認し、残っていれば `guardian.maxAttempts` まで再実行する。approval 不足は branch protection が明示要求している場合だけ blocker として扱う
 - `goal.agent` は Goal planner / evaluator の呼び出し設定。`KAIZEN_GOAL_RESULT_PATH` に JSON を書くか、stdout の最後に JSON を出す。Goal runner はこの agent に実装や GitHub 操作をさせず、Issue 作成と既存 pipeline の呼び出しを自分で行う
 - `goal.issueLabel` は `kaizen goal run` が生成する Issue に付けるラベル。実行対象の判定は通常の `issues.label` と queued label に従う
 - `goal.evaluation.command` は Goal 達成の機械的な追加ゲート。設定されている場合、各 iteration 後に登録プロジェクトの checkout で実行し、失敗時は AI evaluator の `succeeded` を `continue` に降格する

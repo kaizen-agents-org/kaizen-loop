@@ -37,7 +37,7 @@ ${verify}
 6. Respect existing project instructions such as AGENTS.md or CLAUDE.md.
 7. Commit your changes with message: kaizen: <summary> (#${options.issue.number})
 8. Add regression tests when practical.
-9. If you discover a separate Kaizen Agents bug or unrelated repository bug while working, do not file it yourself and do not expand this fix. Add it to "discoveredIssues" in the final JSON so kaizen-loop can route and file a follow-up issue.
+9. If you discover a separate Kaizen Agents bug or unrelated repository bug while working, do not file it yourself and do not expand this fix. Add it to "discoveredIssues" in the final JSON so kaizen-loop can route and file a follow-up issue. Set discoveredIssues[].repo to the repository where the bug should be fixed, not necessarily this source issue repository; for fleet or cross-repository failures, use the repository named by the failing checkout, workspace path, command, or log.
 
 # Final response
 

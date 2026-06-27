@@ -141,7 +141,7 @@ The important contract points are:
 - `commands.verify` is the mechanical gate; every command must pass before PR/direct reflection continues.
 - `builder.command` receives the issue prompt on stdin and writes `builder.resultPath`.
 - `verifier.command` receives a verifier prompt on stdin and writes `verifier.resultPath`.
-- `guardian.command` runs the vendored `pr-guardian` workflow after PR creation.
+- `guardian.command` runs the vendored `pr-guardian` workflow after PR creation; unresolved, non-outdated review threads keep the guardian loop running up to `guardian.maxAttempts`, but missing human approval is not a blocker unless branch protection requires it.
 - `policy.mode`, protected paths, forbidden paths, labels, diff size, and verifier output decide whether the result becomes a PR, a direct commit, or a human handoff.
 
 ## Documentation

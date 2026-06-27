@@ -14,7 +14,7 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: 'done',
+      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -31,11 +31,82 @@ describe('runPrGuardianSkill', () => {
 
     const prompt = String(runner.mock.calls[0][1].at(-1));
 
-    expect(prompt).toContain('Always inspect PR review feedback before declaring the PR mergeable');
+    expect(prompt).toContain('Always inspect PR review feedback before declaring the PR ready to merge');
+    expect(prompt).toContain('Do not require reviewDecision=APPROVED or human approval');
     expect(prompt).toContain('PullRequest.reviewThreads');
     expect(prompt).toContain('hasNextPage=false');
-    expect(prompt).toContain('no unresolved actionable review feedback remains');
+    expect(prompt).toContain('Reply in the same review thread or comment');
+    expect(prompt).toContain('links to the original comment or review');
+    expect(prompt).toContain('no non-outdated unresolved review threads or actionable PR comments remain');
+    expect(prompt).toContain('missing approval or reviewDecision other than APPROVED is not a blocker');
     expect(prompt).toContain('required checks are passing');
     expect(prompt).toContain('unresolved/skipped feedback with reasons');
   });
+
+  it('reruns while unresolved review threads remain and fails after the retry budget', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? reviewThreadsResponse([{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please fix this.' }])
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('unresolved review feedback');
+    expect(result.raw).toContain('src/file.ts:12 by reviewer');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(2);
+  });
 });
+
+function reviewThreadsResponse(threads: Array<{ path: string; line: number; author: string; body: string }>): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo: {
+              hasNextPage: false,
+              endCursor: null
+            },
+            nodes: threads.map((thread) => ({
+              isResolved: false,
+              isOutdated: false,
+              path: thread.path,
+              line: thread.line,
+              comments: {
+                nodes: [
+                  {
+                    body: thread.body,
+                    author: {
+                      login: thread.author
+                    }
+                  }
+                ]
+              }
+            }))
+          }
+        }
+      }
+    }
+  });
+}
