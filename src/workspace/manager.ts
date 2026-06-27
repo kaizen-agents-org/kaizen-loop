@@ -15,6 +15,12 @@ export interface DiffStats {
   protectedFiles: string[];
 }
 
+export interface WorkspaceCommandResult {
+  command: string;
+  ok: boolean;
+  output: string;
+}
+
 export class WorkspaceManager {
   constructor(
     private readonly run: CommandRunner,
@@ -49,12 +55,17 @@ export class WorkspaceManager {
     await git.clean();
   }
 
-  async runSetup(config: KaizenConfig): Promise<void> {
-    if (!config.commands.setup) return;
-    await this.runShell(config.commands.setup, undefined);
+  async runSetup(config: KaizenConfig): Promise<WorkspaceCommandResult | undefined> {
+    if (!config.commands.setup) return undefined;
+    const result = await this.runShell(config.commands.setup, undefined);
+    return {
+      command: config.commands.setup,
+      ok: result.exitCode === 0,
+      output: `${result.stdout}${result.stderr}`
+    };
   }
 
-  async runVerify(config: KaizenConfig): Promise<Array<{ command: string; ok: boolean; output: string }>> {
+  async runVerify(config: KaizenConfig): Promise<WorkspaceCommandResult[]> {
     const results = [];
     for (const command of config.commands.verify) {
       const result = await this.runShell(command, config.commands.verifyTimeoutMinutes * 60_000);

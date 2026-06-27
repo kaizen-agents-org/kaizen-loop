@@ -15,6 +15,7 @@ Commands:
   improve     queued/backlog Issue をユーザー操作で即時処理する
   goal        複数 iteration の Goal を作成・実行・評価する
   status      ループの状態・直近の実行結果を表示する
+  fleet       登録済みリポジトリ群のワークスペース更新・検証
   scheduler   スケジューラ job を管理する
   fleet       repo 群の registry/workspace/label/scheduler を再構築する
   logs        実行ログを表示する
@@ -214,6 +215,24 @@ kaizen status [--project <slug>] [--metrics] [--json]
 - `--metrics`: 累積メトリクス(→ [00-overview.md](./00-overview.md) §6)
 
 朝のルーティンは `kaizen status` → `git pull` → 必要なら PR レビュー、を想定する。
+
+---
+
+## `kaizen fleet refresh`
+
+登録済み Kaizen fleet を `~/.kaizen/registry.json` から発見し、各 workspace が次の monitor / scheduler pass に戻れる状態かを検証する。PR merge 後の dogfood では `npm run dogfood:fleet-refresh` を使う。
+
+```
+kaizen fleet refresh [--project <slug>] [--sync] [--json]
+```
+
+| オプション | 意味 |
+|---|---|
+| `--project <slug>` | fleet 全体ではなく 1 project だけ検証する |
+| `--sync` | 各 workspace を clone 済みにし、`git.defaultBranch` へ fetch / reset / clean してから検証する |
+| `--json` | project ごとの `config` / `workspace` / `sync` / `setup` / `verify` 結果を JSON で返す |
+
+検証では各リポジトリの `.kaizen/config.yml` を読み、`commands.setup` と `commands.verify` を workspace 上で実行する。未設定の setup / verify は成功扱いで `not configured` と表示する。いずれかの project で config 読み込み、workspace 確認、sync、setup、verify が失敗した場合、コマンド全体は失敗として終了コード `1` を返す。
 
 ---
 

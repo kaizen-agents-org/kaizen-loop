@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "dev": "tsx src/cli.ts",
+    "dogfood:fleet-refresh": "sh scripts/dogfood-fleet-refresh.sh",
     "dogfood:plan": "npm run build && node dist/cli.js fleet --root .. --owner kaizen-agents-org --prune --dry-run",
     "dogfood:sync": "npm run build && node dist/cli.js fleet --root .. --owner kaizen-agents-org --prune",
     "dogfood:verify": "npm run build && node dist/cli.js fleet --root .. --owner kaizen-agents-org --prune --verify"
