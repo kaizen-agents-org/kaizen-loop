@@ -29,3 +29,8 @@ export interface GitHubPullRequest {
   headRepositoryOwner?: { login?: string };
   url: string;
 }
+
+export interface GitHubPullRequestDetails extends GitHubPullRequest {
+  baseRefName: string;
+  headRefOid: string;
+}

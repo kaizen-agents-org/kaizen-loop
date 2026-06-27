@@ -15,9 +15,9 @@ Commands:
   improve     queued/backlog Issue をユーザー操作で即時処理する
   goal        複数 iteration の Goal を作成・実行・評価する
   status      ループの状態・直近の実行結果を表示する
-  fleet       登録済みリポジトリ群のワークスペース更新・検証
   scheduler   スケジューラ job を管理する
   fleet       repo 群の registry/workspace/label/scheduler を再構築する
+  guardian    非同期 PR Guardian job を確認・実行する
   logs        実行ログを表示する
   doctor      環境診断・修復
   list        登録済みプロジェクト一覧
@@ -236,6 +236,22 @@ kaizen fleet refresh [--project <slug>] [--sync] [--json]
 
 ---
 
+## `kaizen guardian`
+
+`guardian.mode: async` で保存された PR Guardian job を扱う。
+
+```
+kaizen guardian list [--project <slug>] [--json]
+kaizen guardian run <pr> [--project <slug>] [--json]
+kaizen guardian watch [--project <slug>] [--json]
+```
+
+- `list`: 保存済み job を表示する
+- `run <pr>`: 指定 PR の job を実行する。PR head SHA が保存済み job と違う場合は新しい job を作り、古い結論を再利用しない
+- `watch`: pending job と retry budget が残る blocked job を順に実行する
+
+---
+
 ## `kaizen scheduler`
 
 スケジューラ登録の確認・同期・無効化。`disable` は**キルスイッチ**であり、即座に確実に止まることを最優先とする。
@@ -299,11 +315,12 @@ node dist/cli.js run --project kaizen-agents-org-kaizen-loop --dry-run --json
 ## `kaizen logs`
 
 ```
-kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--follow]
+kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--guardian] [--follow]
 ```
 
 - 引数なし: 直近の実行の `summary.json` を表示
 - `--issue`: その Issue のエージェントログ・検証ログを表示
+- `--guardian`: 非同期 PR Guardian job state JSON を表示
 - `--follow`: 実行中の run をテイルする(夜間実行を手動で見守る場合)
 
 ---

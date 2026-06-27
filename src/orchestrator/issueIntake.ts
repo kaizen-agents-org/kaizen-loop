@@ -1,0 +1,120 @@
+import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
+import { hasPendingPullRequest } from '../report/comments.js';
+
+export type IssueIntakeDecisionStatus =
+  | 'proceed'
+  | 'needs_context'
+  | 'upstream_first'
+  | 'not_improvement'
+  | 'already_resolved';
+
+export interface IssueIntakeDecision {
+  status: IssueIntakeDecisionStatus;
+  reason: string;
+  evidence: string[];
+}
+
+export function evaluateIssueIntake(options: {
+  issue: GitHubIssue;
+  repo: string;
+  openPullRequests: GitHubPullRequest[];
+}): IssueIntakeDecision {
+  const text = issueText(options.issue);
+  const normalized = text.toLowerCase();
+
+  if (hasPendingPullRequest(options.issue.comments ?? [], options.openPullRequests) || alreadyResolvedText(normalized)) {
+    return {
+      status: 'already_resolved',
+      reason: 'Existing work appears to already address this issue.',
+      evidence: ['Issue comments or related PR state indicate an existing resolution path.']
+    };
+  }
+
+  const upstreamRepo = referencedUpstreamRepo(text, options.repo);
+  if (upstreamRepo && mentionsSourceOfTruthSync(normalized)) {
+    return {
+      status: 'upstream_first',
+      reason: `The issue describes source-of-truth drift; fix ${upstreamRepo} before downstream sync work.`,
+      evidence: [`Referenced upstream/source-of-truth repository: ${upstreamRepo}`]
+    };
+  }
+
+  if (weakensGuardrails(normalized)) {
+    return {
+      status: 'not_improvement',
+      reason: 'The recommended action appears to weaken safety, verification, or review guardrails.',
+      evidence: ['Issue text combines removal/relaxation language with safety, verification, or review controls.']
+    };
+  }
+
+  if (lacksActionableContext(options.issue)) {
+    return {
+      status: 'needs_context',
+      reason: 'The issue does not include enough evidence or expected behavior for safe automated implementation.',
+      evidence: ['Issue body is missing or too short to identify a concrete improvement.']
+    };
+  }
+
+  return {
+    status: 'proceed',
+    reason: 'The issue appears to describe a scoped improvement suitable for builder execution.',
+    evidence: []
+  };
+}
+
+export function buildIssueIntakeComment(runId: string, decision: IssueIntakeDecision): string {
+  const evidence = decision.evidence.length
+    ? decision.evidence.map((item) => `- ${item}`).join('\n')
+    : '- No additional evidence recorded.';
+
+  return `## Kaizen Loop intake decision
+
+The issue was treated as evidence rather than as an implementation order.
+
+| | |
+|---|---|
+| Run | ${runId} |
+| Decision | \`${decision.status}\` |
+| Reason | ${decision.reason} |
+
+## Evidence
+${evidence}`;
+}
+
+function issueText(issue: GitHubIssue): string {
+  const comments = (issue.comments ?? []).map((comment) => comment.body).join('\n\n');
+  return [issue.title, issue.body, comments].filter(Boolean).join('\n\n');
+}
+
+function alreadyResolvedText(normalized: string): boolean {
+  return /\balready\s+(resolved|fixed|addressed)\b/.test(normalized) || /\b(resolved|fixed|addressed)\s+by\s+#\d+\b/.test(normalized);
+}
+
+function referencedUpstreamRepo(text: string, currentRepo: string): string | undefined {
+  const repos = [...text.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\b/g)]
+    .map((match) => match[1])
+    .filter((repo) => repo !== currentRepo);
+  return repos.find(Boolean);
+}
+
+function mentionsSourceOfTruthSync(normalized: string): boolean {
+  return (
+    /(source[- ]of[- ]truth|upstream|canonical)/.test(normalized) &&
+    /(sync|copy|drift|downstream|mirror|vendored)/.test(normalized)
+  );
+}
+
+function weakensGuardrails(normalized: string): boolean {
+  return /\b(should|must|please|recommend(?:ed)?|expected|suggested)[^.\n]*(remove|drop|delete|disable|skip|relax|weaken)[^.\n]*(safety|guardrail|verification|review|pr guardian|checks?|tests?|approval|feedback)/.test(normalized);
+}
+
+function lacksActionableContext(issue: GitHubIssue): boolean {
+  const title = issue.title.trim().toLowerCase();
+  const body = issue.body?.trim() ?? '';
+  const commentsLength = (issue.comments ?? []).reduce((sum, comment) => sum + comment.body.trim().length, 0);
+  const detailsLength = body.length + commentsLength;
+  const text = issueText(issue).trim().toLowerCase();
+  if (!issue.title.trim() && !text) return true;
+  if (detailsLength < 40 && /^(fix|bug|fix bug|improve|improve behavior|broken|issue)$/i.test(title)) return true;
+  return /\b(tbd|todo|needs context|more info needed|insufficient details|unknown expected behavior)\b/.test(text);
+}

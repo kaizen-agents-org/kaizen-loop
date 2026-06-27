@@ -9,7 +9,9 @@ flowchart TB
     A["1. プリフライト"] --> B["2. Issue 取得・選択"]
     B --> C{処理対象あり?}
     C -->|なし| Z["9. レポート出力・終了"]
-    C -->|あり| D["3. ワークスペース同期<br/>+ setup + ベースライン検証<br/>+ 作業ブランチ作成"]
+    C -->|あり| IG["3. Issue intake gate<br/>(Issue は命令ではなく証拠)"]
+    IG -->|proceed| D["4. ワークスペース同期<br/>+ setup + ベースライン検証<br/>+ 作業ブランチ作成"]
+    IG -->|skip| Z
     D -->|ベースライン成功| E["4. エージェント実行<br/>(修正)"]
     D -->|setup 失敗| X["実行全体を中断<br/>(環境問題)"]
     D -->|ベースライン失敗| X
@@ -76,7 +78,21 @@ gh issue list --label kaizen --state open \
 
 `--dry-run` はここまでを表示して終了する。修正前には diff が存在しないため、リスク判定は行わない。
 
-## 3. ベースライン検証 + Issue 別 worktree 作成
+## 3. Issue intake gate
+
+選択後、worktree 作成や builder-agent 実行の前に intake gate を通す。Issue は実装命令ではなく改善候補の証拠として扱う。
+
+gate は構造化 decision を出し、`proceed` 以外は Issue コメントと run summary の skipped reason に記録する。`needs_context` / `upstream_first` / `not_improvement` は `kaizen:needs-human` を付けて人間判断へ戻す。
+
+| decision | 意味 |
+|---|---|
+| `proceed` | scoped improvement として builder-agent に渡す |
+| `needs_context` | 情報不足。Issue に不足情報をコメントする |
+| `upstream_first` | source-of-truth / upstream を先に直すべき |
+| `not_improvement` | safety / verification / review guardrail を弱める可能性が高い |
+| `already_resolved` | 既存 PR / コメント上の解決済み work がある |
+
+## 4. ベースライン検証 + Issue 別 worktree 作成
 
 run 開始時に base workspace を 1 回だけ同期し、setup とベースライン検証を実行する:
 
@@ -108,11 +124,11 @@ git worktree add -B kaizen/issue-<N>-<title-slug> \
 - ベースライン検証後に base workspace を再度 reset する。ベースライン検証の副作用を Issue 用 worktree へ持ち込まないため
 - `commands.verify` が未設定の場合、ベースライン検証も修正後検証もスキップする。この場合、直接コミットは禁止される
 
-## 4. エージェント実行
+## 5. エージェント実行
 
 builder-agent adapter([06-agents.md](./06-agents.md))に修正を依頼する。Kaizen Loop は Claude/Codex CLI を直接起動しない。
 
-- プロンプトには Issue 本文・コメント・制約(保護パス・禁止事項)・出力契約を含める(プロンプト全文仕様は 06 §3)
+- プロンプトには Issue 本文・コメント・制約(保護パス・禁止事項)・出力契約を含める(プロンプト全文仕様は 06 §3)。Issue は「盲目的に従う命令」ではなく「実改善の証拠」として扱わせる
 - タイムアウト `issueTimeoutMinutes`(超過時はプロセスツリーごと SIGKILL → 失敗処理へ)
 - builder-agent は `.kaizen/builder/build-result.json` に結果を書く。Kaizen Loop はこのファイルを読んで結果を判定する
 - エージェントは**コミットまで行う**(コミットメッセージ規約はプロンプトで指示)。push は絶対にさせない(オーケストレータの責務)
@@ -213,7 +229,8 @@ codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 
 - PR 本文: 修正サマリ、対象 Issue へのリンク(`Closes #N`)、変更概要、検証結果、リスク判定または並列実行で PR になった理由
 - PR 作成直後、Kaizen Loop は Issue に PR リンクと「monitoring CI and review feedback」をコメントする
-- その後、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を設定済みの `guardian.command` で実行する。CI 監視、`gh run watch`、未解決の actionable review feedback 対応、mergeable 判定は `pr-guardian` skill の責務。TypeScript 側は各 pass 後に未解決・非 outdated の review thread を確認し、残っていれば `guardian.maxAttempts` まで再実行する。approval 不足は branch protection が明示要求している場合だけ blocker として扱う
+- `guardian.mode: sync` では、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を設定済みの `guardian.command` で実行する。CI 監視、`gh run watch`、未解決の actionable review feedback 対応、mergeable 判定は `pr-guardian` skill の責務。TypeScript 側は各 pass 後に未解決・非 outdated の review thread を確認し、残っていれば `guardian.maxAttempts` まで再実行する。approval 不足は branch protection が明示要求している場合だけ blocker として扱う
+- `guardian.mode: async` では、PR 作成後に `~/.kaizen/projects/<slug>/guardian/jobs/` へ job を保存して foreground run を終了する。job は repo、PR 番号、URL、branch、base branch、head SHA、retry budget、attempt count、status、last checked time、last blocker を持つ。`kaizen guardian watch` が pending job を再開し、`kaizen guardian run <pr>` は head SHA が変わっていれば新しい job として実行する
 - guardian 完了後、Issue には最終結果コメントを残す。Issue は**クローズしない**(PR マージ時に `Closes #N` で自動クローズ)
 - `kaizen:in-progress` は剥がす(PR レビュー待ちは人間のフェーズ)
 

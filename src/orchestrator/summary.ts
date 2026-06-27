@@ -10,8 +10,9 @@ export interface RunIssueSummary {
   pr?: number;
   prUrl?: string;
   guardian?: {
-    status: 'success' | 'failed' | 'skipped';
+    status: 'success' | 'failed' | 'skipped' | 'queued';
     summary: string;
+    jobId?: string;
   };
   reason?: string;
   changedFiles?: number;

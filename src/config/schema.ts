@@ -155,6 +155,7 @@ export const configSchema = z
     guardian: z
       .object({
         enabled: z.boolean().default(true),
+        mode: z.enum(['sync', 'async']).default('sync'),
         command: z.string().default('codex'),
         timeoutMinutes: z.number().int().positive().default(60),
         maxAttempts: z.number().int().positive().default(5)
@@ -162,6 +163,7 @@ export const configSchema = z
       .strict()
       .default({
         enabled: true,
+        mode: 'sync',
         command: 'codex',
         timeoutMinutes: 60,
         maxAttempts: 5

@@ -6,6 +6,7 @@ import { GitHubClient } from '../github/client.js';
 import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
 import { GitClient } from '../workspace/git.js';
+import { listPrGuardianJobs } from '../orchestrator/prGuardian.js';
 
 interface UnreviewedRemoteBranch {
   branch: string;
@@ -28,6 +29,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
   const openPullRequests = await github.listOpenPullRequests();
   const stateDir = projectStateDir(resolved.slug);
   const lastSummary = await readLatestSummary(stateDir);
+  const guardianJobs = await listPrGuardianJobs(stateDir);
   return {
     slug: resolved.slug,
     repo: resolved.project.repo,
@@ -45,6 +47,15 @@ export async function statusProject(options: { cwd: string; project?: string; me
     },
     pullRequests: {
       open: openPullRequests.length
+    },
+    guardian: {
+      jobs: guardianJobs.length,
+      pending: countJobs(guardianJobs, 'pending'),
+      running: countJobs(guardianJobs, 'running'),
+      success: countJobs(guardianJobs, 'success'),
+      blocked: countJobs(guardianJobs, 'blocked'),
+      skipped: countJobs(guardianJobs, 'skipped'),
+      latest: guardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
     },
     branchHygiene: await collectBranchHygiene({
       runCommand: options.runCommand,
@@ -99,6 +110,10 @@ async function collectMetrics(stateDir: string) {
 
 function countLabel(issues: Array<{ labels: Array<{ name: string }> }>, label: string): number {
   return issues.filter((issue) => issue.labels.some((item) => item.name === label)).length;
+}
+
+function countJobs<T extends { status: string }>(jobs: T[], status: string): number {
+  return jobs.filter((job) => job.status === status).length;
 }
 
 async function collectBranchHygiene(options: {
