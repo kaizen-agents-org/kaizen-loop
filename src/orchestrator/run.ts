@@ -13,6 +13,7 @@ import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts
 import type { CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
+import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
 import { WorkspaceManager, type DiffStats } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
@@ -1368,10 +1369,6 @@ function resultFor(issues: RunIssueSummary[]): RunSummary['result'] {
   if (issues.every((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit')) return 'success';
   if (issues.some((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit')) return 'partial';
   return 'failed';
-}
-
-function toRunId(date: Date): string {
-  return date.toISOString().replace(/:/g, '-').replace(/\.\d{3}Z$/, 'Z');
 }
 
 async function persistRunSummary(slug: string, summary: RunSummary): Promise<RunSummary> {

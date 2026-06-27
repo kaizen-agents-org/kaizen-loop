@@ -7,6 +7,7 @@ import type { GitHubPullRequestLinkage } from '../github/types.js';
 import type { RunSummary } from '../orchestrator/summary.js';
 import { extractLastJsonObject } from '../utils/json.js';
 import { projectStateDir } from '../utils/paths.js';
+import { toRunId } from '../utils/runId.js';
 import type { CommandRunner } from '../utils/command.js';
 import { reportIssueNow } from './report.js';
 
@@ -220,8 +221,4 @@ async function maybeGetDefaultBranch(github: GitHubClient): Promise<string | und
   } catch {
     return undefined;
   }
-}
-
-function toRunId(date: Date): string {
-  return date.toISOString().replace(/:/g, '-').replace(/\.\d{3}Z$/, 'Z');
 }

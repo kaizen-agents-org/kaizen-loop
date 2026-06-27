@@ -187,7 +187,7 @@ echo "$BODY" | kaizen report "起動時に config 検証エラーの行番号が
 
 Sandbox repository で実 GitHub 境界を含む issue-to-PR smoke run を 1 件実行し、readiness review 用の証跡 JSON を保存する。内部は `report --now` と同じ instant pipeline を使うが、作成 Issue には `kaizen:pr-only` を付け、GitHub の closing issue 認識を `gh pr view --json closingIssuesReferences` で確認する。
 
-```
+```sh
 kaizen smoke [--project <slug>] [--title <title>] [--body <body>]
              [--body-file <path|->] [--priority P0|P1|P2]
              [--agent claude|codex] [--yes] [--json]
