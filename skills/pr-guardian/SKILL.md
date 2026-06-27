@@ -23,7 +23,7 @@ Use this workflow by default after opening a pull request in any repository wher
 6. Address each actionable review comment with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. Reply to each addressed comment or review thread so the reviewer can see the disposition.
 7. Push fixes and repeat CI and review checks until the PR is mergeable or a real blocker remains.
 8. Stop only when one of these is true:
-   - `mergeStateStatus` is `CLEAN`, required checks are passing, and there are no non-outdated unresolved review threads or actionable PR comments left. Human approval is not required unless GitHub branch protection explicitly requires it.
+   - `mergeStateStatus` is `CLEAN` and required checks are passing.
    - retry budget is exhausted.
    - an external blocker remains that cannot be fixed from the repository.
    - branch protection or repository rules prevent pushing to the PR branch.
