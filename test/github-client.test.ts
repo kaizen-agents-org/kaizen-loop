@@ -30,7 +30,14 @@ describe('GitHubClient', () => {
       command,
       args,
       exitCode: 0,
-      stdout: JSON.stringify([{ number: 7, headRefName: 'kaizen/issue-1-x', url: 'https://github.com/o/r/pull/7' }]),
+      stdout: JSON.stringify([
+        {
+          number: 7,
+          headRefName: 'kaizen/issue-1-x',
+          headRepositoryOwner: { login: 'o' },
+          url: 'https://github.com/o/r/pull/7'
+        }
+      ]),
       stderr: '',
       durationMs: 1
     }));
@@ -38,14 +45,21 @@ describe('GitHubClient', () => {
 
     const prs = await client.listOpenPullRequests(3);
 
-    expect(prs).toEqual([{ number: 7, headRefName: 'kaizen/issue-1-x', url: 'https://github.com/o/r/pull/7' }]);
+    expect(prs).toEqual([
+      {
+        number: 7,
+        headRefName: 'kaizen/issue-1-x',
+        headRepositoryOwner: { login: 'o' },
+        url: 'https://github.com/o/r/pull/7'
+      }
+    ]);
     expect(runner.mock.calls[0][1]).toEqual([
       'pr',
       'list',
       '--state',
       'open',
       '--json',
-      'number,headRefName,url',
+      'number,headRefName,headRepositoryOwner,url',
       '--limit',
       '3'
     ]);

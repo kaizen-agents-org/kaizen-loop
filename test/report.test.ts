@@ -277,21 +277,25 @@ async function setupFakeBins() {
 async function runCli(options: { cwd: string; binDir: string; args: string[] }) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-cli-'));
   const ipcTmpDir = cliIpcTmpDir();
-  return execFileAsync(
-    process.execPath,
-    [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
-    {
-      cwd: options.cwd,
-      env: {
-        ...process.env,
-        KAIZEN_TMPDIR: tmpDir,
-        TMPDIR: ipcTmpDir,
-        TMP: ipcTmpDir,
-        TEMP: ipcTmpDir,
-        PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`
+  try {
+    return await execFileAsync(
+      process.execPath,
+      [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
+      {
+        cwd: options.cwd,
+        env: {
+          ...process.env,
+          KAIZEN_TMPDIR: tmpDir,
+          PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+          TMPDIR: ipcTmpDir,
+          TMP: ipcTmpDir,
+          TEMP: ipcTmpDir
+        }
       }
-    }
-  );
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 }
 
 function cliIpcTmpDir(): string {
