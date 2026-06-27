@@ -227,7 +227,8 @@ async function readGuardianJobFile(file: string): Promise<PrGuardianJob | undefi
     return JSON.parse(await fs.readFile(file, 'utf8')) as PrGuardianJob;
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
+    console.warn(`Skipping unreadable PR Guardian job file ${file}: ${String(error)}`);
+    return undefined;
   }
 }
 
@@ -244,9 +245,9 @@ function guardianJobId(repo: string, prNumber: number, headSha: string): string 
 
 function isStaleRunningJob(job: PrGuardianJob, timeoutMinutes: number): boolean {
   if (job.status !== 'running') return false;
-  const updatedAtMs = Date.parse(job.updatedAt);
-  if (Number.isNaN(updatedAtMs)) return true;
-  return Date.now() - updatedAtMs > timeoutMinutes * 60_000;
+  const lastCheckedAtMs = Date.parse(job.lastCheckedAt ?? job.updatedAt);
+  if (Number.isNaN(lastCheckedAtMs)) return true;
+  return Date.now() - lastCheckedAtMs > timeoutMinutes * 60_000;
 }
 
 export async function isPrGuardianSkillRunnerAvailable(config: KaizenConfig, runCommand: CommandRunner): Promise<boolean> {

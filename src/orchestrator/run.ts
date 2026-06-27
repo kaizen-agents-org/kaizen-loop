@@ -19,7 +19,12 @@ import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
 import { RunLock } from './lock.js';
 import { enqueuePrGuardianJob, runPrGuardianSkill, type PrGuardianSkillResult } from './prGuardian.js';
-import { buildIssueIntakeComment, evaluateIssueIntake, type IssueIntakeDecision } from './issueIntake.js';
+import {
+  buildIssueIntakeComment,
+  evaluateIssueIntake,
+  hasIssueIntakeDecisionComment,
+  type IssueIntakeDecision
+} from './issueIntake.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
 import type { RunIssueSummary, RunSummary } from './summary.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
@@ -59,6 +64,12 @@ interface PullRequestReflection {
   headSha: string;
 }
 
+interface RunIssueSelection {
+  selected: GitHubIssue[];
+  skipped: Array<{ number: number; reason: string }>;
+  openPullRequests: GitHubPullRequest[];
+}
+
 const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
@@ -88,7 +99,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       : undefined;
     const issues = requestedIssues ?? await github.listIssues(config.issues.label);
     const automatic = options.scheduled && requestedIssues === undefined;
-    const openPullRequests = automatic ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests)) : [];
+    const openPullRequests = automatic || issues.some(hasPullRequestResultMarker)
+      ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
+      : [];
     const selection = selectIssues({
       issues,
       config,
@@ -96,15 +109,19 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       explicit: requestedIssues !== undefined,
       openPullRequests
     });
-    return applyOpenPullRequestLimit({
+    const limited = await applyOpenPullRequestLimit({
       config,
       selection,
       automatic,
       openPullRequests
     });
+    return { ...limited, openPullRequests };
   };
 
-  if (options.dryRun) return selectRunIssues();
+  if (options.dryRun) {
+    const { openPullRequests: _openPullRequests, ...selection } = await selectRunIssues();
+    return selection;
+  }
 
   const stateDir = projectStateDir(resolved.slug);
   await fs.mkdir(stateDir, { recursive: true });
@@ -176,7 +193,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         repo: resolved.project.repo,
         runId,
         github,
-        openPullRequests: await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
+        openPullRequests: selection.openPullRequests
       });
       summary.skipped = selection.skipped;
     }
@@ -265,12 +282,12 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 }
 
 async function applyIssueIntakeGate(options: {
-  selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> };
+  selection: RunIssueSelection;
   repo: string;
   runId: string;
   github: GitHubClient;
   openPullRequests: GitHubPullRequest[];
-}): Promise<{ selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
+}): Promise<RunIssueSelection> {
   const selected: GitHubIssue[] = [];
   const skipped = [...options.selection.skipped];
 
@@ -294,7 +311,7 @@ async function applyIssueIntakeGate(options: {
     skipped.push({ number: issue.number, reason: `intake ${decision.status}: ${decision.reason}` });
   }
 
-  return { selected, skipped };
+  return { selected, skipped, openPullRequests: options.openPullRequests };
 }
 
 async function recordIntakeSkip(options: {
@@ -303,10 +320,22 @@ async function recordIntakeSkip(options: {
   runId: string;
   github: GitHubClient;
 }): Promise<void> {
+  if (
+    options.decision.status === 'already_resolved' &&
+    hasIssueIntakeDecisionComment(options.issue, options.decision.status)
+  ) {
+    return;
+  }
   await options.github.comment(options.issue.number, buildIssueIntakeComment(options.runId, options.decision));
   if (options.decision.status !== 'already_resolved') {
     await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
   }
+}
+
+function hasPullRequestResultMarker(issue: GitHubIssue): boolean {
+  return (issue.comments ?? []).some((comment) =>
+    comment.body.includes('kaizen-loop:result') && comment.body.includes('pr-created')
+  );
 }
 
 function uniqueIssueNumbers(issueNumbers: number[]): number[] {

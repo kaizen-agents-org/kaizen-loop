@@ -123,6 +123,35 @@ describe('runPrGuardianSkill', () => {
     expect(await listPrGuardianJobs(stateDir)).toHaveLength(2);
   });
 
+  it('skips corrupt guardian job files when listing jobs', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(path.join(stateDir, 'guardian', 'jobs', 'corrupt.json'), '{not json');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const jobs = await listPrGuardianJobs(stateDir);
+
+      expect(jobs.map((item) => item.id)).toEqual([job.id]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Skipping unreadable PR Guardian job file'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('runs pending guardian jobs and records the final state', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
@@ -208,6 +237,53 @@ describe('runPrGuardianSkill', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0].status).toBe('success');
     expect(jobs[0].attemptCount).toBe(2);
+  });
+
+  it('leaves active running guardian jobs alone', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 60, maxAttempts: 2 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({
+        ...job,
+        status: 'running',
+        attemptCount: 1,
+        updatedAt: new Date().toISOString(),
+        lastCheckedAt: new Date().toISOString()
+      }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toEqual([]);
+    expect(runner).not.toHaveBeenCalled();
   });
 });
 

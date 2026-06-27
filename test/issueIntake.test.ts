@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateIssueIntake } from '../src/orchestrator/issueIntake.js';
+import {
+  buildIssueIntakeComment,
+  evaluateIssueIntake,
+  hasIssueIntakeDecisionComment
+} from '../src/orchestrator/issueIntake.js';
 import type { GitHubIssue } from '../src/github/types.js';
 
 describe('evaluateIssueIntake', () => {
@@ -24,6 +28,29 @@ describe('evaluateIssueIntake', () => {
 
     expect(decision.status).toBe('upstream_first');
     expect(decision.reason).toContain('kaizen-agents-org/.github');
+  });
+
+  it('routes GitHub URL source-of-truth references upstream first', () => {
+    const decision = evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        body: 'The downstream copy drifted from upstream https://github.com/kaizen-agents-org/.github. Sync it from the canonical source.'
+      })
+    });
+
+    expect(decision.status).toBe('upstream_first');
+    expect(decision.reason).toContain('kaizen-agents-org/.github');
+  });
+
+  it('does not treat file paths as upstream repositories', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        body: 'The docs/04-nightly-pipeline.md section drifted from the source-of-truth wording and needs sync.'
+      })
+    }).status).toBe('proceed');
   });
 
   it('rejects recommended actions that weaken review guardrails', () => {
@@ -61,6 +88,16 @@ describe('evaluateIssueIntake', () => {
       openPullRequests: [],
       issue: issue({ title: 'Fix bug', body: '' })
     }).status).toBe('needs_context');
+  });
+
+  it('stamps intake comments with a detectable decision marker', () => {
+    const body = buildIssueIntakeComment('20260612T000000Z', {
+      status: 'already_resolved',
+      reason: 'Existing work appears to already address this issue.',
+      evidence: []
+    });
+
+    expect(hasIssueIntakeDecisionComment(issue({ comments: [{ body }] }), 'already_resolved')).toBe(true);
   });
 });
 

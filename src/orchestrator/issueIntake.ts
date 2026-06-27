@@ -14,6 +14,12 @@ export interface IssueIntakeDecision {
   evidence: string[];
 }
 
+export function hasIssueIntakeDecisionComment(issue: GitHubIssue, status: IssueIntakeDecisionStatus): boolean {
+  return (issue.comments ?? []).some((comment) =>
+    comment.body.includes(`<!-- kaizen-loop:intake-decision status=${status} -->`)
+  );
+}
+
 export function evaluateIssueIntake(options: {
   issue: GitHubIssue;
   repo: string;
@@ -67,7 +73,9 @@ export function buildIssueIntakeComment(runId: string, decision: IssueIntakeDeci
     ? decision.evidence.map((item) => `- ${item}`).join('\n')
     : '- No additional evidence recorded.';
 
-  return `## Kaizen Loop intake decision
+  return `<!-- kaizen-loop:intake-decision status=${decision.status} -->
+
+## Kaizen Loop intake decision
 
 The issue was treated as evidence rather than as an implementation order.
 
@@ -91,10 +99,19 @@ function alreadyResolvedText(normalized: string): boolean {
 }
 
 function referencedUpstreamRepo(text: string, currentRepo: string): string | undefined {
-  const repos = [...text.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\b/g)]
+  const urlRepos = [...text.matchAll(/(?:https?:\/\/)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=$|[/?#\s).,;:'"`\]])/g)]
+    .map((match) => match[1]);
+  const bareRepos = [...text.matchAll(/(?:^|[\s([`])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)(?=$|[\s).,;:'"`\]])/g)]
     .map((match) => match[1])
-    .filter((repo) => repo !== currentRepo);
-  return repos.find(Boolean);
+    .filter((repo) => !isPathLikeRepoReference(repo));
+  return [...urlRepos, ...bareRepos].find((repo) => repo !== currentRepo);
+}
+
+function isPathLikeRepoReference(repo: string): boolean {
+  const [owner, name] = repo.split('/');
+  if (!owner || !name) return true;
+  if (['docs', 'src', 'test', 'tests', 'scripts', 'dist', 'lib'].includes(owner.toLowerCase())) return true;
+  return !name.startsWith('.') && /\.[A-Za-z0-9]{1,8}$/.test(name);
 }
 
 function mentionsSourceOfTruthSync(normalized: string): boolean {
