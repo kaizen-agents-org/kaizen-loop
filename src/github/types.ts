@@ -34,3 +34,16 @@ export interface GitHubPullRequestDetails extends GitHubPullRequest {
   baseRefName: string;
   headRefOid: string;
 }
+
+export interface GitHubClosingIssueReference {
+  number: number;
+  url?: string;
+}
+
+export interface GitHubPullRequestLinkage {
+  number: number;
+  url: string;
+  baseRefName: string;
+  isDraft: boolean;
+  closingIssuesReferences: GitHubClosingIssueReference[];
+}

@@ -59,6 +59,7 @@ flowchart TB
 | `kaizen run` | Run the maintenance pipeline once. Use `--dry-run` to inspect issue selection without modifying workspaces or GitHub. |
 | `kaizen fix <issue>` | Process one existing issue immediately with the same safety gates as scheduled runs. |
 | `kaizen report <title>` | Create a Kaizen issue; `--now` creates and immediately processes it. |
+| `kaizen smoke` | Run a controlled sandbox issue-to-PR smoke pass and save readiness artifacts. |
 | `kaizen queue` / `kaizen unqueue` | Add or remove queued execution approval labels for opt-in selection mode. |
 | `kaizen improve` | Plan and run an immediate improvement pass over selected or queued issues. |
 | `kaizen goal` | Create and run a multi-iteration goal that plans scoped issues, processes them, evaluates progress, and stops when done or blocked. |
@@ -97,6 +98,7 @@ kaizen doctor
 kaizen report "Fix stale config reload" --body "Observed during local dogfooding" --priority P2 --queue
 kaizen run --dry-run
 kaizen fix 42 --json
+kaizen smoke --project sandbox-repo --yes --json
 kaizen goal create "Improve onboarding reliability" --success "npm test and npm run typecheck pass" --json
 kaizen goal run <goal-id> --yes --json
 ```
@@ -156,3 +158,4 @@ Start with [docs/README.md](./docs/README.md). The most useful implementation-fa
 - [docs/09-instant-run.md](./docs/09-instant-run.md): `fix`, `report --now`, and `improve`.
 - [docs/10-skills.md](./docs/10-skills.md): shared Kaizen skills vendored into target repositories.
 - [docs/11-goals.md](./docs/11-goals.md): Goal runner behavior and agent-facing contract.
+- [docs/13-sandbox-smoke.md](./docs/13-sandbox-smoke.md): controlled sandbox smoke runs and readiness artifacts.
