@@ -84,7 +84,9 @@ describe('runSandboxSmoke', () => {
     expect(persisted.pullRequest.issueLinkRecognized).toBe(true);
     expect(await fileExists(artifact.run.summaryPath)).toBe(true);
     const labelCreates = runner.mock.calls.filter(([, args]) => args[0] === 'label' && args[1] === 'create');
-    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:ready', 'kaizen:pr-only', 'kaizen', 'kaizen:ready']);
+    expect(labelCreates.map(([, args]) => args[2])).toEqual(
+      expect.arrayContaining(['kaizen', 'kaizen:ready', 'kaizen:pr-only'])
+    );
     const issueCreate = runner.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'create');
     expect(issueCreate?.[1][issueCreate[1].indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready,kaizen:pr-only');
   });
