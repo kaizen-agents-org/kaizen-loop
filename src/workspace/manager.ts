@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import type { KaizenConfig } from '../config/schema.js';
-import type { CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from './git.js';
@@ -55,9 +55,9 @@ export class WorkspaceManager {
     await git.clean();
   }
 
-  async runSetup(config: KaizenConfig): Promise<WorkspaceCommandResult | undefined> {
+  async runSetup(config: KaizenConfig, runDeadlineAt?: number): Promise<WorkspaceCommandResult | undefined> {
     if (!config.commands.setup) return undefined;
-    const result = await this.runShell(config.commands.setup, undefined);
+    const result = await this.runShell(config.commands.setup, undefined, config, runDeadlineAt);
     return {
       command: config.commands.setup,
       ok: result.exitCode === 0,
@@ -65,10 +65,10 @@ export class WorkspaceManager {
     };
   }
 
-  async runVerify(config: KaizenConfig): Promise<WorkspaceCommandResult[]> {
+  async runVerify(config: KaizenConfig, runDeadlineAt?: number): Promise<WorkspaceCommandResult[]> {
     const results = [];
     for (const command of config.commands.verify) {
-      const result = await this.runShell(command, config.commands.verifyTimeoutMinutes * 60_000);
+      const result = await this.runShell(command, config.commands.verifyTimeoutMinutes * 60_000, config, runDeadlineAt);
       results.push({
         command,
         ok: result.exitCode === 0,
@@ -127,11 +127,11 @@ export class WorkspaceManager {
     };
   }
 
-  private async runShell(command: string, timeoutMs: number | undefined) {
+  private async runShell(command: string, timeoutMs: number | undefined, config: KaizenConfig, runDeadlineAt: number | undefined) {
     return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
       cwd: this.workspacePath,
-      env: await envWithKaizenTemp(process.env, this.workspacePath),
-      timeoutMs,
+      env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, config.safety.envAllowlist), this.workspacePath),
+      timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
       rejectOnNonZero: false
     });
   }
@@ -145,6 +145,13 @@ export class WorkspaceManager {
       await fs.rm(worktree.path, { recursive: true, force: true });
     }
   }
+}
+
+function boundedTimeoutMs(configuredTimeoutMs: number | undefined, runDeadlineAt: number | undefined): number | undefined {
+  if (!runDeadlineAt) return configuredTimeoutMs;
+  const remainingMs = runDeadlineAt - Date.now();
+  if (remainingMs <= 0) throw new Error('Kaizen run timeout exceeded.');
+  return configuredTimeoutMs === undefined ? remainingMs : Math.min(configuredTimeoutMs, remainingMs);
 }
 
 function issueBranchName(config: KaizenConfig, issue: { number: number; title: string }): string {

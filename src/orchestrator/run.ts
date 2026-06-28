@@ -10,7 +10,8 @@ import type { KaizenConfig, Registry } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts } from '../report/comments.js';
-import type { CommandRunner } from '../utils/command.js';
+import { throwIfShutdownRequested, type CommandRunner } from '../utils/command.js';
+import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
 import { toRunId } from '../utils/runId.js';
@@ -169,6 +170,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 
   const startedAt = new Date();
+  const runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
   const runId = toRunId(startedAt);
   const runDir = path.join(stateDir, 'runs', runId);
   await fs.mkdir(runDir, { recursive: true });
@@ -207,7 +209,8 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         runId,
         runDir,
         firstIssue: selection.selected[0],
-        github
+        github,
+        runDeadlineAt
       });
 
       if (!baseline.ok) {
@@ -223,6 +226,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         const worktrees: Array<{ issue: GitHubIssue; branch: string; path: string }> = [];
         try {
           for (const issue of selection.selected) {
+            assertRunWithinDeadline(runDeadlineAt);
             const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId);
             worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
           }
@@ -242,6 +246,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
                 assumeYes: Boolean(options.assumeYes),
                 confirmDirectCommit: options.confirmDirectCommit,
                 runCommand: options.runCommand,
+                runDeadlineAt,
                 forcePullRequest
               })
             )
@@ -347,6 +352,17 @@ function openPullRequestFetchLimit(configuredLimit: number): number {
   return Math.max(configuredLimit + 1, OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT);
 }
 
+function assertRunWithinDeadline(deadlineAt: number): void {
+  throwIfShutdownRequested();
+  if (Date.now() > deadlineAt) throw new Error('Kaizen run timeout exceeded.');
+}
+
+function boundedTimeoutMs(configuredTimeoutMs: number, deadlineAt: number): number {
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) throw new Error('Kaizen run timeout exceeded.');
+  return Math.min(configuredTimeoutMs, remainingMs);
+}
+
 async function applyOpenPullRequestLimit(options: {
   config: KaizenConfig;
   selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> };
@@ -406,13 +422,26 @@ async function prepareBaseWorkspace(options: {
   runDir: string;
   firstIssue: GitHubIssue;
   github: GitHubClient;
+  runDeadlineAt: number;
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
+  assertRunWithinDeadline(options.runDeadlineAt);
+  await assertMinFreeDisk(options.workspace.path, options.config.safety.minFreeDiskMb);
   await options.workspace.ensure();
+  assertRunWithinDeadline(options.runDeadlineAt);
   await options.workspace.sync(options.config.git.defaultBranch);
-  await options.workspace.runSetup(options.config);
-  const baselineVerify = await options.workspace.runVerify(options.config);
+  const setupResult = await options.workspace.runSetup(options.config, options.runDeadlineAt);
+  if (setupResult && !setupResult.ok) {
+    const issueDir = path.join(options.runDir, `issue-${options.firstIssue.number}`);
+    await fs.mkdir(issueDir, { recursive: true });
+    const reason = `Baseline setup failed: ${setupResult.command}`;
+    await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
+    await options.github.comment(options.firstIssue.number, buildRunAbortComment(options.runId, reason, [setupResult]));
+    return { ok: false, reason };
+  }
+  const baselineVerify = await options.workspace.runVerify(options.config, options.runDeadlineAt);
   const failedBaseline = baselineVerify.find((item) => !item.ok);
   if (!failedBaseline) {
+    assertRunWithinDeadline(options.runDeadlineAt);
     await options.workspace.sync(options.config.git.defaultBranch);
     return { ok: true };
   }
@@ -439,6 +468,7 @@ async function processIssueInWorktree(options: {
   assumeYes: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
   runCommand: CommandRunner;
+  runDeadlineAt: number;
   forcePullRequest: boolean;
 }): Promise<RunIssueSummary> {
   return await processIssue({
@@ -457,6 +487,7 @@ async function processIssueInWorktree(options: {
     assumeYes: options.assumeYes,
     confirmDirectCommit: options.confirmDirectCommit,
     runCommand: options.runCommand,
+    runDeadlineAt: options.runDeadlineAt,
     branch: options.worktree.branch,
     forcePullRequest: options.forcePullRequest
   });
@@ -475,6 +506,7 @@ async function processIssue(options: {
   assumeYes: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
   runCommand: CommandRunner;
+  runDeadlineAt: number;
   branch: string;
   forcePullRequest: boolean;
 }): Promise<RunIssueSummary> {
@@ -483,13 +515,26 @@ async function processIssue(options: {
   await fs.mkdir(issueDir, { recursive: true });
   const attempts = countAttempts(options.issue.comments ?? []) + 1;
   const preferredBackend = selectPreferredBackend(options.config, options.issue, options.requestedAgent);
-  const agent = await selectAgent(options.config, options.runCommand);
-  const verifier = options.config.verifier.enabled ? new VerifierAgentAdapter(options.runCommand, options.config.verifier) : undefined;
+  let agent = setupPendingAgent();
+  const verifier = options.config.verifier.enabled
+    ? new VerifierAgentAdapter(options.runCommand, {
+        ...options.config.verifier,
+        envAllowlist: options.config.safety.envAllowlist
+      })
+    : undefined;
   const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
 
   try {
+    assertRunWithinDeadline(options.runDeadlineAt);
+    await assertMinFreeDisk(options.project.workspacePath, options.config.safety.minFreeDiskMb);
     await options.github.addLabels(options.issue.number, ['kaizen:in-progress']);
-    await workspace.runSetup(options.config);
+    const setupResult = await workspace.runSetup(options.config, options.runDeadlineAt);
+    if (setupResult && !setupResult.ok) {
+      const reason = `Setup failed: ${setupResult.command}`;
+      await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
+      return await finishFailed(options, agent, attempts, reason, started, [setupResult]);
+    }
+    agent = await selectAgent(options.config, options.runCommand);
     const branch = options.branch;
 
     let agentResult: AgentResult | undefined;
@@ -509,7 +554,7 @@ async function processIssue(options: {
       agentResult = await agent.run({
         workspaceDir: options.project.workspacePath,
         prompt,
-        timeoutMs: options.config.run.issueTimeoutMinutes * 60_000,
+        timeoutMs: boundedTimeoutMs(options.config.run.issueTimeoutMinutes * 60_000, options.runDeadlineAt),
         model: modelFor(options.config, preferredBackend),
         preferredBackend
       });
@@ -540,7 +585,7 @@ async function processIssue(options: {
         return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started);
       }
 
-      verifyResults = await workspace.runVerify(options.config);
+      verifyResults = await workspace.runVerify(options.config, options.runDeadlineAt);
       await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
       const failedVerify = verifyResults.find((item) => !item.ok);
       if (failedVerify) {
@@ -556,6 +601,7 @@ async function processIssue(options: {
       const verifierDiff = await workspace.collectDiffStats(options.config);
       verifierResult = await verifier.run({
         workspaceDir: options.project.workspacePath,
+        timeoutMs: boundedTimeoutMs(options.config.verifier.timeoutMinutes * 60_000, options.runDeadlineAt),
         prompt: buildVerifierPrompt({
           repo: options.project.repo,
           issue: options.issue,
@@ -747,6 +793,7 @@ async function finishPr(
     project: { repo: string; workspacePath: string };
     stateDir: string;
     runCommand: CommandRunner;
+    runDeadlineAt: number;
   },
   agent: AgentAdapter,
   attempts: number,
@@ -773,6 +820,7 @@ async function finishPr(
     stateDir: options.stateDir,
     github: options.github,
     runCommand: options.runCommand,
+    runDeadlineAt: options.runDeadlineAt,
     pr
   });
   const guardianFailed = guardian.status === 'failed';
@@ -823,9 +871,24 @@ async function finishPr(
 }
 
 async function selectAgent(config: KaizenConfig, runCommand: CommandRunner): Promise<AgentAdapter> {
-  const agent = new BuilderAgentAdapter(runCommand, config.builder);
+  const agent = new BuilderAgentAdapter(runCommand, {
+    ...config.builder,
+    envAllowlist: config.safety.envAllowlist
+  });
   await agent.isAvailable();
   return agent;
+}
+
+function setupPendingAgent(): AgentAdapter {
+  return {
+    name: 'builder',
+    async isAvailable() {
+      return true;
+    },
+    async run() {
+      throw new Error('Agent unavailable before setup completed.');
+    }
+  };
 }
 
 function selectPreferredBackend(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined): 'claude' | 'codex' {
@@ -988,11 +1051,11 @@ function buildRunAbortComment(
 ): string {
   const verify = verifyResults.length
     ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
-    : '- Verification commands are not configured';
+    : '- Baseline commands are not configured';
 
   return `## Kaizen Loop run aborted
 
-The run stopped before agent execution because the baseline verification failed on the clean default branch.
+The run stopped before agent execution because a baseline setup or verification command failed on the clean default branch.
 This is treated as an environment or existing-repository failure, not as an Issue attempt.
 
 | | |
@@ -1000,7 +1063,7 @@ This is treated as an environment or existing-repository failure, not as an Issu
 | Run | ${runId} |
 | Reason | ${reason} |
 
-## Baseline verification
+## Baseline checks
 ${verify}`;
 }
 
@@ -1066,6 +1129,7 @@ async function runPrGuardianAfterPullRequest(options: {
   github: GitHubClient;
   runCommand: CommandRunner;
   pr: { url: string; number?: number; branch: string; baseBranch: string; headSha: string };
+  runDeadlineAt: number;
 }): Promise<PrGuardianSkillResult> {
   if (!options.pr.number) {
     return {
@@ -1103,7 +1167,8 @@ async function runPrGuardianAfterPullRequest(options: {
     prUrl: options.pr.url,
     prNumber: options.pr.number,
     branch: options.pr.branch,
-    baseBranch: options.pr.baseBranch
+    baseBranch: options.pr.baseBranch,
+    runDeadlineAt: options.runDeadlineAt
   });
   return result;
 }

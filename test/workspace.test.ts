@@ -156,4 +156,31 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls[0][2]?.env?.TMP).toBe(path.join(workspacePath, '.kaizen', 'tmp'));
     expect(runner.mock.calls[0][2]?.env?.TEMP).toBe(path.join(workspacePath, '.kaizen', 'tmp'));
   });
+
+  it('caps verification command timeout at the remaining run deadline', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: String(options?.timeoutMs ?? ''),
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        verify: ['npm test'],
+        verifyTimeoutMinutes: 15
+      }
+    });
+
+    await workspace.runVerify(config, Date.now() + 2_000);
+
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeLessThanOrEqual(2_000);
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeGreaterThan(0);
+  });
 });

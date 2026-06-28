@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { KaizenConfig } from '../config/schema.js';
-import type { CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
 
 export interface PrGuardianSkillRequest {
   config: KaizenConfig;
@@ -11,6 +12,7 @@ export interface PrGuardianSkillRequest {
   prNumber: number;
   branch: string;
   baseBranch: string;
+  runDeadlineAt?: number;
 }
 
 export type PrGuardianJobStatus = 'pending' | 'running' | 'success' | 'blocked' | 'skipped';
@@ -176,7 +178,8 @@ export async function runPrGuardianSkill(
         ],
         {
           cwd: req.workspaceDir,
-          timeoutMs: req.config.guardian.timeoutMinutes * 60_000,
+          env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
+          timeoutMs: boundedTimeoutMs(req.config.guardian.timeoutMinutes * 60_000, req.runDeadlineAt),
           rejectOnNonZero: false
         }
       );
@@ -252,7 +255,11 @@ function isStaleRunningJob(job: PrGuardianJob, timeoutMinutes: number): boolean 
 
 export async function isPrGuardianSkillRunnerAvailable(config: KaizenConfig, runCommand: CommandRunner): Promise<boolean> {
   try {
-    await runCommand(config.guardian.command, ['--version'], { rejectOnNonZero: true, timeoutMs: 30_000 });
+    await runCommand(config.guardian.command, ['--version'], {
+      rejectOnNonZero: true,
+      timeoutMs: 30_000,
+      env: buildAllowlistedEnv(process.env, config.safety.envAllowlist)
+    });
     return true;
   } catch {
     return false;
@@ -349,7 +356,7 @@ async function listUnresolvedReviewThreads(
     if (cursor) args.push('-F', `cursor=${cursor}`);
     const result = await runCommand('gh', args, {
       cwd: req.workspaceDir,
-      timeoutMs: 60_000,
+      timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
       rejectOnNonZero: false
     });
     if (result.exitCode !== 0) {
@@ -375,6 +382,13 @@ async function listUnresolvedReviewThreads(
     cursor = reviewThreads?.pageInfo?.endCursor ?? undefined;
   }
   return unresolved;
+}
+
+function boundedTimeoutMs(configuredTimeoutMs: number, runDeadlineAt: number | undefined): number {
+  if (!runDeadlineAt) return configuredTimeoutMs;
+  const remainingMs = runDeadlineAt - Date.now();
+  if (remainingMs <= 0) throw new Error('Kaizen run timeout exceeded.');
+  return Math.min(configuredTimeoutMs, remainingMs);
 }
 
 function summarizeReviewThreads(threads: ReviewThreadSummary[]): string {

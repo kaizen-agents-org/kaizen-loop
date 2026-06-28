@@ -49,8 +49,8 @@ cd <workspaceDir> && verifier < prompt
 ### 2.3 共通の実行制御
 
 - 作業ディレクトリ: 必ずワークスペース(隔離クローン)
-- タイムアウト: `issueTimeoutMinutes`。超過時はプロセスグループごと SIGTERM → 10 秒後 SIGKILL
-- 環境変数: 最小限に絞る(PATH、HOME、各 CLI の認証に必要なもののみ)。ターゲットプロジェクトの `.env` は**渡さない**
+- タイムアウト: `issueTimeoutMinutes` と `runTimeoutMinutes` の残り時間の小さい方。超過時はプロセスグループごと SIGTERM → 10 秒後 SIGKILL
+- 環境変数: `safety.envAllowlist` に限定し、Kaizen 専用変数と workspace-local `TMPDIR` / `TMP` / `TEMP` だけを追加する。ターゲットプロジェクトの `.env` は**渡さない**
 - builder-agent の生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/agent.log` に保存
 - verifier の生ログ(stdout/stderr 全量)を `runs/<ts>/issue-<N>/verifier.log` に保存
 

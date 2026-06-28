@@ -37,14 +37,14 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   await check(checks, 'builder agent command', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
-    if (!(await new BuilderAgentAdapter(options.runCommand, loaded.builder).isAvailable())) throw new Error('unavailable');
+    if (!(await new BuilderAgentAdapter(options.runCommand, builderOptions(loaded)).isAvailable())) throw new Error('unavailable');
   });
   await check(checks, 'builder agent runtime', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     await fs.access(resolved.project.workspacePath);
     const preferredBackend = loaded.agent.default;
-    const result = await new BuilderAgentAdapter(options.runCommand, loaded.builder).run({
+    const result = await new BuilderAgentAdapter(options.runCommand, builderOptions(loaded)).run({
       workspaceDir: resolved.project.workspacePath,
       prompt: [
         'Kaizen doctor smoke test.',
@@ -66,7 +66,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     if (!loaded.verifier.enabled) return;
-    if (!(await new VerifierAgentAdapter(options.runCommand, loaded.verifier).isAvailable())) throw new Error('unavailable');
+    if (!(await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).isAvailable())) throw new Error('unavailable');
   });
   await check(checks, 'pr guardian skill runner', async () => {
     const loaded = config;
@@ -75,6 +75,14 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
   return { slug: resolved.slug, checks, ok: checks.every((item) => item.ok) };
+}
+
+function builderOptions(config: KaizenConfig) {
+  return { ...config.builder, envAllowlist: config.safety.envAllowlist };
+}
+
+function verifierOptions(config: KaizenConfig) {
+  return { ...config.verifier, envAllowlist: config.safety.envAllowlist };
 }
 
 async function checkWorkspaceTempDir(workspacePath: string): Promise<void> {

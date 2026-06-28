@@ -12,7 +12,9 @@
 | 検証 | テスト・lint 必須。検証なしプロジェクトは直接コミット禁止 | 壊れたコードの main 混入、または壊れた PR の量産 |
 | 量 | `maxChangedLines` / `maxChangedFiles` 超は強制 PR | 大規模変更の無審査反映 |
 | 回数 | `maxVerifyRetries` / `maxAttemptsPerIssue` / `maxIssuesPerNight` | 無限リトライ・暴走によるトークン浪費 |
-| 時間 | Issue 単位・実行全体のタイムアウト | ハング・長時間占有 |
+| 時間 | Issue 単位・実行全体のタイムアウト、プロセスツリー kill | ハング・長時間占有、子プロセス残留 |
+| 容量 | `safety.minFreeDiskMb` の preflight | clone / worktree / install 中のディスク逼迫 |
+| 環境 | `safety.envAllowlist` | agent / shell command への不要な環境変数露出 |
 | 排他 | `run.lock`(PID 検証つき) | 多重実行による競合 |
 | 停止 | `kaizen scheduler disable` / `PAUSE` ファイル / ラベル操作 | 異常時に止められない事態 |
 
@@ -37,7 +39,7 @@
 | 失敗モード | 検知 | 対処 |
 |---|---|---|
 | エージェントが誤った修正をして検証も通ってしまう | 検知不能(残存リスク) | 緩和: 量の上限で影響範囲を制限、結果コメントで翌朝に可視化、回帰テスト追加をプロンプトで要求。事後: 人間が revert + `kaizen:pr-only` で再オープン |
-| エージェントのハング | タイムアウト | プロセスツリー kill → 失敗処理 |
+| エージェントのハング | タイムアウト | プロセスグループ/ツリーへ SIGTERM → 10 秒後 SIGKILL → 失敗処理 |
 | エージェントが無関係なファイルを大量変更 | diff 検査(行数・ファイル数・パス) | 強制 PR or 失敗。`forbiddenPaths` は即失敗 |
 | テストがもともと壊れている(エージェントのせいでない) | ベースライン検証: **修正前に一度 verify を実行**し、失敗するなら「環境/既存の問題」としてエージェントを起動しない | `in-progress` を剥がし、result marker なしの中断コメントを残して実行全体を中止 |
 | flaky テスト | 検証失敗 → リトライで通ることがある | `maxVerifyRetries` の範囲で自然吸収。頻発するならそれ自体を Kaizen Issue にする(ドッグフーディング) |
@@ -47,7 +49,7 @@
 | 前回実行のクラッシュ(ロック残留・in-progress 残留) | ロックの PID 生存確認 / in-progress の 24h ルール | stale 回収(自動) |
 | ワークスペース破損 | fetch / setup 失敗 | 実行中止 + 通知。現時点の `kaizen doctor --repair` はラベル修復のみで、ワークスペース再クローンは手動対応 |
 | 設定ファイルの誤り | 起動時スキーマ検証 | 実行せず終了コード 2 + 通知 |
-| ディスク逼迫 | プリフライトで空き容量チェック(< 2GB で中止) | 実行中止 + 通知 |
+| ディスク逼迫 | プリフライトで空き容量チェック(`safety.minFreeDiskMb` 未満で中止、デフォルト 1024MB) | 実行中止 + 通知 |
 
 ## 4. 直接コミットの安全条件(再掲・正規化)
 
@@ -66,7 +68,7 @@
 ## 5. 秘密情報の扱い
 
 - Kaizen Loop はトークン・API キーを保存しない。GitHub 認証は `gh`、AI 実行は `builder-agent` / `verifier` に委譲
-- エージェントプロセスへ渡す環境変数は最小限(→ [06-agents.md](./06-agents.md) §2.3)。ターゲットプロジェクトの `.env` は渡さない
+- エージェントプロセスと setup / verify shell command へ渡す環境変数は `safety.envAllowlist` に限定する(→ [06-agents.md](./06-agents.md) §2.3)。ターゲットプロジェクトの `.env` は渡さない
 - `**/.env*` はデフォルトで `protectedPaths`。ログへの秘密情報混入を避けるため、エージェントログは GitHub へは「要約 + 末尾抜粋」のみ投稿し、全量はローカルにのみ保存
 
 ## 6. スリープ復帰時の遅延実行ガード

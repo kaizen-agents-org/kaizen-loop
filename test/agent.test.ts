@@ -40,6 +40,7 @@ describe('BuilderAgentAdapter', () => {
       expect(command).toBe('builder-agent');
       expect(args).toEqual([]);
       if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
+      expect(options.env.SECRET_TOKEN).toBeUndefined();
       await fs.writeFile(
         options.env.KAIZEN_BUILD_RESULT_PATH,
         JSON.stringify({
@@ -54,9 +55,18 @@ describe('BuilderAgentAdapter', () => {
 
     const adapter = new BuilderAgentAdapter(runner, {
       command: 'builder-agent',
-      resultPath: '.kaizen/builder/build-result.json'
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
     });
-    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+    const previousSecretToken = process.env.SECRET_TOKEN;
+    process.env.SECRET_TOKEN = 'do-not-pass';
+    let result: Awaited<ReturnType<BuilderAgentAdapter['run']>>;
+    try {
+      result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+    } finally {
+      if (previousSecretToken === undefined) delete process.env.SECRET_TOKEN;
+      else process.env.SECRET_TOKEN = previousSecretToken;
+    }
 
     expect(result.status).toBe('fixed');
     expect(result.summary).toBe('直した');
@@ -68,17 +78,26 @@ describe('BuilderAgentAdapter', () => {
 describe('VerifierAgentAdapter', () => {
   async function runVerifier(payload: Record<string, unknown>) {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-'));
+    const previousSecretToken = process.env.SECRET_TOKEN;
+    process.env.SECRET_TOKEN = 'do-not-pass';
     const runner: CommandRunner = async (command, args, options) => {
       if (typeof options?.env?.KAIZEN_VERIFIER_RESULT_PATH !== 'string') throw new Error('missing result path');
+      expect(options.env.SECRET_TOKEN).toBeUndefined();
       await fs.writeFile(options.env.KAIZEN_VERIFIER_RESULT_PATH, JSON.stringify(payload));
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 1 };
     };
     const adapter = new VerifierAgentAdapter(runner, {
       command: 'verifier',
       resultPath: '.kaizen/verifier/verify-result.json',
-      timeoutMinutes: 1
+      timeoutMinutes: 1,
+      envAllowlist: ['PATH']
     });
-    return adapter.run({ workspaceDir: workspace, prompt: 'review' });
+    try {
+      return await adapter.run({ workspaceDir: workspace, prompt: 'review' });
+    } finally {
+      if (previousSecretToken === undefined) delete process.env.SECRET_TOKEN;
+      else process.env.SECRET_TOKEN = previousSecretToken;
+    }
   }
 
   it.each([

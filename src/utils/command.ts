@@ -1,5 +1,28 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { envWithKaizenTemp } from './temp.js';
+
+export const DEFAULT_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'KAIZEN_HOME',
+  'GH_CONFIG_DIR',
+  'SSH_AUTH_SOCK',
+  'GIT_SSH_COMMAND'
+];
+
+const activeChildren = new Set<ChildProcessWithoutNullStreams>();
+let shutdownHooksInstalled = false;
+let requestedShutdownSignal: NodeJS.Signals | undefined;
 
 export interface CommandResult {
   command: string;
@@ -26,27 +49,45 @@ export type CommandRunner = (
 ) => Promise<CommandResult>;
 
 export const runCommand: CommandRunner = async (command, args, options = {}) => {
+  throwIfShutdownRequested();
   const started = Date.now();
   const env = await envWithKaizenTemp(options.env ?? process.env, options.cwd);
+  installShutdownHooks();
+  throwIfShutdownRequested();
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
-      detached: false
+      detached: process.platform !== 'win32'
     });
+    activeChildren.add(child);
 
     let stdout = '';
     let stderr = '';
     let settled = false;
     let timeout: NodeJS.Timeout | undefined;
+    let forceKillTimeout: NodeJS.Timeout | undefined;
+    let timedOut = false;
+    const clearTimers = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+        forceKillTimeout = undefined;
+      }
+    };
 
     if (options.timeoutMs && options.timeoutMs > 0) {
       timeout = setTimeout(() => {
         if (settled) return;
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 10_000).unref();
+        timedOut = true;
+        terminateProcessTree(child, 'SIGTERM');
+        forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000);
+        forceKillTimeout.unref();
       }, options.timeoutMs);
       timeout.unref();
     }
@@ -63,14 +104,16 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
-      if (timeout) clearTimeout(timeout);
+      clearTimers();
+      activeChildren.delete(child);
       reject(error);
     });
 
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      if (timeout) clearTimeout(timeout);
+      clearTimers();
+      activeChildren.delete(child);
       const result: CommandResult = {
         command,
         args,
@@ -80,6 +123,12 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
         stderr,
         durationMs: Date.now() - started
       };
+      if (timedOut) {
+        const err = new Error(`Command timed out after ${options.timeoutMs}ms: ${formatCommand(command, args)}`);
+        Object.assign(err, { result });
+        reject(err);
+        return;
+      }
       if (options.rejectOnNonZero !== false && result.exitCode !== 0) {
         const err = new Error(formatCommandFailure(result));
         Object.assign(err, { result });
@@ -95,6 +144,62 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     child.stdin.end();
   });
 };
+
+export function buildAllowlistedEnv(
+  source: NodeJS.ProcessEnv,
+  allowlist: string[],
+  extra: NodeJS.ProcessEnv = {}
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of allowlist) {
+    const value = source[key];
+    if (value !== undefined) env[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
+export function throwIfShutdownRequested(): void {
+  if (requestedShutdownSignal) {
+    throw new Error(`Received ${requestedShutdownSignal}; shutting down.`);
+  }
+}
+
+function installShutdownHooks(): void {
+  if (shutdownHooksInstalled) return;
+  shutdownHooksInstalled = true;
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+      requestedShutdownSignal = signal;
+      process.exitCode = 128 + (signal === 'SIGINT' ? 2 : 15);
+      for (const child of activeChildren) {
+        terminateProcessTree(child, 'SIGTERM');
+        setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000).unref();
+      }
+    });
+  }
+}
+
+function terminateProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    if (process.platform === 'win32') {
+      const taskkillArgs = ['/pid', String(child.pid), '/T'];
+      if (signal === 'SIGKILL') taskkillArgs.push('/F');
+      spawn('taskkill', taskkillArgs, { stdio: 'ignore', detached: true }).unref();
+      return;
+    }
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // Process already exited.
+    }
+  }
+}
 
 export function formatCommand(command: string, args: string[]): string {
   return [command, ...args.map((arg) => (/\s/.test(arg) ? JSON.stringify(arg) : arg))].join(' ');
