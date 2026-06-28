@@ -1116,7 +1116,8 @@ async function reflectPullRequest(options: {
     base: options.config.git.defaultBranch,
     head: options.branch,
     title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
-    body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason)
+    body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason),
+    expectedClosingIssueNumber: options.issue.number
   });
   return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch, headSha };
 }

@@ -122,7 +122,7 @@ describe('runImprove', () => {
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
         return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
       }
-      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'fixed', notes: '' });
@@ -208,6 +208,27 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
     stderr: '',
     durationMs: 1
   };
+}
+
+function githubReadinessResult(command: string, args: string[], cwd: string | undefined) {
+  if (args[0] === 'repo' && args[1] === 'view') {
+    return result(command, args, cwd, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+  }
+  if (args[0] === 'pr' && args[1] === 'view') {
+    return result(
+      command,
+      args,
+      cwd,
+      JSON.stringify({
+        number: Number(args[2]),
+        url: `https://github.com/o/r/pull/${args[2]}`,
+        baseRefName: 'main',
+        isDraft: false,
+        closingIssuesReferences: [{ number: 8 }]
+      })
+    );
+  }
+  return result(command, args, cwd, '');
 }
 
 async function writeJsonResult(filePath: unknown, payload: unknown) {
