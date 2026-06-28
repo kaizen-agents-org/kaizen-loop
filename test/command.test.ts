@@ -122,6 +122,27 @@ describe('withRunDeadline', () => {
     expect(runner.mock.calls[0][2]?.timeoutMs).toBeLessThanOrEqual(1_000);
   });
 
+  it('applies the remaining run deadline when a command has a non-positive timeout', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const deadlineRunner = withRunDeadline(runner, Date.now() + 1_000);
+
+    await deadlineRunner('zero', [], { timeoutMs: 0 });
+    await deadlineRunner('negative', [], { timeoutMs: -1 });
+
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeGreaterThan(0);
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeLessThanOrEqual(1_000);
+    expect(runner.mock.calls[1][2]?.timeoutMs).toBeGreaterThan(0);
+    expect(runner.mock.calls[1][2]?.timeoutMs).toBeLessThanOrEqual(1_000);
+  });
+
   it('rejects commands after the run deadline expires', async () => {
     const runner = vi.fn<CommandRunner>();
     const deadlineRunner = withRunDeadline(runner, Date.now() - 1);

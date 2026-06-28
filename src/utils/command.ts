@@ -186,7 +186,9 @@ function timeoutWithinDeadline(configuredTimeoutMs: number | undefined, deadline
   throwIfShutdownRequested();
   const remainingMs = deadlineAt - Date.now();
   if (remainingMs <= 0) throw new Error('Kaizen run timeout exceeded.');
-  return configuredTimeoutMs === undefined ? remainingMs : Math.min(configuredTimeoutMs, remainingMs);
+  return configuredTimeoutMs === undefined || configuredTimeoutMs <= 0
+    ? remainingMs
+    : Math.min(configuredTimeoutMs, remainingMs);
 }
 
 function installShutdownHooks(): void {
