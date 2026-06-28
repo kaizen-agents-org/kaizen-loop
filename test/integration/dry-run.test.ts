@@ -1704,6 +1704,7 @@ describe('runKaizen PR flow', () => {
     let builderRuns = 0;
     let verifierRuns = 0;
     const builderPrompts: string[] = [];
+    const verifierPrompts: string[] = [];
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue()]));
@@ -1722,6 +1723,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
         verifierRuns += 1;
+        verifierPrompts.push(String(options?.input ?? ''));
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
           status: verifierRuns === 1 ? 'block_pr' : 'open_pr',
           summary: verifierRuns === 1 ? '不足あり' : '確認した',
@@ -1733,7 +1735,10 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
-      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      if (command === 'git' && args.join(' ') === 'diff --no-ext-diff origin/main...HEAD') {
+        return result(command, args, workspace, 'diff --git a/src/file.ts b/src/file.ts\n+const evidence = true;\n');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'PASS integration evidence\n');
       return result(command, args, options?.cwd, '');
     });
 
@@ -1749,6 +1754,9 @@ describe('runKaizen PR flow', () => {
     expect(builderRuns).toBe(2);
     expect(verifierRuns).toBe(2);
     expect(builderPrompts[1]).toContain('Verifier blocked PR');
+    expect(verifierPrompts[0]).toContain('diff --git a/src/file.ts b/src/file.ts');
+    expect(verifierPrompts[0]).toContain('+const evidence = true;');
+    expect(verifierPrompts[0]).toContain('PASS integration evidence');
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     expect('issues' in summary && summary.issues[0].reason).toContain('Verifier cleared PR');
   });

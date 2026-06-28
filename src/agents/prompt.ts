@@ -3,6 +3,8 @@ import type { GitHubIssue } from '../github/types.js';
 import type { DiffStats } from '../workspace/manager.js';
 import type { AgentResult } from './types.js';
 
+const VERIFICATION_LOG_MAX_CHARS = 8_000;
+
 export function buildFixPrompt(options: {
   repo: string;
   issue: GitHubIssue;
@@ -76,11 +78,14 @@ export function buildVerifierPrompt(options: {
   agentResult: AgentResult;
   verifyResults: Array<{ command: string; ok: boolean; output: string }>;
   diff: DiffStats;
+  diffText: string;
 }): string {
   const verify = options.verifyResults.length
     ? options.verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} ${result.command}`).join('\n')
     : '- Verification commands are not configured';
   const files = options.diff.files.length ? options.diff.files.map((file) => `- ${file}`).join('\n') : '- (no files)';
+  const verificationLogs = formatVerificationLogs(options.verifyResults);
+  const diffText = options.diffText.trim() || '(no diff text)';
 
   return `You are the verifier for the kaizen-loop run in "${options.repo}". Review the current workspace after the builder agent and mechanical verification have passed.
 
@@ -98,9 +103,17 @@ ${options.agentResult.notes || ''}
 
 ${verify}
 
+# Verification logs
+
+${verificationLogs}
+
 # Changed files
 
 ${files}
+
+# Diff
+
+${fencedBlock('diff', diffText)}
 
 # Decision rules
 
@@ -123,4 +136,33 @@ After completing the review, make your final response only this JSON in a json c
   "reason": ""
 }
 \`\`\``;
+}
+
+function formatVerificationLogs(results: Array<{ command: string; ok: boolean; output: string }>): string {
+  if (results.length === 0) return '(no verification commands configured)';
+  return results
+    .map((result, index) => {
+      const output = truncateText(result.output.trim(), VERIFICATION_LOG_MAX_CHARS) || '(no output)';
+      return `## Command ${index + 1}
+
+Status: ${result.ok ? 'passed' : 'failed'}
+
+Command:
+${fencedBlock('sh', result.command)}
+
+Output:
+${fencedBlock('text', output)}`;
+    })
+    .join('\n\n');
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]`;
+}
+
+function fencedBlock(info: string, text: string): string {
+  const longestFence = Math.max(2, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length));
+  const fence = '`'.repeat(longestFence + 1);
+  return `${fence}${info}\n${text}\n${fence}`;
 }

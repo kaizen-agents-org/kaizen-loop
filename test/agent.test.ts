@@ -139,7 +139,8 @@ describe('buildVerifierPrompt', () => {
       },
       agentResult: { status: 'fixed', summary: '直した', notes: '', raw: '', durationMs: 1 },
       verifyResults: [{ command: 'npm test', ok: true, output: '' }],
-      diff: { changedFiles: 1, changedLines: 1, files: ['src/file.ts'], forbiddenFiles: [], protectedFiles: [] }
+      diff: { changedFiles: 1, changedLines: 1, files: ['src/file.ts'], forbiddenFiles: [], protectedFiles: [] },
+      diffText: 'diff --git a/src/file.ts b/src/file.ts'
     });
 
     expect(prompt).toContain('"open_pr"');
@@ -148,6 +149,32 @@ describe('buildVerifierPrompt', () => {
     expect(prompt).toContain('needs_context');
     expect(prompt).not.toContain('"approved"');
     expect(prompt).toContain('NOT approving the change for merge');
+  });
+
+  it('includes diff text and verification log evidence', () => {
+    const prompt = buildVerifierPrompt({
+      repo: 'o/r',
+      issue: {
+        number: 7,
+        title: 'Fix bug',
+        body: 'body',
+        labels: [{ name: 'kaizen' }],
+        createdAt: '2026-06-13T00:00:00Z',
+        comments: []
+      },
+      agentResult: { status: 'fixed', summary: '直した', notes: 'builder notes', raw: '', durationMs: 1 },
+      verifyResults: [{ command: "python3 <<'PY'\nprint('ok')\nPY", ok: true, output: 'PASS verifier evidence\n' }],
+      diff: { changedFiles: 1, changedLines: 2, files: ['src/file.ts'], forbiddenFiles: [], protectedFiles: [] },
+      diffText: ['diff --git a/src/file.ts b/src/file.ts', '+const verified = true;'].join('\n')
+    });
+
+    expect(prompt).toContain('# Verification logs');
+    expect(prompt).toContain("python3 <<'PY'\nprint('ok')\nPY");
+    expect(prompt).toContain('PASS verifier evidence');
+    expect(prompt).toContain('# Diff');
+    expect(prompt).toContain('diff --git a/src/file.ts b/src/file.ts');
+    expect(prompt).toContain('+const verified = true;');
+    expect(prompt).toContain('builder notes');
   });
 });
 

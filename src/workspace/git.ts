@@ -147,6 +147,11 @@ export class GitClient {
       });
   }
 
+  async diff(base: string): Promise<string> {
+    const result = await this.git(['diff', '--no-ext-diff', `${base}...HEAD`], { rejectOnNonZero: false });
+    return result.stdout;
+  }
+
   async push(ref: string, options: { forceWithLease?: boolean } = {}): Promise<void> {
     await this.git(['push', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref]);
   }

@@ -129,6 +129,25 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls[0][2]?.rejectOnNonZero).toBe(false);
   });
 
+  it('collects bounded diff text against the default branch', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: 'abcdef',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, '/workspace');
+    const config = configSchema.parse({ version: 1 });
+
+    const diff = await workspace.collectDiffText(config, 3);
+
+    expect(diff).toBe('abc\n\n[truncated after 3 characters]');
+    expect(runner.mock.calls[0][1]).toEqual(['diff', '--no-ext-diff', 'origin/main...HEAD']);
+  });
+
   it('runs verification commands with a workspace-local temporary directory', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
     const workspacePath = path.join(root, 'workspace');

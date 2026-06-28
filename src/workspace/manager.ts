@@ -21,6 +21,8 @@ export interface WorkspaceCommandResult {
   output: string;
 }
 
+const DEFAULT_DIFF_TEXT_MAX_CHARS = 30_000;
+
 export class WorkspaceManager {
   constructor(
     private readonly run: CommandRunner,
@@ -127,6 +129,12 @@ export class WorkspaceManager {
     };
   }
 
+  async collectDiffText(config: KaizenConfig, maxChars = DEFAULT_DIFF_TEXT_MAX_CHARS): Promise<string> {
+    const base = `origin/${config.git.defaultBranch}`;
+    const diff = await this.git().diff(base);
+    return truncateText(diff.trim(), maxChars);
+  }
+
   private async runShell(command: string, timeoutMs: number | undefined, config: KaizenConfig, runDeadlineAt: number | undefined) {
     return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
       cwd: this.workspacePath,
@@ -164,4 +172,9 @@ function issueWorktreePath(workspacePath: string, runId: string, issueNumber: nu
 
 function matchesAny(file: string, patterns: string[]): boolean {
   return patterns.some((pattern) => minimatch(file, pattern, { dot: true }));
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]`;
 }
