@@ -439,7 +439,7 @@ function goalRunner(options: {
     if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
       return result(command, args, options.repo, 'https://github.com/o/r/pull/9\n');
     }
-    if (command === 'gh') return result(command, args, options.repo, '');
+    if (command === 'gh') return githubReadinessResult(command, args, options.repo);
 
     if (command === 'builder-agent' && args[0] === '--version') return result(command, args, options.workspace, 'ok');
     if (command === 'builder-agent') {
@@ -485,6 +485,27 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
     stderr: '',
     durationMs: 1
   };
+}
+
+function githubReadinessResult(command: string, args: string[], cwd: string | undefined) {
+  if (args[0] === 'repo' && args[1] === 'view') {
+    return result(command, args, cwd, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+  }
+  if (args[0] === 'pr' && args[1] === 'view') {
+    return result(
+      command,
+      args,
+      cwd,
+      JSON.stringify({
+        number: Number(args[2]),
+        url: `https://github.com/o/r/pull/${args[2]}`,
+        baseRefName: 'main',
+        isDraft: false,
+        closingIssuesReferences: [{ number: 42 }]
+      })
+    );
+  }
+  return result(command, args, cwd, '');
 }
 
 async function writeJsonResult(filePath: unknown, payload: unknown) {

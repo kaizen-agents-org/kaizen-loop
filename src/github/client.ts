@@ -199,6 +199,7 @@ export class GitHubClient {
     head: string;
     title: string;
     body: string;
+    expectedClosingIssueNumber: number;
   }): Promise<PullRequestResult> {
     const result = await this.gh([
       'pr',
@@ -214,7 +215,24 @@ export class GitHubClient {
     ]);
     const url = result.stdout.trim().split(/\s+/).find((part) => part.startsWith('http')) ?? result.stdout.trim();
     const number = url.match(/\/pull\/(\d+)/)?.[1];
-    return { url, number: number ? Number(number) : undefined };
+    if (!number) throw new Error(`Could not parse created pull request URL: ${result.stdout.trim()}`);
+
+    const prNumber = Number(number);
+    const created = { url, number: prNumber };
+    try {
+      const defaultBranch = await this.getRepositoryDefaultBranch();
+      if (!defaultBranch) throw new Error('Could not verify created pull request: repository default branch is unknown');
+
+      const linkage = await this.getPullRequestLinkage(prNumber);
+      validateCreatedPullRequest({
+        linkage,
+        defaultBranch,
+        expectedClosingIssueNumber: options.expectedClosingIssueNumber
+      });
+      return { url: linkage.url || url, number: prNumber };
+    } catch (error) {
+      throw new CreatedPullRequestValidationError(created, error);
+    }
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
@@ -233,6 +251,20 @@ export class GitHubClient {
     }
     throw lastError;
   }
+}
+
+export class CreatedPullRequestValidationError extends Error {
+  constructor(
+    readonly pr: PullRequestResult,
+    readonly originalError: unknown
+  ) {
+    super(`Created pull request ${pr.url} failed readiness validation: ${errorMessage(originalError)}`);
+    this.name = 'CreatedPullRequestValidationError';
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createIssueArgs(options: { title: string; body: string; repo?: string }, labels: string[]): string[] {
@@ -336,6 +368,25 @@ function duplicateTokens(input: string): Set<string> {
       .match(/[a-z0-9][a-z0-9._-]*/g)
       ?.filter((token) => token.length > 1 && !stopwords.has(token)) ?? []
   );
+}
+
+function validateCreatedPullRequest(options: {
+  linkage: GitHubPullRequestLinkage;
+  defaultBranch: string;
+  expectedClosingIssueNumber: number;
+}): void {
+  const { linkage, defaultBranch, expectedClosingIssueNumber } = options;
+  const errors: string[] = [];
+  if (linkage.baseRefName !== defaultBranch) {
+    errors.push(`base branch is ${linkage.baseRefName || '<unknown>'}, expected repository default branch ${defaultBranch}`);
+  }
+  if (linkage.isDraft) errors.push('pull request is a draft');
+  if (!linkage.closingIssuesReferences.some((issue) => issue.number === expectedClosingIssueNumber)) {
+    errors.push(`closing issue reference #${expectedClosingIssueNumber} was not recognized by GitHub`);
+  }
+  if (errors.length > 0) {
+    throw new Error(`Created pull request #${linkage.number} is not ready: ${errors.join('; ')}`);
+  }
 }
 
 function colorForLabel(label: string): string {

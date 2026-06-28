@@ -1,28 +1,150 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GitHubClient } from '../src/github/client.js';
+import { CreatedPullRequestValidationError, GitHubClient } from '../src/github/client.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('GitHubClient', () => {
   it('creates a pull request without draft mode', async () => {
-    const runner = vi.fn<CommandRunner>(async (command, args) => ({
-      command,
-      args,
-      exitCode: 0,
-      stdout: 'https://github.com/o/r/pull/7\n',
-      stderr: '',
-      durationMs: 1
-    }));
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'repo') {
+        return ghResult(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return ghResult(
+          command,
+          args,
+          JSON.stringify({
+            number: 7,
+            url: 'https://github.com/o/r/pull/7',
+            baseRefName: 'main',
+            isDraft: false,
+            closingIssuesReferences: [{ number: 1, url: 'https://github.com/o/r/issues/1' }]
+          })
+        );
+      }
+      return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
+    });
     const client = new GitHubClient(runner, '/repo');
 
     const pr = await client.createPullRequest({
       base: 'main',
       head: 'kaizen/issue-1-x',
       title: 'title',
-      body: 'body'
+      body: 'Closes #1',
+      expectedClosingIssueNumber: 1
     });
 
     expect(pr).toEqual({ url: 'https://github.com/o/r/pull/7', number: 7 });
     expect(runner.mock.calls[0][1]).not.toContain('--draft');
+    expect(runner.mock.calls[1][1]).toEqual(['repo', 'view', '--json', 'defaultBranchRef']);
+    expect(runner.mock.calls[2][1]).toEqual([
+      'pr',
+      'view',
+      '7',
+      '--json',
+      'number,url,baseRefName,isDraft,closingIssuesReferences'
+    ]);
+  });
+
+  it('rejects a created pull request that does not target the repository default branch', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'repo') {
+        return ghResult(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return ghResult(
+          command,
+          args,
+          JSON.stringify({
+            number: 7,
+            url: 'https://github.com/o/r/pull/7',
+            baseRefName: 'release',
+            isDraft: false,
+            closingIssuesReferences: [{ number: 1 }]
+          })
+        );
+      }
+      return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(
+      client.createPullRequest({
+        base: 'release',
+        head: 'kaizen/issue-1-x',
+        title: 'title',
+        body: 'Closes #1',
+        expectedClosingIssueNumber: 1
+      })
+    ).rejects.toThrow('expected repository default branch main');
+  });
+
+  it('rejects a created pull request that is still a draft', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'repo') {
+        return ghResult(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return ghResult(
+          command,
+          args,
+          JSON.stringify({
+            number: 7,
+            url: 'https://github.com/o/r/pull/7',
+            baseRefName: 'main',
+            isDraft: true,
+            closingIssuesReferences: [{ number: 1 }]
+          })
+        );
+      }
+      return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(
+      client.createPullRequest({
+        base: 'main',
+        head: 'kaizen/issue-1-x',
+        title: 'title',
+        body: 'Closes #1',
+        expectedClosingIssueNumber: 1
+      })
+    ).rejects.toThrow('pull request is a draft');
+  });
+
+  it('rejects a created pull request without recognized closing issue linkage', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'repo') {
+        return ghResult(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return ghResult(
+          command,
+          args,
+          JSON.stringify({
+            number: 7,
+            url: 'https://github.com/o/r/pull/7',
+            baseRefName: 'main',
+            isDraft: false,
+            closingIssuesReferences: []
+          })
+        );
+      }
+      return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    const create = client.createPullRequest({
+        base: 'main',
+        head: 'kaizen/issue-1-x',
+        title: 'title',
+        body: 'Closes #1',
+        expectedClosingIssueNumber: 1
+      });
+    await expect(create).rejects.toThrow('closing issue reference #1 was not recognized by GitHub');
+    await expect(create).rejects.toMatchObject({
+      pr: { url: 'https://github.com/o/r/pull/7', number: 7 }
+    });
+    await expect(create).rejects.toBeInstanceOf(CreatedPullRequestValidationError);
   });
 
   it('lists open pull requests for backlog limiting', async () => {
@@ -289,3 +411,14 @@ describe('GitHubClient', () => {
     expect(issue).toBeUndefined();
   });
 });
+
+function ghResult(command: string, args: string[], stdout: string) {
+  return {
+    command,
+    args,
+    exitCode: 0,
+    stdout,
+    stderr: '',
+    durationMs: 1
+  };
+}
