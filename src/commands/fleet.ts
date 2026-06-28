@@ -40,6 +40,7 @@ export interface FleetProjectResult {
   schedulerSynced: boolean;
   lockRepaired: boolean;
   verified: boolean;
+  setupResult?: { command: string; ok: boolean; output: string };
   verifyPassed?: boolean;
   verifyResults?: Array<{ command: string; ok: boolean; output: string }>;
   enabled: boolean;
@@ -186,7 +187,15 @@ async function syncFleetProject(options: FleetSyncOptions & {
         const workspace = new WorkspaceManager(options.runCommand, registryProject.workspacePath, options.project.remoteUrl);
         await workspace.ensure();
         await workspace.sync(config.git.defaultBranch);
-        await workspace.runSetup(config);
+        const setupResult = await workspace.runSetup(config);
+        if (setupResult) {
+          result.setupResult = setupResult;
+          if (!setupResult.ok) {
+            result.verifyPassed = false;
+            result.verifyResults = [];
+            return result;
+          }
+        }
         const verifyResults = await workspace.runVerify(config);
         result.verifyResults = verifyResults;
         result.verifyPassed = verifyResults.every((item) => item.ok);

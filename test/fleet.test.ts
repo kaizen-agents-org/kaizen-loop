@@ -233,6 +233,61 @@ describe('syncFleet', () => {
       projects: [fleetProject({ verifyPassed: true })]
     })).toBe(false);
   });
+
+  it('stops fleet verification when setup fails', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('HOME', home);
+
+    const repoDir = path.join(root, 'verifier');
+    await fs.mkdir(path.join(repoDir, '.git'), { recursive: true });
+    await fs.mkdir(path.join(repoDir, '.kaizen'), { recursive: true });
+    const config = parse(defaultConfigYaml({ agent: 'claude', setup: 'pnpm install --frozen-lockfile', verify: ['pnpm test'] }));
+    await fs.writeFile(path.join(repoDir, '.kaizen', 'config.yml'), stringify(config));
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
+        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/verifier.git\n');
+      }
+      if (command === 'sh' && args[1] === 'pnpm install --frozen-lockfile') {
+        return { ...result(command, args, options?.cwd, 'missing package\n'), exitCode: 1 };
+      }
+      if (command === 'sh' && args[1] === 'pnpm test') {
+        throw new Error('verify should not run after setup failure');
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const output = await syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      migrateConfig: true,
+      ensureWorkspace: true,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: true,
+      prune: false,
+      dryRun: false,
+      runCommand: runner
+    });
+
+    expect(output.projects[0]).toMatchObject({
+      slug: 'kaizen-agents-org-verifier',
+      verified: true,
+      verifyPassed: false,
+      setupResult: {
+        command: 'pnpm install --frozen-lockfile',
+        ok: false,
+        output: 'missing package\n'
+      },
+      verifyResults: []
+    });
+    expect(fleetHasFailures(output)).toBe(true);
+    expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args[1] === 'pnpm test')).toBe(false);
+  });
 });
 
 describe('refreshFleet', () => {
