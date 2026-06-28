@@ -51,7 +51,7 @@ export type CommandRunner = (
 export const runCommand: CommandRunner = async (command, args, options = {}) => {
   throwIfShutdownRequested();
   const started = Date.now();
-  const env = await envWithKaizenTemp(options.env ?? process.env, options.cwd);
+  const env = await envWithKaizenTemp(options.env ?? buildAllowlistedEnv(process.env, DEFAULT_ENV_ALLOWLIST), options.cwd);
   installShutdownHooks();
   throwIfShutdownRequested();
 
@@ -161,10 +161,26 @@ export function buildAllowlistedEnv(
   return env;
 }
 
+export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner {
+  return async (command, args, options = {}) => {
+    return runCommand(command, args, {
+      ...options,
+      timeoutMs: timeoutWithinDeadline(options.timeoutMs, deadlineAt)
+    });
+  };
+}
+
 export function throwIfShutdownRequested(): void {
   if (requestedShutdownSignal) {
     throw new Error(`Received ${requestedShutdownSignal}; shutting down.`);
   }
+}
+
+function timeoutWithinDeadline(configuredTimeoutMs: number | undefined, deadlineAt: number): number {
+  throwIfShutdownRequested();
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) throw new Error('Kaizen run timeout exceeded.');
+  return configuredTimeoutMs === undefined ? remainingMs : Math.min(configuredTimeoutMs, remainingMs);
 }
 
 function installShutdownHooks(): void {

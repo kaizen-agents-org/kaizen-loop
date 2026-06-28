@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { buildAllowlistedEnv, runCommand } from '../src/utils/command.js';
+import { describe, expect, it, vi } from 'vitest';
+import { buildAllowlistedEnv, runCommand, withRunDeadline, type CommandRunner } from '../src/utils/command.js';
 
 describe('buildAllowlistedEnv', () => {
   it('copies only allowlisted variables plus explicit extras', () => {
@@ -25,6 +25,18 @@ describe('buildAllowlistedEnv', () => {
 });
 
 describe('runCommand', () => {
+  it('uses the default environment allowlist when no environment is supplied', async () => {
+    const previousSecretToken = process.env.SECRET_TOKEN;
+    process.env.SECRET_TOKEN = 'do-not-pass';
+    try {
+      const result = await runCommand(process.execPath, ['-e', 'process.stdout.write(process.env.SECRET_TOKEN || "")']);
+      expect(result.stdout).toBe('');
+    } finally {
+      if (previousSecretToken === undefined) delete process.env.SECRET_TOKEN;
+      else process.env.SECRET_TOKEN = previousSecretToken;
+    }
+  });
+
   it('terminates background child processes when a command times out', async () => {
     if (process.platform === 'win32') return;
 
@@ -49,5 +61,51 @@ describe('runCommand', () => {
         timeoutMs: 50
       })
     ).rejects.toThrow('Command timed out');
+  });
+});
+
+describe('withRunDeadline', () => {
+  it('bounds command timeouts by the remaining run deadline', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const deadlineRunner = withRunDeadline(runner, Date.now() + 1_000);
+
+    await deadlineRunner('tool', [], { timeoutMs: 5_000 });
+
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeGreaterThan(0);
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeLessThanOrEqual(1_000);
+  });
+
+  it('applies the remaining run deadline when a command has no timeout', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const deadlineRunner = withRunDeadline(runner, Date.now() + 1_000);
+
+    await deadlineRunner('tool', []);
+
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeGreaterThan(0);
+    expect(runner.mock.calls[0][2]?.timeoutMs).toBeLessThanOrEqual(1_000);
+  });
+
+  it('rejects commands after the run deadline expires', async () => {
+    const runner = vi.fn<CommandRunner>();
+    const deadlineRunner = withRunDeadline(runner, Date.now() - 1);
+
+    await expect(deadlineRunner('tool', [])).rejects.toThrow('Kaizen run timeout exceeded');
+    expect(runner).not.toHaveBeenCalled();
   });
 });
