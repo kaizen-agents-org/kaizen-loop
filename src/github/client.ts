@@ -217,17 +217,22 @@ export class GitHubClient {
     const number = url.match(/\/pull\/(\d+)/)?.[1];
     if (!number) throw new Error(`Could not parse created pull request URL: ${result.stdout.trim()}`);
 
-    const defaultBranch = await this.getRepositoryDefaultBranch();
-    if (!defaultBranch) throw new Error('Could not verify created pull request: repository default branch is unknown');
-
     const prNumber = Number(number);
-    const linkage = await this.getPullRequestLinkage(prNumber);
-    validateCreatedPullRequest({
-      linkage,
-      defaultBranch,
-      expectedClosingIssueNumber: options.expectedClosingIssueNumber
-    });
-    return { url: linkage.url || url, number: prNumber };
+    const created = { url, number: prNumber };
+    try {
+      const defaultBranch = await this.getRepositoryDefaultBranch();
+      if (!defaultBranch) throw new Error('Could not verify created pull request: repository default branch is unknown');
+
+      const linkage = await this.getPullRequestLinkage(prNumber);
+      validateCreatedPullRequest({
+        linkage,
+        defaultBranch,
+        expectedClosingIssueNumber: options.expectedClosingIssueNumber
+      });
+      return { url: linkage.url || url, number: prNumber };
+    } catch (error) {
+      throw new CreatedPullRequestValidationError(created, error);
+    }
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
@@ -246,6 +251,20 @@ export class GitHubClient {
     }
     throw lastError;
   }
+}
+
+export class CreatedPullRequestValidationError extends Error {
+  constructor(
+    readonly pr: PullRequestResult,
+    readonly originalError: unknown
+  ) {
+    super(`Created pull request ${pr.url} failed readiness validation: ${errorMessage(originalError)}`);
+    this.name = 'CreatedPullRequestValidationError';
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createIssueArgs(options: { title: string; body: string; repo?: string }, labels: string[]): string[] {

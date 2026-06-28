@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GitHubClient } from '../src/github/client.js';
+import { CreatedPullRequestValidationError, GitHubClient } from '../src/github/client.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('GitHubClient', () => {
@@ -133,15 +133,18 @@ describe('GitHubClient', () => {
     });
     const client = new GitHubClient(runner, '/repo');
 
-    await expect(
-      client.createPullRequest({
+    const create = client.createPullRequest({
         base: 'main',
         head: 'kaizen/issue-1-x',
         title: 'title',
         body: 'Closes #1',
         expectedClosingIssueNumber: 1
-      })
-    ).rejects.toThrow('closing issue reference #1 was not recognized by GitHub');
+      });
+    await expect(create).rejects.toThrow('closing issue reference #1 was not recognized by GitHub');
+    await expect(create).rejects.toMatchObject({
+      pr: { url: 'https://github.com/o/r/pull/7', number: 7 }
+    });
+    await expect(create).rejects.toBeInstanceOf(CreatedPullRequestValidationError);
   });
 
   it('lists open pull requests for backlog limiting', async () => {

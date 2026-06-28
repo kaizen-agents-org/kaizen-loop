@@ -7,7 +7,7 @@ import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
 import type { KaizenConfig, Registry } from '../config/schema.js';
-import { GitHubClient } from '../github/client.js';
+import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts } from '../report/comments.js';
 import { throwIfShutdownRequested, type CommandRunner } from '../utils/command.js';
@@ -650,6 +650,9 @@ async function processIssue(options: {
         verifyResults,
         diff: finalDiff,
         github: options.github,
+        runId: options.runId,
+        trigger: options.trigger,
+        attempt: attempts,
         reason: verifierPrReason(verifierResult)
       });
       return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
@@ -671,6 +674,9 @@ async function processIssue(options: {
         verifyResults,
         diff: finalDiff,
         github: options.github,
+        runId: options.runId,
+        trigger: options.trigger,
+        attempt: attempts,
         reason: `Parallel issue run requires PR isolation: ${decision.reason}`
       });
       return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
@@ -700,6 +706,9 @@ async function processIssue(options: {
           verifyResults,
           diff: finalDiff,
           github: options.github,
+          runId: options.runId,
+          trigger: options.trigger,
+          attempt: attempts,
           reason: `Instant direct commit switched to PR: ${decision.reason}`
         });
         return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
@@ -724,6 +733,9 @@ async function processIssue(options: {
           verifyResults,
           diff: finalDiff,
           github: options.github,
+          runId: options.runId,
+          trigger: options.trigger,
+          attempt: attempts,
           reason: `Direct commit fallback to PR: ${String(error)}`
         });
       });
@@ -775,6 +787,9 @@ async function processIssue(options: {
       verifyResults,
       diff: finalDiff,
       github: options.github,
+      runId: options.runId,
+      trigger: options.trigger,
+      attempt: attempts,
       reason: decision.reason
     });
     return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
@@ -1108,18 +1123,37 @@ async function reflectPullRequest(options: {
   verifyResults: Array<{ command: string; ok: boolean; output: string }>;
   diff: DiffStats;
   github: GitHubClient;
+  runId: string;
+  trigger: RunSummary['trigger'];
+  attempt: number;
   reason: string;
 }): Promise<PullRequestReflection> {
   await options.workspace.git().push(options.branch, { forceWithLease: true });
   const headSha = await options.workspace.git().revParse('HEAD');
-  const pr = await options.github.createPullRequest({
-    base: options.config.git.defaultBranch,
-    head: options.branch,
-    title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
-    body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason),
-    expectedClosingIssueNumber: options.issue.number
-  });
-  return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch, headSha };
+  try {
+    const pr = await options.github.createPullRequest({
+      base: options.config.git.defaultBranch,
+      head: options.branch,
+      title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
+      body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason),
+      expectedClosingIssueNumber: options.issue.number
+    });
+    return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch, headSha };
+  } catch (error) {
+    if (error instanceof CreatedPullRequestValidationError) {
+      await options.github.comment(
+        options.issue.number,
+        buildPrProgressComment({
+          runId: options.runId,
+          issue: options.issue.number,
+          attempt: options.attempt,
+          prUrl: error.pr.url,
+          trigger: options.trigger
+        })
+      );
+    }
+    throw error;
+  }
 }
 
 async function runPrGuardianAfterPullRequest(options: {
