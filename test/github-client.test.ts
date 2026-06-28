@@ -26,6 +26,10 @@ describe('GitHubClient', () => {
   });
 
   it('lists open pull requests for backlog limiting', async () => {
+    const previousGhToken = process.env.GH_TOKEN;
+    const previousSecretToken = process.env.SECRET_TOKEN;
+    process.env.GH_TOKEN = 'token-only-auth';
+    process.env.SECRET_TOKEN = 'do-not-pass';
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
       args,
@@ -41,28 +45,37 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo');
+    try {
+      const client = new GitHubClient(runner, '/repo');
 
-    const prs = await client.listOpenPullRequests(3);
+      const prs = await client.listOpenPullRequests(3);
 
-    expect(prs).toEqual([
-      {
-        number: 7,
-        headRefName: 'kaizen/issue-1-x',
-        headRepositoryOwner: { login: 'o' },
-        url: 'https://github.com/o/r/pull/7'
-      }
-    ]);
-    expect(runner.mock.calls[0][1]).toEqual([
-      'pr',
-      'list',
-      '--state',
-      'open',
-      '--json',
-      'number,headRefName,headRepositoryOwner,url',
-      '--limit',
-      '3'
-    ]);
+      expect(prs).toEqual([
+        {
+          number: 7,
+          headRefName: 'kaizen/issue-1-x',
+          headRepositoryOwner: { login: 'o' },
+          url: 'https://github.com/o/r/pull/7'
+        }
+      ]);
+      expect(runner.mock.calls[0][1]).toEqual([
+        'pr',
+        'list',
+        '--state',
+        'open',
+        '--json',
+        'number,headRefName,headRepositoryOwner,url',
+        '--limit',
+        '3'
+      ]);
+      expect(runner.mock.calls[0][2]?.env?.GH_TOKEN).toBe('token-only-auth');
+      expect(runner.mock.calls[0][2]?.env?.SECRET_TOKEN).toBeUndefined();
+    } finally {
+      if (previousGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previousGhToken;
+      if (previousSecretToken === undefined) delete process.env.SECRET_TOKEN;
+      else process.env.SECRET_TOKEN = previousSecretToken;
+    }
   });
 
   it('preserves the base label when an optional target repo label is missing', async () => {

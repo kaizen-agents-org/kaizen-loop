@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildAllowlistedEnv, runCommand, withRunDeadline, type CommandRunner } from '../src/utils/command.js';
+import { buildAllowlistedEnv, githubCliEnv, runCommand, withRunDeadline, type CommandRunner } from '../src/utils/command.js';
 
 describe('buildAllowlistedEnv', () => {
   it('copies only allowlisted variables plus explicit extras', () => {
@@ -20,6 +20,27 @@ describe('buildAllowlistedEnv', () => {
     expect(env).toEqual({
       PATH: '/bin',
       KAIZEN_WORKSPACE_DIR: '/workspace'
+    });
+  });
+});
+
+describe('githubCliEnv', () => {
+  it('preserves GitHub CLI token auth without passing unrelated secrets', () => {
+    const env = githubCliEnv({
+      PATH: '/bin',
+      GH_TOKEN: 'gh-token',
+      GITHUB_TOKEN: 'github-token',
+      GH_ENTERPRISE_TOKEN: 'enterprise-token',
+      GITHUB_ENTERPRISE_TOKEN: 'github-enterprise-token',
+      SECRET_TOKEN: 'secret'
+    });
+
+    expect(env).toEqual({
+      PATH: '/bin',
+      GH_TOKEN: 'gh-token',
+      GITHUB_TOKEN: 'github-token',
+      GH_ENTERPRISE_TOKEN: 'enterprise-token',
+      GITHUB_ENTERPRISE_TOKEN: 'github-enterprise-token'
     });
   });
 });

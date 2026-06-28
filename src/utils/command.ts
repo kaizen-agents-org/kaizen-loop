@@ -20,6 +20,8 @@ export const DEFAULT_ENV_ALLOWLIST = [
   'GIT_SSH_COMMAND'
 ];
 
+const GITHUB_CLI_AUTH_ENV_ALLOWLIST = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal: NodeJS.Signals | undefined;
@@ -159,6 +161,10 @@ export function buildAllowlistedEnv(
     if (value !== undefined) env[key] = value;
   }
   return env;
+}
+
+export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
 }
 
 export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner {

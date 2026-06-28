@@ -169,7 +169,8 @@ export const configSchema = z
         mode: z.enum(['sync', 'async']).default('sync'),
         command: z.string().default('codex'),
         timeoutMinutes: z.number().int().positive().default(60),
-        maxAttempts: z.number().int().positive().default(5)
+        maxAttempts: z.number().int().positive().default(5),
+        reviewSettleSeconds: z.number().int().min(0).default(30)
       })
       .strict()
       .default({
@@ -177,7 +178,8 @@ export const configSchema = z
         mode: 'sync',
         command: 'codex',
         timeoutMinutes: 60,
-        maxAttempts: 5
+        maxAttempts: 5,
+        reviewSettleSeconds: 30
       }),
     goal: z
       .object({

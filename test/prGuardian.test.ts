@@ -10,7 +10,7 @@ describe('runPrGuardianSkill', () => {
   it('requires review feedback to be inspected before declaring a PR mergeable', async () => {
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 3 }
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 3, reviewSettleSeconds: 0 }
     });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
       command,
@@ -49,7 +49,7 @@ describe('runPrGuardianSkill', () => {
   it('reruns while unresolved review threads remain and fails after the retry budget', async () => {
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
       command,
@@ -80,11 +80,58 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(2);
   });
 
+  it('waits once for late bot review threads before declaring success', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 1 }
+    });
+    let reviewFetches = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh') {
+        reviewFetches += 1;
+        return {
+          command,
+          args,
+          cwd: options?.cwd,
+          exitCode: 0,
+          stdout: reviewFetches === 1
+            ? reviewThreadsResponse([])
+            : reviewThreadsResponse([{ path: 'src/file.ts', line: 12, author: 'codex', body: 'Please fix this.' }]),
+          stderr: '',
+          durationMs: 1
+        };
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: 'guardian pass complete',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.raw).toContain('bot review settle wait');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
   it('persists one guardian job per PR head SHA', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
 
     const first = await enqueuePrGuardianJob({
@@ -127,7 +174,7 @@ describe('runPrGuardianSkill', () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
     const job = await enqueuePrGuardianJob({
       stateDir,
@@ -156,7 +203,7 @@ describe('runPrGuardianSkill', () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
     await enqueuePrGuardianJob({
       stateDir,
@@ -195,7 +242,7 @@ describe('runPrGuardianSkill', () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2 }
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
     const job = await enqueuePrGuardianJob({
       stateDir,
@@ -243,7 +290,7 @@ describe('runPrGuardianSkill', () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 60, maxAttempts: 2 }
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 60, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
     const job = await enqueuePrGuardianJob({
       stateDir,

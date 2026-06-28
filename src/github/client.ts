@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { CommandRunner } from '../utils/command.js';
+import { githubCliEnv, type CommandRunner } from '../utils/command.js';
 import type {
   GitHubIssue,
   GitHubPullRequest,
@@ -222,7 +222,7 @@ export class GitHubClient {
     const attempts = options.noRetry ? 1 : 3;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        return await this.run('gh', args, { cwd: this.cwd });
+        return await this.run('gh', args, { cwd: this.cwd, env: githubCliEnv() });
       } catch (error) {
         const message = String(error);
         if (options.ignoreAlreadyExists && /already exists/i.test(message)) return emptyResult(args, this.cwd);
