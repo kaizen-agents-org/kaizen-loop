@@ -20,7 +20,11 @@ async function nearestExistingPath(targetPath: string): Promise<string> {
     try {
       await fs.access(current);
       return current;
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw error;
+      }
       const parent = path.dirname(current);
       if (parent === current) throw new Error(`Cannot find an existing parent directory for ${targetPath}`);
       current = parent;

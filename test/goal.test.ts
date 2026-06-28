@@ -402,6 +402,9 @@ function goalRunner(options: {
 }) {
   return vi.fn<CommandRunner>(async (command, args, runOptions) => {
     if (command === 'goal-agent') {
+      expect(runOptions?.env?.TMPDIR).toBe(path.join(runOptions?.cwd ?? '', '.kaizen', 'tmp'));
+      expect(runOptions?.env?.TMP).toBe(path.join(runOptions?.cwd ?? '', '.kaizen', 'tmp'));
+      expect(runOptions?.env?.TEMP).toBe(path.join(runOptions?.cwd ?? '', '.kaizen', 'tmp'));
       const mode = runOptions?.env?.KAIZEN_GOAL_MODE;
       if (mode === 'planner') {
         if (!options.invalidPlanner) {

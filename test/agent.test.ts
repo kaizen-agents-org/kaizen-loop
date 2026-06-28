@@ -58,12 +58,14 @@ describe('BuilderAgentAdapter', () => {
       resultPath: '.kaizen/builder/build-result.json',
       envAllowlist: ['PATH']
     });
+    const previousSecretToken = process.env.SECRET_TOKEN;
     process.env.SECRET_TOKEN = 'do-not-pass';
     let result: Awaited<ReturnType<BuilderAgentAdapter['run']>>;
     try {
       result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
     } finally {
-      delete process.env.SECRET_TOKEN;
+      if (previousSecretToken === undefined) delete process.env.SECRET_TOKEN;
+      else process.env.SECRET_TOKEN = previousSecretToken;
     }
 
     expect(result.status).toBe('fixed');
@@ -76,8 +78,11 @@ describe('BuilderAgentAdapter', () => {
 describe('VerifierAgentAdapter', () => {
   async function runVerifier(payload: Record<string, unknown>) {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-'));
+    const previousSecretToken = process.env.SECRET_TOKEN;
+    process.env.SECRET_TOKEN = 'do-not-pass';
     const runner: CommandRunner = async (command, args, options) => {
       if (typeof options?.env?.KAIZEN_VERIFIER_RESULT_PATH !== 'string') throw new Error('missing result path');
+      expect(options.env.SECRET_TOKEN).toBeUndefined();
       await fs.writeFile(options.env.KAIZEN_VERIFIER_RESULT_PATH, JSON.stringify(payload));
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 1 };
     };
@@ -87,7 +92,12 @@ describe('VerifierAgentAdapter', () => {
       timeoutMinutes: 1,
       envAllowlist: ['PATH']
     });
-    return adapter.run({ workspaceDir: workspace, prompt: 'review' });
+    try {
+      return await adapter.run({ workspaceDir: workspace, prompt: 'review' });
+    } finally {
+      if (previousSecretToken === undefined) delete process.env.SECRET_TOKEN;
+      else process.env.SECRET_TOKEN = previousSecretToken;
+    }
   }
 
   it.each([

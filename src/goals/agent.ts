@@ -3,6 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
 import type { GoalEvaluation, GoalPlan } from './types.js';
 
 const nextIssueSchema = z
@@ -71,15 +72,19 @@ export class GoalAgentAdapter {
     await fs.rm(resultPath, { force: true });
     await fs.mkdir(path.dirname(resultPath), { recursive: true });
 
+    const env = await envWithKaizenTemp(
+      buildAllowlistedEnv(process.env, this.options.envAllowlist, {
+        KAIZEN_GOAL_RESULT_PATH: resultPath,
+        KAIZEN_GOAL_MODE: mode
+      }),
+      req.cwd
+    );
     const result = await this.runCommand(this.options.command, this.options.args, {
       cwd: req.cwd,
       input: req.prompt,
       timeoutMs: this.options.timeoutMinutes * 60_000,
       rejectOnNonZero: false,
-      env: buildAllowlistedEnv(process.env, this.options.envAllowlist, {
-        KAIZEN_GOAL_RESULT_PATH: resultPath,
-        KAIZEN_GOAL_MODE: mode
-      })
+      env
     });
     const raw = `${result.stdout}${result.stderr}`;
     const payload = (await readPayload(resultPath, schema)) ?? parsePayload(raw, schema);

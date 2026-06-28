@@ -16,4 +16,21 @@ describe('assertMinFreeDisk', () => {
 
     await expect(assertMinFreeDisk(root, Number.MAX_SAFE_INTEGER)).rejects.toThrow('Insufficient free disk space');
   });
+
+  it('does not walk past permission-denied ancestors', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-disk-'));
+    const locked = path.join(root, 'locked');
+    await fs.mkdir(locked);
+    await fs.chmod(locked, 0o000);
+
+    try {
+      await expect(assertMinFreeDisk(path.join(locked, 'workspace'), 1)).rejects.toMatchObject({
+        code: expect.stringMatching(/EACCES|EPERM/)
+      });
+    } finally {
+      await fs.chmod(locked, 0o700);
+    }
+  });
 });

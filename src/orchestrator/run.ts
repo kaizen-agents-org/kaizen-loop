@@ -225,6 +225,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         const worktrees: Array<{ issue: GitHubIssue; branch: string; path: string }> = [];
         try {
           for (const issue of selection.selected) {
+            assertRunWithinDeadline(runDeadlineAt);
             const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId);
             worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
           }
@@ -427,10 +428,19 @@ async function prepareBaseWorkspace(options: {
   await options.workspace.ensure();
   assertRunWithinDeadline(options.runDeadlineAt);
   await options.workspace.sync(options.config.git.defaultBranch);
-  await options.workspace.runSetup(options.config, options.runDeadlineAt);
+  const setupResult = await options.workspace.runSetup(options.config, options.runDeadlineAt);
+  if (setupResult && !setupResult.ok) {
+    const issueDir = path.join(options.runDir, `issue-${options.firstIssue.number}`);
+    await fs.mkdir(issueDir, { recursive: true });
+    const reason = `Baseline setup failed: ${setupResult.command}`;
+    await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
+    await options.github.comment(options.firstIssue.number, buildRunAbortComment(options.runId, reason, [setupResult]));
+    return { ok: false, reason };
+  }
   const baselineVerify = await options.workspace.runVerify(options.config, options.runDeadlineAt);
   const failedBaseline = baselineVerify.find((item) => !item.ok);
   if (!failedBaseline) {
+    assertRunWithinDeadline(options.runDeadlineAt);
     await options.workspace.sync(options.config.git.defaultBranch);
     return { ok: true };
   }
@@ -504,7 +514,7 @@ async function processIssue(options: {
   await fs.mkdir(issueDir, { recursive: true });
   const attempts = countAttempts(options.issue.comments ?? []) + 1;
   const preferredBackend = selectPreferredBackend(options.config, options.issue, options.requestedAgent);
-  const agent = await selectAgent(options.config, options.runCommand);
+  let agent = setupPendingAgent();
   const verifier = options.config.verifier.enabled
     ? new VerifierAgentAdapter(options.runCommand, {
         ...options.config.verifier,
@@ -517,7 +527,13 @@ async function processIssue(options: {
     assertRunWithinDeadline(options.runDeadlineAt);
     await assertMinFreeDisk(options.project.workspacePath, options.config.safety.minFreeDiskMb);
     await options.github.addLabels(options.issue.number, ['kaizen:in-progress']);
-    await workspace.runSetup(options.config, options.runDeadlineAt);
+    const setupResult = await workspace.runSetup(options.config, options.runDeadlineAt);
+    if (setupResult && !setupResult.ok) {
+      const reason = `Setup failed: ${setupResult.command}`;
+      await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
+      return await finishFailed(options, agent, attempts, reason, started, [setupResult]);
+    }
+    agent = await selectAgent(options.config, options.runCommand);
     const branch = options.branch;
 
     let agentResult: AgentResult | undefined;
@@ -862,6 +878,18 @@ async function selectAgent(config: KaizenConfig, runCommand: CommandRunner): Pro
   return agent;
 }
 
+function setupPendingAgent(): AgentAdapter {
+  return {
+    name: 'builder',
+    async isAvailable() {
+      return true;
+    },
+    async run() {
+      throw new Error('Agent unavailable before setup completed.');
+    }
+  };
+}
+
 function selectPreferredBackend(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined): 'claude' | 'codex' {
   const labels = labelNames(issue);
   return labels.includes('kaizen:agent:codex')
@@ -1022,11 +1050,11 @@ function buildRunAbortComment(
 ): string {
   const verify = verifyResults.length
     ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
-    : '- Verification commands are not configured';
+    : '- Baseline commands are not configured';
 
   return `## Kaizen Loop run aborted
 
-The run stopped before agent execution because the baseline verification failed on the clean default branch.
+The run stopped before agent execution because a baseline setup or verification command failed on the clean default branch.
 This is treated as an environment or existing-repository failure, not as an Issue attempt.
 
 | | |
@@ -1034,7 +1062,7 @@ This is treated as an environment or existing-repository failure, not as an Issu
 | Run | ${runId} |
 | Reason | ${reason} |
 
-## Baseline verification
+## Baseline checks
 ${verify}`;
 }
 

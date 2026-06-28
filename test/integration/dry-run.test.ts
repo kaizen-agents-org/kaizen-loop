@@ -1803,6 +1803,66 @@ describe('runKaizen PR flow', () => {
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
     expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
   });
+
+  it('fails an issue immediately when worktree setup fails', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let setupCalls = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue()]));
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        setupCalls += 1;
+        return setupCalls === 1
+          ? result(command, args, options?.cwd, 'base setup ok')
+          : failedResult(command, args, options?.cwd, 'worktree setup failed');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, options?.cwd, 'ok');
+      if (command === 'builder-agent') throw new Error('builder must not run after setup failure');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0]).toMatchObject({
+      outcome: 'failed',
+      reason: 'Setup failed: npm ci'
+    });
+    expect(setupCalls).toBe(2);
+    expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
+  });
 });
 
 function issue(number = 1, overrides: Partial<GitHubIssue> = {}) {
@@ -1824,6 +1884,18 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
     exitCode: 0,
     stdout,
     stderr: '',
+    durationMs: 1
+  };
+}
+
+function failedResult(command: string, args: string[], cwd: string | undefined, stderr: string) {
+  return {
+    command,
+    args,
+    cwd,
+    exitCode: 1,
+    stdout: '',
+    stderr,
     durationMs: 1
   };
 }

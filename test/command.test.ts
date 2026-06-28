@@ -40,4 +40,14 @@ describe('runCommand', () => {
     await new Promise((resolve) => setTimeout(resolve, 600));
     await expect(fs.access(leakPath)).rejects.toThrow();
   });
+
+  it('rejects when a timed-out command exits cleanly after SIGTERM', async () => {
+    if (process.platform === 'win32') return;
+
+    await expect(
+      runCommand('sh', ['-lc', 'trap "exit 0" TERM; while true; do sleep 0.01; done'], {
+        timeoutMs: 50
+      })
+    ).rejects.toThrow('Command timed out');
+  });
 });

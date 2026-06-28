@@ -53,6 +53,7 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
   const started = Date.now();
   const env = await envWithKaizenTemp(options.env ?? process.env, options.cwd);
   installShutdownHooks();
+  throwIfShutdownRequested();
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -68,12 +69,22 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     let settled = false;
     let timeout: NodeJS.Timeout | undefined;
     let forceKillTimeout: NodeJS.Timeout | undefined;
-    let timeoutKillStarted = false;
+    let timedOut = false;
+    const clearTimers = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+        forceKillTimeout = undefined;
+      }
+    };
 
     if (options.timeoutMs && options.timeoutMs > 0) {
       timeout = setTimeout(() => {
         if (settled) return;
-        timeoutKillStarted = true;
+        timedOut = true;
         terminateProcessTree(child, 'SIGTERM');
         forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000);
         forceKillTimeout.unref();
@@ -93,8 +104,7 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
-      if (timeout) clearTimeout(timeout);
-      if (!timeoutKillStarted && forceKillTimeout) clearTimeout(forceKillTimeout);
+      clearTimers();
       activeChildren.delete(child);
       reject(error);
     });
@@ -102,8 +112,7 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      if (timeout) clearTimeout(timeout);
-      if (!timeoutKillStarted && forceKillTimeout) clearTimeout(forceKillTimeout);
+      clearTimers();
       activeChildren.delete(child);
       const result: CommandResult = {
         command,
@@ -114,6 +123,12 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
         stderr,
         durationMs: Date.now() - started
       };
+      if (timedOut) {
+        const err = new Error(`Command timed out after ${options.timeoutMs}ms: ${formatCommand(command, args)}`);
+        Object.assign(err, { result });
+        reject(err);
+        return;
+      }
       if (options.rejectOnNonZero !== false && result.exitCode !== 0) {
         const err = new Error(formatCommandFailure(result));
         Object.assign(err, { result });
