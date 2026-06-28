@@ -51,6 +51,7 @@ describe('runSandboxSmoke', () => {
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'docs/sandbox-smoke.md\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tdocs/sandbox-smoke.md\n');
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') return result(command, args, workspace, 'abc123456789\n');
       if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
       return result(command, args, options?.cwd, '');
     });
@@ -82,6 +83,10 @@ describe('runSandboxSmoke', () => {
     expect(artifact.artifactPath).toContain(path.join(home, 'projects', 'o-r', 'smoke-runs'));
     const persisted = JSON.parse(await fs.readFile(artifact.artifactPath, 'utf8'));
     expect(persisted.pullRequest.issueLinkRecognized).toBe(true);
+    expect(persisted.guardian).toMatchObject({
+      mode: 'sync',
+      status: 'skipped'
+    });
     expect(await fileExists(artifact.run.summaryPath)).toBe(true);
     const labelCreates = runner.mock.calls.filter(([, args]) => args[0] === 'label' && args[1] === 'create');
     expect(labelCreates.map(([, args]) => args[2])).toEqual(
@@ -90,17 +95,87 @@ describe('runSandboxSmoke', () => {
     const issueCreate = runner.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'create');
     expect(issueCreate?.[1][issueCreate[1].indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready,kaizen:pr-only');
   });
+
+  it('records the async guardian job path in the smoke artifact', async () => {
+    const { repo, workspace, home } = await setupProject({ guardianMode: 'async' });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+        return result(command, args, repo, 'https://github.com/o/r/issues/15\n');
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(issue(15, 'Async guardian smoke')));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        return result(command, args, repo, 'https://github.com/o/r/pull/5\n');
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          number: 5,
+          url: 'https://github.com/o/r/pull/5',
+          baseRefName: 'main',
+          isDraft: false,
+          closingIssuesReferences: [{ number: 15, url: 'https://github.com/o/r/issues/15' }]
+        }));
+      }
+      if (command === 'gh' && args[0] === 'repo' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'smoke updated', notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: 'verified', notes: '' });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'docs/sandbox-smoke.md\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tdocs/sandbox-smoke.md\n');
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') return result(command, args, workspace, 'abc123456789\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const artifact = await runSandboxSmoke({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Async guardian smoke',
+      body: 'Record a harmless smoke marker.',
+      priority: 'P2',
+      json: true,
+      assumeYes: true,
+      runCommand: runner
+    });
+
+    expect(artifact.guardian).toMatchObject({
+      mode: 'async',
+      status: 'queued',
+      jobId: 'o-r-pr-5-abc123456789'
+    });
+    expect(artifact.guardian?.jobPath).toBe(path.join(home, 'projects', 'o-r', 'guardian', 'jobs', 'o-r-pr-5-abc123456789.json'));
+    expect(await fileExists(artifact.guardian?.jobPath ?? '')).toBe(true);
+    const persisted = JSON.parse(await fs.readFile(artifact.artifactPath, 'utf8'));
+    expect(persisted.guardian.jobPath).toBe(artifact.guardian?.jobPath);
+  });
 });
 
-async function setupProject() {
+async function setupProject(options: { guardianMode?: 'sync' | 'async' } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
   vi.stubEnv('KAIZEN_HOME', home);
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
-  const config = defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
-    .replace('guardian:\n  enabled: true', 'guardian:\n  enabled: false');
+  let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] });
+  if (options.guardianMode === 'async') {
+    config = config.replace('  mode: sync', '  mode: async');
+  } else {
+    config = config.replace('guardian:\n  enabled: true', 'guardian:\n  enabled: false');
+  }
   await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), config);
   await saveRegistry({
     version: 1,

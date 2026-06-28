@@ -4,6 +4,7 @@ import { loadConfig } from '../config/config.js';
 import { resolveProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
 import type { GitHubPullRequestLinkage } from '../github/types.js';
+import { guardianJobsDir } from '../orchestrator/prGuardian.js';
 import type { RunSummary } from '../orchestrator/summary.js';
 import { extractLastJsonObject } from '../utils/json.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -69,9 +70,11 @@ export interface SandboxSmokeArtifact {
     issueLinkRecognized: boolean;
   };
   guardian?: {
+    mode: 'sync' | 'async';
     status: string;
     summary: string;
     jobId?: string;
+    jobPath?: string;
   };
   artifactPath: string;
 }
@@ -164,7 +167,15 @@ export async function runSandboxSmoke(options: SandboxSmokeOptions): Promise<San
         )
       }
       : undefined,
-    guardian: issueSummary?.guardian,
+    guardian: issueSummary?.guardian
+      ? {
+        ...issueSummary.guardian,
+        mode: config.guardian.mode,
+        jobPath: issueSummary.guardian.jobId
+          ? path.join(guardianJobsDir(stateDir), `${issueSummary.guardian.jobId}.json`)
+          : undefined
+      }
+      : undefined,
     artifactPath
   };
 

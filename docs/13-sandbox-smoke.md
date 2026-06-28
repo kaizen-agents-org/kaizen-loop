@@ -33,7 +33,7 @@ The artifact indexes the normal run logs:
 - `runs/<run-id>/issue-<number>/agent.log`
 - `runs/<run-id>/issue-<number>/verify.log`
 - `runs/<run-id>/issue-<number>/verifier.log`
-- `guardian/jobs/*.json` when `guardian.mode: async`
+- `guardian/jobs/<job-id>.json` when `guardian.mode: async`
 
 ## Readiness Evidence
 
@@ -48,7 +48,8 @@ Readiness reviews should record the artifact path and check these fields:
 | `verification.verifier.verdict` / `verification.verifier.logPath` | Verifier gate result and raw verifier log |
 | `pullRequest.issueLinkRecognized` | Whether GitHub recognized the PR closing keyword for the issue |
 | `pullRequest.isDraft` | Must be `false` unless a human explicitly requested draft behavior |
-| `guardian.status` | PR guardian outcome, or queued job status when async guardian is configured |
+| `guardian.mode` / `guardian.status` | PR guardian mode and outcome, or queued job status when async guardian is configured |
+| `guardian.jobId` / `guardian.jobPath` | Async PR guardian job id and durable job artifact path, when a job is queued |
 
 `pullRequest.issueLinkRecognized` is computed from `gh pr view --json closingIssuesReferences`. It is stronger evidence than a branch name, PR title, or issue comment because it confirms GitHub recognizes the closing keyword on the PR.
 
