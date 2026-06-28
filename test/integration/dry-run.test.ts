@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parse, stringify } from 'yaml';
-import { defaultConfigYaml } from '../../src/config/config.js';
+import { defaultConfigYaml as buildDefaultConfigYaml } from '../../src/config/config.js';
 import { saveRegistry } from '../../src/config/registry.js';
 import type { GitHubIssue } from '../../src/github/types.js';
 import { runKaizen } from '../../src/orchestrator/run.js';
@@ -2023,6 +2023,12 @@ function defaultConfigWith(
 ): string {
   const config = parse(defaultConfigYaml(options)) as Record<string, unknown>;
   mergeConfig(config, overrides);
+  return stringify(config);
+}
+
+function defaultConfigYaml(options: { agent: 'claude' | 'codex'; setup: string | null; verify: string[] }): string {
+  const config = parse(buildDefaultConfigYaml(options)) as Record<string, unknown>;
+  mergeConfig(config, { guardian: { reviewSettleSeconds: 0 } });
   return stringify(config);
 }
 

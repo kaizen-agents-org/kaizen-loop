@@ -96,7 +96,8 @@ export function defaultConfigYaml(options: {
       mode: 'sync',
       command: 'codex',
       timeoutMinutes: 60,
-      maxAttempts: 5
+      maxAttempts: 5,
+      reviewSettleSeconds: 30
     },
     goal: {
       maxIterations: 5,

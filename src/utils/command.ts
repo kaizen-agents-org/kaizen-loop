@@ -20,6 +20,8 @@ export const DEFAULT_ENV_ALLOWLIST = [
   'GIT_SSH_COMMAND'
 ];
 
+const GITHUB_CLI_AUTH_ENV_ALLOWLIST = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal: NodeJS.Signals | undefined;
@@ -51,7 +53,7 @@ export type CommandRunner = (
 export const runCommand: CommandRunner = async (command, args, options = {}) => {
   throwIfShutdownRequested();
   const started = Date.now();
-  const env = await envWithKaizenTemp(options.env ?? process.env, options.cwd);
+  const env = await envWithKaizenTemp(options.env ?? buildAllowlistedEnv(process.env, DEFAULT_ENV_ALLOWLIST), options.cwd);
   installShutdownHooks();
   throwIfShutdownRequested();
 
@@ -161,10 +163,32 @@ export function buildAllowlistedEnv(
   return env;
 }
 
+export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
+}
+
+export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner {
+  return async (command, args, options = {}) => {
+    return runCommand(command, args, {
+      ...options,
+      timeoutMs: timeoutWithinDeadline(options.timeoutMs, deadlineAt)
+    });
+  };
+}
+
 export function throwIfShutdownRequested(): void {
   if (requestedShutdownSignal) {
     throw new Error(`Received ${requestedShutdownSignal}; shutting down.`);
   }
+}
+
+function timeoutWithinDeadline(configuredTimeoutMs: number | undefined, deadlineAt: number): number {
+  throwIfShutdownRequested();
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) throw new Error('Kaizen run timeout exceeded.');
+  return configuredTimeoutMs === undefined || configuredTimeoutMs <= 0
+    ? remainingMs
+    : Math.min(configuredTimeoutMs, remainingMs);
 }
 
 function installShutdownHooks(): void {

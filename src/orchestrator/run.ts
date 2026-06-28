@@ -10,7 +10,7 @@ import type { KaizenConfig, Registry } from '../config/schema.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts } from '../report/comments.js';
-import { throwIfShutdownRequested, type CommandRunner } from '../utils/command.js';
+import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -84,6 +84,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
   const scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
   const trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
+  const startedAt = new Date();
+  const runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
+  const runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   const nowDate = new Date();
   const cutoff = new Date(nowDate);
   cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
@@ -91,7 +94,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     ? scheduledJob.config.run.lateStartGuard
     : trigger === 'scheduled';
   const skipLatestStart = options.scheduled && lateStartGuard && nowDate > cutoff;
-  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+  const github = new GitHubClient(runCommand, resolved.project.localPath);
   const selectRunIssues = async () => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
     const jobMaxIssues = scheduledJob?.config.run.maxIssues;
@@ -169,8 +172,6 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     }
   }
 
-  const startedAt = new Date();
-  const runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
   const runId = toRunId(startedAt);
   const runDir = path.join(stateDir, 'runs', runId);
   await fs.mkdir(runDir, { recursive: true });
@@ -201,8 +202,8 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       summary.skipped = selection.skipped;
     }
     if (selection.selected.length > 0) {
-      const remoteUrl = await new GitClient(options.runCommand, resolved.project.localPath).remoteUrl('origin');
-      const baseWorkspace = new WorkspaceManager(options.runCommand, resolved.project.workspacePath, remoteUrl);
+      const remoteUrl = await new GitClient(runCommand, resolved.project.localPath).remoteUrl('origin');
+      const baseWorkspace = new WorkspaceManager(runCommand, resolved.project.workspacePath, remoteUrl);
       const baseline = await prepareBaseWorkspace({
         workspace: baseWorkspace,
         config,
@@ -245,7 +246,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
                 trigger,
                 assumeYes: Boolean(options.assumeYes),
                 confirmDirectCommit: options.confirmDirectCommit,
-                runCommand: options.runCommand,
+                runCommand,
                 runDeadlineAt,
                 forcePullRequest
               })

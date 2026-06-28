@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { KaizenConfig } from '../config/schema.js';
-import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, githubCliEnv, type CommandRunner } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 
 export interface PrGuardianSkillRequest {
@@ -195,6 +196,11 @@ export async function runPrGuardianSkill(
 
       const unresolvedReviewThreads = await listUnresolvedReviewThreads(runCommand, req);
       if (unresolvedReviewThreads.length === 0) {
+        const lateReviewThreads = await waitForLateReviewThreads(runCommand, req);
+        if (lateReviewThreads.length > 0) {
+          rawOutputs.push(`Unresolved review feedback after bot review settle wait on pass ${attempt}:\n${summarizeReviewThreads(lateReviewThreads)}`);
+          continue;
+        }
         return {
           status: 'success',
           summary: 'PR guardian skill completed; no unresolved review threads remain.',
@@ -356,6 +362,7 @@ async function listUnresolvedReviewThreads(
     if (cursor) args.push('-F', `cursor=${cursor}`);
     const result = await runCommand('gh', args, {
       cwd: req.workspaceDir,
+      env: githubCliEnv(),
       timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
       rejectOnNonZero: false
     });
@@ -382,6 +389,16 @@ async function listUnresolvedReviewThreads(
     cursor = reviewThreads?.pageInfo?.endCursor ?? undefined;
   }
   return unresolved;
+}
+
+async function waitForLateReviewThreads(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest
+): Promise<ReviewThreadSummary[]> {
+  const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
+  if (settleMs <= 0) return [];
+  await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
+  return listUnresolvedReviewThreads(runCommand, req);
 }
 
 function boundedTimeoutMs(configuredTimeoutMs: number, runDeadlineAt: number | undefined): number {
