@@ -600,6 +600,7 @@ async function processIssue(options: {
       if (!verifier) break;
 
       const verifierDiff = await workspace.collectDiffStats(options.config);
+      const verifierDiffText = await workspace.collectDiffText(options.config);
       verifierResult = await verifier.run({
         workspaceDir: options.project.workspacePath,
         timeoutMs: boundedTimeoutMs(options.config.verifier.timeoutMinutes * 60_000, options.runDeadlineAt),
@@ -608,7 +609,8 @@ async function processIssue(options: {
           issue: options.issue,
           agentResult,
           verifyResults,
-          diff: verifierDiff
+          diff: verifierDiff,
+          diffText: verifierDiffText
         })
       });
       await fs.appendFile(path.join(issueDir, 'verifier.log'), `\n# Verifier attempt ${retry + 1}\n${verifierResult.raw}\n`);
