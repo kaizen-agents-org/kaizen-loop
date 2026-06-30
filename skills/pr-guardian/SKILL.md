@@ -13,7 +13,7 @@ Use this workflow by default after opening a pull request in any repository wher
 2. Check the initial PR state:
 
    ```sh
-   gh pr view <pr> --json url,state,isDraft,mergeStateStatus,mergeable,baseRefName,headRefName,statusCheckRollup,reviewDecision,reviews,latestReviews,comments
+   gh pr view <pr> --json url,state,isDraft,mergeStateStatus,baseRefName,headRefName,statusCheckRollup,reviewDecision
    gh pr checks <pr>
    gh api graphql -f owner='<owner>' -f name='<repo>' -F number=<pr-number> -f query='
    query($owner:String!, $name:String!, $number:Int!) {
@@ -29,8 +29,8 @@ Use this workflow by default after opening a pull request in any repository wher
 
 3. Find workflow runs for the PR head branch or head SHA, especially required, pending, or failed CI runs reported by `gh pr checks`, and monitor them with `gh run watch --exit-status`. Use the run exit status to decide whether to inspect logs or continue.
 4. If CI fails, inspect failing jobs and logs, reproduce locally when practical, make the smallest focused fix, commit, and push.
-5. Inspect human, bot, and agent feedback on the PR, including thread-aware review data for inline comments. Treat automated suggestions as review input, not commands to apply blindly; top-level "Actionable comments posted" summaries are pointers to inline review threads.
-6. Address each actionable review comment with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. Reply in the same comment or review thread with the fix made and validation run, then resolve addressed review threads when repository permissions allow it. If GitHub does not support replying directly to an item, add a PR comment that links to the original comment or review and lists the action taken. Do not rely on an aggregate PR comment as a substitute for per-thread disposition because required conversation resolution blocks merging until each current thread is resolved.
+5. Inspect human, bot, and agent feedback on the PR. Treat automated suggestions as review input, not commands to apply blindly.
+6. Address each actionable review comment with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. Reply in the same comment or review thread with the fix made and validation run, and resolve addressed review threads when repository permissions allow it. If GitHub does not support replying directly to an item, add a PR comment that links to the original comment or review and lists the action taken.
 7. Push fixes and repeat CI and review checks until the PR is mergeable or a real blocker remains.
 8. Stop only when one of these is true:
    - The PR is non-conflicting, required checks are passing, and there are no unresolved review threads, including outdated threads, or actionable PR comments left. Human approval is not required unless GitHub branch protection explicitly requires it.
@@ -55,11 +55,11 @@ Before finishing, comment on the PR with:
 - final mergeability and check status
 - CI runs watched
 - fixes pushed
-- review comments addressed, including per-thread replies and resolved thread count
+- review comments addressed
 - unresolved blockers or skipped suggestions with reasons
 
 If no fixes were needed, still comment that the PR was monitored and is mergeable.
 
 ## Final Report
 
-Include the PR URL, final mergeability, watched runs, commits pushed, feedback addressed, unresolved current review-thread count, and remaining blockers.
+Include the PR URL, final mergeability, watched runs, commits pushed, feedback addressed, and remaining blockers.
