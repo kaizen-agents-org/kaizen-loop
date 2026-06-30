@@ -15,6 +15,16 @@ Use this workflow by default after opening a pull request in any repository wher
    ```sh
    gh pr view <pr> --json url,state,isDraft,mergeStateStatus,baseRefName,headRefName,statusCheckRollup,reviewDecision
    gh pr checks <pr>
+   gh api graphql -f owner='<owner>' -f name='<repo>' -F number=<pr-number> -f query='
+   query($owner:String!, $name:String!, $number:Int!) {
+     repository(owner:$owner, name:$name) {
+       pullRequest(number:$number) {
+         reviewThreads(first:100) {
+           nodes { id isResolved isOutdated path line }
+         }
+       }
+     }
+   }'
    ```
 
 3. Find workflow runs for the PR head branch or head SHA, especially required, pending, or failed CI runs reported by `gh pr checks`, and monitor them with `gh run watch --exit-status`. Use the run exit status to decide whether to inspect logs or continue.
