@@ -65,6 +65,14 @@ Use this structure:
 ## Routing
 Filed in `<repo>` because <short ownership rationale>.
 
+## PR linkage requirement
+The implementation PR for this issue must target the repository default branch,
+include `Closes #<issue-number>` for same-repository work or `Closes
+kaizen-agents-org/<repo>#<issue-number>` for cross-repository work in the PR
+body, and verify `gh pr view <pr> --json baseRefName,closingIssuesReferences,isDraft`
+before reporting the PR ready. Do not rely on a PR title, branch name, or issue
+comment as proof that GitHub will close the issue on merge.
+
 ## Notes
 - If ownership is uncertain, state what was checked and why this issue falls back to `kaizen-loop`.
 ```
