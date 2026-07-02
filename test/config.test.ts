@@ -27,6 +27,7 @@ describe('configSchema', () => {
     expect(config.run.maxOpenPullRequests).toBe(1);
     expect(config.safety.minFreeDiskMb).toBe(1024);
     expect(config.safety.envAllowlist).toContain('PATH');
+    expect(config.safety.envAllowlist).toContain('KAIZEN_TMPDIR');
     expect(config.safety.envAllowlist).not.toContain('SECRET_TOKEN');
     expect(config.scheduler.jobs?.maintenance).toEqual({
       enabled: true,

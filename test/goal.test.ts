@@ -8,6 +8,7 @@ import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import { createGoalState, goalDir } from '../src/goals/state.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { resolveKaizenTempDir } from '../src/utils/temp.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -402,9 +403,10 @@ function goalRunner(options: {
 }) {
   return vi.fn<CommandRunner>(async (command, args, runOptions) => {
     if (command === 'goal-agent') {
-      expect(runOptions?.env?.TMPDIR).toBe(path.join(runOptions?.cwd ?? '', '.kaizen', 'tmp'));
-      expect(runOptions?.env?.TMP).toBe(path.join(runOptions?.cwd ?? '', '.kaizen', 'tmp'));
-      expect(runOptions?.env?.TEMP).toBe(path.join(runOptions?.cwd ?? '', '.kaizen', 'tmp'));
+      const expectedTmpDir = resolveKaizenTempDir(runOptions?.cwd, runOptions?.env);
+      expect(runOptions?.env?.TMPDIR).toBe(expectedTmpDir);
+      expect(runOptions?.env?.TMP).toBe(expectedTmpDir);
+      expect(runOptions?.env?.TEMP).toBe(expectedTmpDir);
       const mode = runOptions?.env?.KAIZEN_GOAL_MODE;
       if (mode === 'planner') {
         if (!options.invalidPlanner) {

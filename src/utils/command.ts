@@ -14,6 +14,7 @@ export const DEFAULT_ENV_ALLOWLIST = [
   'TMPDIR',
   'TMP',
   'TEMP',
+  'KAIZEN_TMPDIR',
   'KAIZEN_HOME',
   'GH_CONFIG_DIR',
   'SSH_AUTH_SOCK',
