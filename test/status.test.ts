@@ -13,7 +13,10 @@ afterEach(() => {
 
 describe('statusProject', () => {
   it('reports pushed remote branches with no open pull request', async () => {
-    const { repo, workspace } = await setupProject();
+    const { repo, workspace, home } = await setupProject();
+    await writeGuardianJob(home, 4, 'pending');
+    await writeGuardianJob(home, 98, 'success');
+    await writeGuardianJob(home, 99, 'pending');
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, '[]');
@@ -76,6 +79,7 @@ describe('statusProject', () => {
     });
 
     expect(output.pullRequests.open).toBe(2);
+    expect(output.guardian.stale).toBe(1);
     expect(output.branchHygiene).toEqual({
       checked: true,
       unreviewedRemoteBranches: [
@@ -118,6 +122,105 @@ describe('statusProject', () => {
     expect(output.branchHygiene.unreviewedRemoteBranches).toEqual([]);
     expect(output.branchHygiene.error).toContain('workspace is not a git checkout');
   });
+
+  it('keeps metrics when some run directories have no summary and reports review-window counters', async () => {
+    const { repo, workspace, home } = await setupProject();
+    const now = new Date();
+    const recent = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+    const old = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    await writeSummary(home, '2026-07-01T00-00-00Z', {
+      version: 1,
+      project: 'o-r',
+      startedAt: recent,
+      finishedAt: recent,
+      trigger: 'scheduled',
+      result: 'partial',
+      issues: [
+        {
+          number: 1,
+          title: 'passes',
+          outcome: 'pr-created',
+          guardian: { status: 'success', summary: 'ok' },
+          reason: 'Verifier cleared PR: ok'
+        },
+        {
+          number: 2,
+          title: 'blocked',
+          outcome: 'failed',
+          reason: 'Verifier blocked PR: missing coverage'
+        },
+        {
+          number: 3,
+          title: 'verify failed',
+          outcome: 'failed',
+          reason: 'Verification failed: pnpm test'
+        }
+      ],
+      skipped: [{ number: 4, reason: 'maxIssuesPerNight reached' }]
+    });
+    await writeSummary(home, '2026-06-20T00-00-00Z', {
+      version: 1,
+      project: 'o-r',
+      startedAt: old,
+      finishedAt: old,
+      trigger: 'scheduled',
+      result: 'failed',
+      issues: [
+        {
+          number: 5,
+          title: 'needs context',
+          outcome: 'blocked',
+          reason: 'Verifier needs context: unclear task'
+        }
+      ],
+      skipped: []
+    });
+    await fs.mkdir(path.join(home, 'projects', 'o-r', 'runs', '2026-07-02T00-00-00Z'), { recursive: true });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({
+      cwd: repo,
+      project: 'o-r',
+      metrics: true,
+      runCommand: runner
+    });
+
+    expect(output.metrics).toMatchObject({
+      runs: 2,
+      readableRuns: 2,
+      unreadableRuns: 1,
+      processed: 4,
+      prCreated: 1,
+      failed: 2,
+      blocked: 1,
+      verificationFailed: 1,
+      verifierBlocked: 1,
+      verifierNeedsContext: 1,
+      guardian: {
+        eligible: 1,
+        success: 1
+      },
+      reviewWindow: {
+        runs: 1,
+        processed: 3,
+        prCreated: 1,
+        failed: 2,
+        blocked: 0,
+        verificationFailed: 1,
+        verifierBlocked: 1,
+        verifierNeedsContext: 0
+      }
+    });
+  });
 });
 
 async function setupProject() {
@@ -141,7 +244,37 @@ async function setupProject() {
       }
     }
   });
-  return { repo, workspace };
+  return { repo, workspace, home };
+}
+
+async function writeSummary(home: string, run: string, summary: unknown) {
+  const runDir = path.join(home, 'projects', 'o-r', 'runs', run);
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+}
+
+async function writeGuardianJob(home: string, prNumber: number, status: string) {
+  const jobsDir = path.join(home, 'projects', 'o-r', 'guardian', 'jobs');
+  await fs.mkdir(jobsDir, { recursive: true });
+  const id = `o-r-pr-${prNumber}-abc123456789`;
+  await fs.writeFile(
+    path.join(jobsDir, `${id}.json`),
+    `${JSON.stringify({
+      version: 1,
+      id,
+      repo: 'o/r',
+      prUrl: `https://github.com/o/r/pull/${prNumber}`,
+      prNumber,
+      branch: `kaizen/issue-${prNumber}`,
+      baseBranch: 'main',
+      headSha: 'abc123456789',
+      retryBudget: 2,
+      attemptCount: 0,
+      status,
+      createdAt: '2026-07-01T00:00:00Z',
+      updatedAt: '2026-07-01T00:00:00Z'
+    }, null, 2)}\n`
+  );
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {

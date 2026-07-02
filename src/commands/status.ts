@@ -7,6 +7,7 @@ import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
 import { GitClient } from '../workspace/git.js';
 import { listPrGuardianJobs } from '../orchestrator/prGuardian.js';
+import type { RunIssueSummary, RunSummary } from '../orchestrator/summary.js';
 
 interface UnreviewedRemoteBranch {
   branch: string;
@@ -30,6 +31,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
   const stateDir = projectStateDir(resolved.slug);
   const lastSummary = await readLatestSummary(stateDir);
   const guardianJobs = await listPrGuardianJobs(stateDir);
+  const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
   return {
     slug: resolved.slug,
     repo: resolved.project.repo,
@@ -55,6 +57,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
       success: countJobs(guardianJobs, 'success'),
       blocked: countJobs(guardianJobs, 'blocked'),
       skipped: countJobs(guardianJobs, 'skipped'),
+      stale: guardianJobs.filter((job) => isStaleGuardianJob(job, openPullRequestNumbers)).length,
       latest: guardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
     },
     branchHygiene: await collectBranchHygiene({
@@ -93,19 +96,133 @@ async function collectMetrics(stateDir: string) {
   try {
     const runsDir = path.join(stateDir, 'runs');
     const runs = await fs.readdir(runsDir);
-    const summaries = await Promise.all(
-      runs.map(async (run) => JSON.parse(await fs.readFile(path.join(runsDir, run, 'summary.json'), 'utf8')))
-    );
+    const loaded = await Promise.all(runs.map((run) => readRunSummary(runsDir, run)));
+    const summaries = loaded.flatMap((item) => (item.summary ? [item.summary] : []));
+    const unreadableRuns = loaded.filter((item) => !item.summary).length;
+    const cumulative = summarizeRunIssues(summaries);
+    const now = new Date();
+    const reviewWindowSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const reviewWindowSummaries = summaries.filter((summary) => {
+      const startedAt = Date.parse(summary.startedAt);
+      return Number.isFinite(startedAt) && startedAt >= reviewWindowSince.getTime() && startedAt <= now.getTime();
+    });
+    const reviewWindow = summarizeRunIssues(reviewWindowSummaries);
     return {
-      runs: summaries.length,
-      processed: summaries.reduce((sum, item) => sum + item.issues.length, 0),
-      prCreated: summaries.reduce((sum, item) => sum + item.issues.filter((issue: { outcome: string }) => issue.outcome === 'pr-created').length, 0),
-      directCommit: summaries.reduce((sum, item) => sum + item.issues.filter((issue: { outcome: string }) => issue.outcome === 'direct-commit').length, 0),
-      failed: summaries.reduce((sum, item) => sum + item.issues.filter((issue: { outcome: string }) => issue.outcome === 'failed').length, 0)
+      runs: cumulative.runs,
+      processed: cumulative.processed,
+      prCreated: cumulative.prCreated,
+      directCommit: cumulative.directCommit,
+      failed: cumulative.failed,
+      blocked: cumulative.blocked,
+      skipped: cumulative.skipped,
+      verificationFailed: cumulative.verificationFailed,
+      verifierBlocked: cumulative.verifierBlocked,
+      verifierNeedsContext: cumulative.verifierNeedsContext,
+      verifierFailed: cumulative.verifierFailed,
+      guardian: cumulative.guardian,
+      readableRuns: summaries.length,
+      unreadableRuns,
+      reviewWindow: {
+        since: reviewWindowSince.toISOString(),
+        until: now.toISOString(),
+        ...reviewWindow
+      }
     };
   } catch {
-    return { runs: 0, processed: 0, prCreated: 0, directCommit: 0, failed: 0 };
+    return {
+      runs: 0,
+      processed: 0,
+      prCreated: 0,
+      directCommit: 0,
+      failed: 0,
+      blocked: 0,
+      skipped: 0,
+      verificationFailed: 0,
+      verifierBlocked: 0,
+      verifierNeedsContext: 0,
+      verifierFailed: 0,
+      guardian: emptyGuardianMetrics(),
+      readableRuns: 0,
+      unreadableRuns: 0,
+      reviewWindow: {
+        since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        until: new Date().toISOString(),
+        ...emptyRunMetrics()
+      }
+    };
   }
+}
+
+async function readRunSummary(runsDir: string, run: string): Promise<{ run: string; summary?: RunSummary }> {
+  try {
+    const summary = JSON.parse(await fs.readFile(path.join(runsDir, run, 'summary.json'), 'utf8')) as RunSummary;
+    return { run, summary };
+  } catch {
+    return { run };
+  }
+}
+
+function summarizeRunIssues(summaries: RunSummary[]) {
+  const issues = summaries.flatMap((summary) => summary.issues ?? []);
+  const metrics = emptyRunMetrics();
+  metrics.runs = summaries.length;
+  metrics.processed = issues.length;
+  metrics.prCreated = countOutcome(issues, 'pr-created');
+  metrics.directCommit = countOutcome(issues, 'direct-commit');
+  metrics.failed = countOutcome(issues, 'failed');
+  metrics.blocked = countOutcome(issues, 'blocked');
+  metrics.skipped = countOutcome(issues, 'skipped');
+  metrics.verificationFailed = countReasonPrefix(issues, 'Verification failed:');
+  metrics.verifierBlocked = countReasonPrefix(issues, 'Verifier blocked PR:');
+  metrics.verifierNeedsContext = countReasonPrefix(issues, 'Verifier needs context:');
+  metrics.verifierFailed = countReasonPrefix(issues, 'Verifier failed:');
+  metrics.guardian = {
+    eligible: issues.filter((issue) => Boolean(issue.guardian)).length,
+    success: countGuardian(issues, 'success'),
+    failed: countGuardian(issues, 'failed'),
+    queued: countGuardian(issues, 'queued'),
+    skipped: countGuardian(issues, 'skipped')
+  };
+  return metrics;
+}
+
+function emptyRunMetrics() {
+  return {
+    runs: 0,
+    processed: 0,
+    prCreated: 0,
+    directCommit: 0,
+    failed: 0,
+    blocked: 0,
+    skipped: 0,
+    verificationFailed: 0,
+    verifierBlocked: 0,
+    verifierNeedsContext: 0,
+    verifierFailed: 0,
+    guardian: emptyGuardianMetrics()
+  };
+}
+
+function emptyGuardianMetrics() {
+  return {
+    eligible: 0,
+    success: 0,
+    failed: 0,
+    queued: 0,
+    skipped: 0
+  };
+}
+
+function countOutcome(issues: RunIssueSummary[], outcome: RunIssueSummary['outcome']): number {
+  return issues.filter((issue) => issue.outcome === outcome).length;
+}
+
+function countReasonPrefix(issues: RunIssueSummary[], prefix: string): number {
+  return issues.filter((issue) => issue.reason?.startsWith(prefix)).length;
+}
+
+function countGuardian(issues: RunIssueSummary[], status: NonNullable<RunIssueSummary['guardian']>['status']): number {
+  return issues.filter((issue) => issue.guardian?.status === status).length;
 }
 
 function countLabel(issues: Array<{ labels: Array<{ name: string }> }>, label: string): number {
@@ -114,6 +231,10 @@ function countLabel(issues: Array<{ labels: Array<{ name: string }> }>, label: s
 
 function countJobs<T extends { status: string }>(jobs: T[], status: string): number {
   return jobs.filter((job) => job.status === status).length;
+}
+
+function isStaleGuardianJob(job: { prNumber: number; status: string }, openPullRequestNumbers: Set<number>): boolean {
+  return !openPullRequestNumbers.has(job.prNumber) && job.status !== 'success' && job.status !== 'skipped';
 }
 
 async function collectBranchHygiene(options: {

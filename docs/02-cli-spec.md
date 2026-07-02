@@ -228,8 +228,9 @@ kaizen status [--project <slug>] [--metrics] [--json]
 - 直近の実行: 日時、処理件数、成功/失敗、直接コミット/PR の内訳
 - 現在オープンな Kaizen Issue 数(優先度別)、`kaizen:needs-human` の件数(**人間の対応待ち**として強調)
 - オープン中の kaizen PR 一覧(レビュー待ち)
+- PR guardian job 数。open PR に対応しない非終端 job は `guardian.stale` として表示する
 - `origin/main` に未取り込みのコミットがあり、対応するオープン PR がない remote branch
-- `--metrics`: 累積メトリクス(→ [00-overview.md](./00-overview.md) §6)
+- `--metrics`: 累積メトリクスと直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
 
 朝のルーティンは `kaizen status` → `git pull` → 必要なら PR レビュー、を想定する。
 
