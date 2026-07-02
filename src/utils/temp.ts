@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 export function resolveKaizenTempDir(cwd?: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (env.KAIZEN_TMPDIR) return env.KAIZEN_TMPDIR;
   const scope = cwd ?? env.KAIZEN_HOME ?? 'default';
-  return path.join(shortKaizenTempRoot(), `workspace-${hashTempScope(scope)}`);
+  const root = env.KAIZEN_TMPDIR ?? shortKaizenTempRoot();
+  return path.join(root, `workspace-${hashTempScope(scope)}`);
 }
 
 export async function ensureKaizenTempDir(cwd?: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {

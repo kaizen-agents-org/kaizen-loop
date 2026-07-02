@@ -217,11 +217,14 @@ describe('workspace branch handling', () => {
 
       const results = await workspace.runVerify(config);
 
-      expect(results[0].output).toBe(overrideTmpDir);
+      const expectedTmpDir = resolveKaizenTempDir(workspacePath, { KAIZEN_TMPDIR: overrideTmpDir });
+
+      expect(results[0].output).toBe(expectedTmpDir);
+      expect(expectedTmpDir.startsWith(`${overrideTmpDir}${path.sep}`)).toBe(true);
       expect(runner.mock.calls[0][2]?.env?.KAIZEN_TMPDIR).toBe(overrideTmpDir);
-      expect(runner.mock.calls[0][2]?.env?.TMPDIR).toBe(overrideTmpDir);
-      expect(runner.mock.calls[0][2]?.env?.TMP).toBe(overrideTmpDir);
-      expect(runner.mock.calls[0][2]?.env?.TEMP).toBe(overrideTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TMPDIR).toBe(expectedTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TMP).toBe(expectedTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TEMP).toBe(expectedTmpDir);
     } finally {
       if (previousKaizenTmpDir === undefined) delete process.env.KAIZEN_TMPDIR;
       else process.env.KAIZEN_TMPDIR = previousKaizenTmpDir;
