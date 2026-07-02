@@ -1741,11 +1741,13 @@ describe('runKaizen PR flow', () => {
     let verifierRuns = 0;
     const builderPrompts: string[] = [];
     const verifierPrompts: string[] = [];
+    const prBodies: string[] = [];
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue()]));
       }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        prBodies.push(String(args[args.indexOf('--body') + 1]));
         return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
       }
       if (command === 'gh') return githubReadinessResult(command, args, repo);
@@ -1795,6 +1797,82 @@ describe('runKaizen PR flow', () => {
     expect(verifierPrompts[0]).toContain('PASS integration evidence');
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     expect('issues' in summary && summary.issues[0].reason).toContain('Verifier cleared PR');
+    expect(prBodies[0]).toContain('## Verifier');
+    expect(prBodies[0]).toContain('verifier: open_pr');
+    expect(prBodies[0]).toContain('summary: 確認した');
+  });
+
+  it('surfaces open_pr_with_warning verifier status in generated PR bodies', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let prBody = '';
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, JSON.stringify([issue()]));
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        prBody = String(args[args.indexOf('--body') + 1]);
+        return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
+          status: 'open_pr_with_warning',
+          summary: '確認したが注意あり',
+          reason: 'low confidence',
+          notes: 'human should double-check docs'
+        });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    expect(prBody).toContain('## Verifier');
+    expect(prBody).toContain('verifier: open_pr_with_warning');
+    expect(prBody).toContain('summary: 確認したが注意あり');
+    expect(prBody).toContain('reason: low confidence');
+    expect(prBody).toContain('notes: human should double-check docs');
   });
 
   it('accepts legacy approved verifier payloads as open_pr', async () => {

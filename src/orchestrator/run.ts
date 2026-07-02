@@ -677,7 +677,8 @@ async function processIssue(options: {
         runId: options.runId,
         trigger: options.trigger,
         attempt: attempts,
-        reason: verifierPrReason(verifierResult)
+        reason: verifierPrReason(verifierResult),
+        verifierResult
       });
       return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started), discoveredFollowups);
     }
@@ -1063,12 +1064,14 @@ function buildPullRequestBody(
   agentResult: AgentResult,
   verifyResults: Array<{ command: string; ok: boolean }>,
   diff: DiffStats,
-  riskReason: string
+  riskReason: string,
+  verifierResult?: VerifierResult
 ): string {
   const verify = verifyResults.length
     ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
     : '- Verification commands are not configured';
   const notes = agentResult.notes.trim() ? `\n## Builder notes\n${agentResult.notes.trim()}\n` : '';
+  const verifier = verifierResult ? `\n## Verifier\nverifier: ${verifierResult.status}\nsummary: ${verifierResult.summary || '(none)'}${verifierResult.reason ? `\nreason: ${verifierResult.reason}` : ''}${verifierResult.notes.trim() ? `\nnotes: ${verifierResult.notes.trim()}` : ''}\n` : '';
   return `Closes #${issue.number}
 
 ## Summary
@@ -1077,6 +1080,7 @@ ${notes}
 
 ## Verification
 ${verify}
+${verifier}
 
 ## Kaizen risk policy
 ${riskReason}
@@ -1154,6 +1158,7 @@ async function reflectPullRequest(options: {
   trigger: RunSummary['trigger'];
   attempt: number;
   reason: string;
+  verifierResult?: VerifierResult;
 }): Promise<PullRequestReflection> {
   await options.workspace.git().push(options.branch, { forceWithLease: true });
   const headSha = await options.workspace.git().revParse('HEAD');
@@ -1162,7 +1167,7 @@ async function reflectPullRequest(options: {
       base: options.config.git.defaultBranch,
       head: options.branch,
       title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
-      body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason),
+      body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason, options.verifierResult),
       expectedClosingIssueNumber: options.issue.number
     });
     return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch, headSha };
