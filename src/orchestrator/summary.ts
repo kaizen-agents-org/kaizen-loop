@@ -1,3 +1,10 @@
+export interface RunDiscoveredFollowupSummary {
+  title: string;
+  repo: string;
+  status: 'created' | 'duplicate';
+  url?: string;
+}
+
 export interface RunIssueSummary {
   number: number;
   title: string;
@@ -19,6 +26,7 @@ export interface RunIssueSummary {
   changedLines?: number;
   verifyRetries?: number;
   durationMs?: number;
+  discoveredFollowups?: RunDiscoveredFollowupSummary[];
 }
 
 export interface RunSummary {

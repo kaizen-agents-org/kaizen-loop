@@ -268,6 +268,20 @@ issues:
       "outcome": "pr-created",
       "pr": 51,
       "reason": "changedLines(212) > maxChangedLines(150)",
+      "discoveredFollowups": [
+        {
+          "title": "verifier が legacy status を誤検出する",
+          "repo": "kaizen-agents-org/verifier",
+          "status": "created",
+          "url": "https://github.com/kaizen-agents-org/verifier/issues/77"
+        },
+        {
+          "title": "既存の follow-up",
+          "repo": "kaizen-agents-org/verifier",
+          "status": "duplicate",
+          "url": "https://github.com/kaizen-agents-org/verifier/issues/78"
+        }
+      ],
       "durationMs": 1130000
     }
   ],
@@ -278,6 +292,8 @@ issues:
 ```
 
 `outcome` の取りうる値: `direct-commit` | `pr-created` | `failed` | `blocked`(情報不足)| `skipped`。`kaizen:needs-human` は outcome ではなく、`failed` / `blocked` の結果として Issue に付与される状態ラベル。
+
+`discoveredFollowups` は builder-agent が返した別バグを Kaizen Loop が起票または重複判定した場合だけ記録する。`status: "created"` は新規 Issue、`status: "duplicate"` は同じタイトルの open Issue があり起票をスキップした follow-up を示す。
 
 ## 4. スケジューラ定義(生成物)
 
