@@ -164,6 +164,7 @@ async function readRunSummary(runsDir: string, run: string): Promise<{ run: stri
 
 function summarizeRunIssues(summaries: RunSummary[]) {
   const issues = summaries.flatMap((summary) => summary.issues ?? []);
+  const topLevelSkipped = summaries.reduce((sum, summary) => sum + (summary.skipped?.length ?? 0), 0);
   const metrics = emptyRunMetrics();
   metrics.runs = summaries.length;
   metrics.processed = issues.length;
@@ -171,7 +172,7 @@ function summarizeRunIssues(summaries: RunSummary[]) {
   metrics.directCommit = countOutcome(issues, 'direct-commit');
   metrics.failed = countOutcome(issues, 'failed');
   metrics.blocked = countOutcome(issues, 'blocked');
-  metrics.skipped = countOutcome(issues, 'skipped');
+  metrics.skipped = countOutcome(issues, 'skipped') + topLevelSkipped;
   metrics.verificationFailed = countReasonPrefix(issues, 'Verification failed:');
   metrics.verifierBlocked = countReasonPrefix(issues, 'Verifier blocked PR:');
   metrics.verifierNeedsContext = countReasonPrefix(issues, 'Verifier needs context:');

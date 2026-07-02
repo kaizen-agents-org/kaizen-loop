@@ -202,6 +202,7 @@ describe('statusProject', () => {
       prCreated: 1,
       failed: 2,
       blocked: 1,
+      skipped: 1,
       verificationFailed: 1,
       verifierBlocked: 1,
       verifierNeedsContext: 1,
@@ -215,6 +216,7 @@ describe('statusProject', () => {
         prCreated: 1,
         failed: 2,
         blocked: 0,
+        skipped: 1,
         verificationFailed: 1,
         verifierBlocked: 1,
         verifierNeedsContext: 0
