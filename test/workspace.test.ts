@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { resolveKaizenTempDir } from '../src/utils/temp.js';
 import { GitClient } from '../src/workspace/git.js';
 import { WorkspaceManager } from '../src/workspace/manager.js';
 
@@ -148,32 +149,83 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls[0][1]).toEqual(['diff', '--no-ext-diff', 'origin/main...HEAD']);
   });
 
-  it('runs verification commands with a workspace-local temporary directory', async () => {
+  it('runs verification commands with a short temporary directory for tsx IPC sockets', async () => {
+    const workspacePath = path.join(
+      os.tmpdir(),
+      'kaizen-workspace-test',
+      'very-long-kaizen-worktree-path-that-would-overflow-tsx-ipc-socket-names',
+      'issue-146'
+    );
+    const previousKaizenTmpDir = process.env.KAIZEN_TMPDIR;
+    delete process.env.KAIZEN_TMPDIR;
+    try {
+      const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: options?.env?.TMPDIR ?? '',
+        stderr: '',
+        durationMs: 1
+      }));
+      const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+      const config = configSchema.parse({
+        version: 1,
+        commands: {
+          verify: ['npm test']
+        }
+      });
+
+      const results = await workspace.runVerify(config);
+      const expectedTmpDir = resolveKaizenTempDir(workspacePath, {});
+
+      expect(results[0].output).toBe(expectedTmpDir);
+      expect(expectedTmpDir.startsWith(workspacePath)).toBe(false);
+      expect(path.join(expectedTmpDir, 'tsx-501', '19718.pipe').length).toBeLessThan(104);
+      expect(runner.mock.calls[0][2]?.env?.TMPDIR).toBe(expectedTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TMP).toBe(expectedTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TEMP).toBe(expectedTmpDir);
+    } finally {
+      if (previousKaizenTmpDir === undefined) delete process.env.KAIZEN_TMPDIR;
+      else process.env.KAIZEN_TMPDIR = previousKaizenTmpDir;
+    }
+  });
+
+  it('honors KAIZEN_TMPDIR for verification command temporary directories', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
     const workspacePath = path.join(root, 'workspace');
-    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
-      command,
-      args,
-      cwd: options?.cwd,
-      exitCode: 0,
-      stdout: options?.env?.TMPDIR ?? '',
-      stderr: '',
-      durationMs: 1
-    }));
-    const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
-    const config = configSchema.parse({
-      version: 1,
-      commands: {
-        verify: ['npm test']
-      }
-    });
+    const overrideTmpDir = path.join(root, 'operator-tmp');
+    const previousKaizenTmpDir = process.env.KAIZEN_TMPDIR;
+    process.env.KAIZEN_TMPDIR = overrideTmpDir;
+    try {
+      const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: options?.env?.TMPDIR ?? '',
+        stderr: '',
+        durationMs: 1
+      }));
+      const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+      const config = configSchema.parse({
+        version: 1,
+        commands: {
+          verify: ['npm test']
+        }
+      });
 
-    const results = await workspace.runVerify(config);
+      const results = await workspace.runVerify(config);
 
-    expect(results[0].output).toBe(path.join(workspacePath, '.kaizen', 'tmp'));
-    expect(runner.mock.calls[0][2]?.env?.TMPDIR).toBe(path.join(workspacePath, '.kaizen', 'tmp'));
-    expect(runner.mock.calls[0][2]?.env?.TMP).toBe(path.join(workspacePath, '.kaizen', 'tmp'));
-    expect(runner.mock.calls[0][2]?.env?.TEMP).toBe(path.join(workspacePath, '.kaizen', 'tmp'));
+      expect(results[0].output).toBe(overrideTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.KAIZEN_TMPDIR).toBe(overrideTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TMPDIR).toBe(overrideTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TMP).toBe(overrideTmpDir);
+      expect(runner.mock.calls[0][2]?.env?.TEMP).toBe(overrideTmpDir);
+    } finally {
+      if (previousKaizenTmpDir === undefined) delete process.env.KAIZEN_TMPDIR;
+      else process.env.KAIZEN_TMPDIR = previousKaizenTmpDir;
+    }
   });
 
   it('caps verification command timeout at the remaining run deadline', async () => {

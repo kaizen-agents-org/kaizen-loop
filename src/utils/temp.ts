@@ -1,17 +1,18 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
 export function resolveKaizenTempDir(cwd?: string, env: NodeJS.ProcessEnv = process.env): string {
   if (env.KAIZEN_TMPDIR) return env.KAIZEN_TMPDIR;
-  if (cwd) return path.join(cwd, '.kaizen', 'tmp');
-  if (env.KAIZEN_HOME) return path.join(env.KAIZEN_HOME, 'tmp');
-  return os.tmpdir();
+  const scope = cwd ?? env.KAIZEN_HOME ?? 'default';
+  return path.join(shortKaizenTempRoot(), `workspace-${hashTempScope(scope)}`);
 }
 
 export async function ensureKaizenTempDir(cwd?: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const tempDir = resolveKaizenTempDir(cwd, env);
-  await fs.mkdir(tempDir, { recursive: true });
+  await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
+  await fs.chmod(tempDir, 0o700).catch(() => undefined);
   const probe = path.join(tempDir, `.kaizen-tmp-check-${process.pid}-${Date.now()}`);
   await fs.writeFile(probe, '');
   await fs.rm(probe, { force: true });
@@ -29,4 +30,14 @@ export async function envWithKaizenTemp(
     TMP: tempDir,
     TEMP: tempDir
   };
+}
+
+function shortKaizenTempRoot(): string {
+  if (process.platform === 'win32') return path.join(os.tmpdir(), 'kaizen-loop');
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
+  return path.join('/tmp', `kaizen-loop-${uid}`);
+}
+
+function hashTempScope(scope: string): string {
+  return createHash('sha256').update(scope).digest('hex').slice(0, 12);
 }
