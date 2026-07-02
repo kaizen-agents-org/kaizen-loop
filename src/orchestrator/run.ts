@@ -28,7 +28,7 @@ import {
   type IssueIntakeDecision
 } from './issueIntake.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
-import type { RunIssueSummary, RunSummary } from './summary.js';
+import type { RunDiscoveredFollowupSummary, RunIssueSummary, RunSummary } from './summary.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
 
 export interface RunOptions {
@@ -515,6 +515,7 @@ async function processIssue(options: {
   const issueDir = path.join(options.runDir, `issue-${options.issue.number}`);
   await fs.mkdir(issueDir, { recursive: true });
   const attempts = countAttempts(options.issue.comments ?? []) + 1;
+  const discoveredFollowups: RunDiscoveredFollowupSummary[] = [];
   const preferredBackend = selectPreferredBackend(options.config, options.issue, options.requestedAgent);
   let agent = setupPendingAgent();
   const verifier = options.config.verifier.enabled
@@ -533,7 +534,7 @@ async function processIssue(options: {
     if (setupResult && !setupResult.ok) {
       const reason = `Setup failed: ${setupResult.command}`;
       await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
-      return await finishFailed(options, agent, attempts, reason, started, [setupResult]);
+      return withDiscoveredFollowups(await finishFailed(options, agent, attempts, reason, started, [setupResult]), discoveredFollowups);
     }
     agent = await selectAgent(options.config, options.runCommand);
     const branch = options.branch;
@@ -560,30 +561,35 @@ async function processIssue(options: {
         preferredBackend
       });
       await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
-      await fileDiscoveredIssues({
-        sourceIssue: options.issue,
-        projectRepo: options.project.repo,
-        github: options.github,
-        runId: options.runId,
-        issueDir,
-        discoveredIssues: agentResult.discoveredIssues,
-        filedKeys: filedDiscoveredIssues
-      });
+      discoveredFollowups.push(
+        ...await fileDiscoveredIssues({
+          sourceIssue: options.issue,
+          projectRepo: options.project.repo,
+          github: options.github,
+          runId: options.runId,
+          issueDir,
+          discoveredIssues: agentResult.discoveredIssues,
+          filedKeys: filedDiscoveredIssues
+        })
+      );
 
       if (agentResult.status === 'blocked') {
-        return await finishBlocked(options, agent, attempts, agentResult, started);
+        return withDiscoveredFollowups(await finishBlocked(options, agent, attempts, agentResult, started), discoveredFollowups);
       }
       if (agentResult.status === 'error' || agentResult.status === 'timeout') {
-        return await finishFailed(options, agent, attempts, agentResult.summary, started);
+        return withDiscoveredFollowups(await finishFailed(options, agent, attempts, agentResult.summary, started), discoveredFollowups);
       }
 
       await commitLeftovers(workspace, options.issue, agentResult);
       const diff = await workspace.collectDiffStats(options.config);
       if (diff.changedFiles === 0) {
-        return await finishFailed(options, agent, attempts, 'Agent produced no changes.', started);
+        return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent produced no changes.', started), discoveredFollowups);
       }
       if (diff.forbiddenFiles.length > 0) {
-        return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started);
+        return withDiscoveredFollowups(
+          await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started),
+          discoveredFollowups
+        );
       }
 
       verifyResults = await workspace.runVerify(options.config, options.runDeadlineAt);
@@ -591,7 +597,10 @@ async function processIssue(options: {
       const failedVerify = verifyResults.find((item) => !item.ok);
       if (failedVerify) {
         if (retry >= options.config.run.maxVerifyRetries) {
-          return await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults);
+          return withDiscoveredFollowups(
+            await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults),
+            discoveredFollowups
+          );
         }
         previousFailure = `Verification failed: ${failedVerify.command}\n\n${tailLines(failedVerify.output, 200)}`;
         continue;
@@ -617,30 +626,42 @@ async function processIssue(options: {
 
       if (verifierResult.status === 'open_pr' || verifierResult.status === 'open_pr_with_warning') break;
       if (verifierResult.status === 'error' || verifierResult.status === 'timeout') {
-        return await finishFailed(options, agent, attempts, `Verifier failed: ${verifierResult.summary}`, started, verifyResults);
+        return withDiscoveredFollowups(
+          await finishFailed(options, agent, attempts, `Verifier failed: ${verifierResult.summary}`, started, verifyResults),
+          discoveredFollowups
+        );
       }
       if (retry >= options.config.run.maxVerifyRetries) {
-        return await finishFailed(options, agent, attempts, verifierBlockedReason(verifierResult), started, verifyResults);
+        return withDiscoveredFollowups(
+          await finishFailed(options, agent, attempts, verifierBlockedReason(verifierResult), started, verifyResults),
+          discoveredFollowups
+        );
       }
       previousFailure = `${verifierBlockedReason(verifierResult)}\n\n${verifierResult.notes || verifierResult.raw}`;
     }
 
     if (!agentResult) {
-      return await finishFailed(options, agent, attempts, 'Agent did not produce a result.', started);
+      return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent did not produce a result.', started), discoveredFollowups);
     }
 
     await commitLeftovers(workspace, options.issue, agentResult);
     const diff = await workspace.collectDiffStats(options.config);
     if (diff.changedFiles === 0) {
-      return await finishFailed(options, agent, attempts, 'Agent produced no changes.', started);
+      return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent produced no changes.', started), discoveredFollowups);
     }
     if (diff.forbiddenFiles.length > 0) {
-      return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started);
+      return withDiscoveredFollowups(
+        await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started),
+        discoveredFollowups
+      );
     }
     await commitLeftovers(workspace, options.issue, agentResult);
     const finalDiff = await workspace.collectDiffStats(options.config);
     if (finalDiff.forbiddenFiles.length > 0) {
-      return await finishFailed(options, agent, attempts, `Forbidden paths changed: ${finalDiff.forbiddenFiles.join(', ')}`, started, verifyResults);
+      return withDiscoveredFollowups(
+        await finishFailed(options, agent, attempts, `Forbidden paths changed: ${finalDiff.forbiddenFiles.join(', ')}`, started, verifyResults),
+        discoveredFollowups
+      );
     }
 
     if (verifierResult?.status === 'open_pr' || verifierResult?.status === 'open_pr_with_warning') {
@@ -658,7 +679,7 @@ async function processIssue(options: {
         attempt: attempts,
         reason: verifierPrReason(verifierResult)
       });
-      return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
+      return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started), discoveredFollowups);
     }
 
     const decision = decideReflection({
@@ -682,7 +703,7 @@ async function processIssue(options: {
         attempt: attempts,
         reason: `Parallel issue run requires PR isolation: ${decision.reason}`
       });
-      return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
+      return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started), discoveredFollowups);
     }
 
     if (decision.action === 'direct') {
@@ -697,7 +718,10 @@ async function processIssue(options: {
         verifyResults
       });
       if (directChoice === 'reject') {
-        return await finishFailed(options, agent, attempts, `Direct commit rejected: ${decision.reason}`, started, verifyResults);
+        return withDiscoveredFollowups(
+          await finishFailed(options, agent, attempts, `Direct commit rejected: ${decision.reason}`, started, verifyResults),
+          discoveredFollowups
+        );
       }
       if (directChoice === 'pr') {
         const pr = await reflectPullRequest({
@@ -714,7 +738,7 @@ async function processIssue(options: {
           attempt: attempts,
           reason: `Instant direct commit switched to PR: ${decision.reason}`
         });
-        return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
+        return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started), discoveredFollowups);
       }
       const direct = await reflectDirect({
         workspace,
@@ -762,7 +786,7 @@ async function processIssue(options: {
         );
         await options.github.closeIssue(options.issue.number);
         await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
-        return {
+        return withDiscoveredFollowups({
           number: options.issue.number,
           title: options.issue.title,
           priority: priorityLabel(options.issue, options.config),
@@ -776,9 +800,9 @@ async function processIssue(options: {
           changedLines: finalDiff.changedLines,
           verifyRetries: Math.max(0, verifyResults.filter((result) => !result.ok).length),
           durationMs: Date.now() - started
-        };
+        }, discoveredFollowups);
       }
-      return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, direct, started);
+      return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, direct, started), discoveredFollowups);
     }
 
     const pr = await reflectPullRequest({
@@ -795,9 +819,9 @@ async function processIssue(options: {
       attempt: attempts,
       reason: decision.reason
     });
-    return await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started);
+    return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started), discoveredFollowups);
   } catch (error) {
-    return await finishFailed(options, agent, attempts, String(error), started);
+    return withDiscoveredFollowups(await finishFailed(options, agent, attempts, String(error), started), discoveredFollowups);
   }
 }
 
@@ -1231,6 +1255,17 @@ function verifierBlockedReason(result: VerifierResult): string {
     : `Verifier blocked PR: ${detail}`;
 }
 
+function withDiscoveredFollowups(
+  summary: RunIssueSummary,
+  discoveredFollowups: RunDiscoveredFollowupSummary[]
+): RunIssueSummary {
+  if (discoveredFollowups.length === 0) return summary;
+  return {
+    ...summary,
+    discoveredFollowups: [...discoveredFollowups]
+  };
+}
+
 async function fileDiscoveredIssues(options: {
   sourceIssue: GitHubIssue;
   projectRepo: string;
@@ -1239,8 +1274,8 @@ async function fileDiscoveredIssues(options: {
   issueDir: string;
   discoveredIssues: DiscoveredIssue[];
   filedKeys: Set<string>;
-}): Promise<void> {
-  const filed: Array<{ title: string; repo: string; url?: string; duplicate?: boolean }> = [];
+}): Promise<RunDiscoveredFollowupSummary[]> {
+  const filed: RunDiscoveredFollowupSummary[] = [];
   const registry = await loadRegistry();
 
   for (const issue of options.discoveredIssues) {
@@ -1260,7 +1295,7 @@ async function fileDiscoveredIssues(options: {
         body: [issue.body, issue.expected, issue.evidence].filter(Boolean).join('\n\n')
       });
       if (existing) {
-        filed.push({ title: issue.title, repo, url: existing.url, duplicate: true });
+        filed.push({ title: issue.title, repo, status: 'duplicate', url: existing.url });
         options.filedKeys.add(key);
         continue;
       }
@@ -1277,7 +1312,7 @@ async function fileDiscoveredIssues(options: {
         }),
         labels: labelsForDiscoveredIssue(issue)
       });
-      filed.push({ title: issue.title, repo, url: created.url });
+      filed.push({ title: issue.title, repo, status: 'created', url: created.url });
       options.filedKeys.add(key);
     } catch (error) {
       await fs.appendFile(
@@ -1287,14 +1322,14 @@ async function fileDiscoveredIssues(options: {
     }
   }
 
-  if (filed.length === 0) return;
+  if (filed.length === 0) return filed;
 
   try {
     await options.github.comment(
       options.sourceIssue.number,
       `## Kaizen discovered follow-up issue${filed.length === 1 ? '' : 's'}
 
-${filed.map((item) => `- ${item.duplicate ? 'Existing' : 'Created'} in \`${item.repo}\`: ${item.url ?? item.title}`).join('\n')}
+${filed.map((item) => `- ${item.status === 'duplicate' ? 'Existing' : 'Created'} in \`${item.repo}\`: ${item.url ?? item.title}`).join('\n')}
 
 These were reported by the builder agent as separate bugs and filed by kaizen-loop.`
     );
@@ -1304,6 +1339,8 @@ These were reported by the builder agent as separate bugs and filed by kaizen-lo
       `Failed to comment about discovered issue filing on source issue #${options.sourceIssue.number}: ${String(error)}\n`
     );
   }
+
+  return filed;
 }
 
 function buildDiscoveredIssueBody(options: {

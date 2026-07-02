@@ -1197,7 +1197,17 @@ describe('runKaizen PR flow', () => {
 
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
-      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        if (args.join(' ').includes('Verifier duplicate follow-up')) {
+          return result(command, args, repo, JSON.stringify([
+            {
+              ...issue(78, { title: 'Verifier duplicate follow-up' }),
+              url: 'https://github.com/kaizen-agents-org/verifier/issues/78'
+            }
+          ]));
+        }
+        return result(command, args, repo, '[]');
+      }
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
         return result(command, args, repo, 'https://github.com/kaizen-agents-org/verifier/issues/77\n');
       }
@@ -1217,6 +1227,13 @@ describe('runKaizen PR flow', () => {
               expected: 'Only real failures should block PR creation.',
               evidence: 'verifier.log',
               severity: 'P2'
+            },
+            {
+              title: 'Verifier duplicate follow-up',
+              repo: 'verifier',
+              body: 'Verifier already has this follow-up open.',
+              expected: 'The duplicate should not be filed again.',
+              evidence: 'existing issue'
             }
           ]
         });
@@ -1247,6 +1264,24 @@ describe('runKaizen PR flow', () => {
     });
 
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    const expectedFollowups = [
+      {
+        title: 'Verifier false-positive on legacy status words',
+        repo: 'kaizen-agents-org/verifier',
+        status: 'created',
+        url: 'https://github.com/kaizen-agents-org/verifier/issues/77'
+      },
+      {
+        title: 'Verifier duplicate follow-up',
+        repo: 'kaizen-agents-org/verifier',
+        status: 'duplicate',
+        url: 'https://github.com/kaizen-agents-org/verifier/issues/78'
+      }
+    ];
+    expect('issues' in summary && summary.issues[0].discoveredFollowups).toEqual(expectedFollowups);
+    const runIds = await fs.readdir(path.join(home, 'projects', 'o-r', 'runs'));
+    const writtenSummary = JSON.parse(await fs.readFile(path.join(home, 'projects', 'o-r', 'runs', runIds[0], 'summary.json'), 'utf8'));
+    expect(writtenSummary.issues[0].discoveredFollowups).toEqual(expectedFollowups);
     const issueCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
     expect(issueCreate).toBeDefined();
     const issueCreateArgs = issueCreate![1];
@@ -1257,6 +1292,7 @@ describe('runKaizen PR flow', () => {
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('Source issue');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Kaizen discovered follow-up issue'))).toBe(true);
+    expect(comments.some(([, args]) => String(args.at(-1)).includes('Existing in `kaizen-agents-org/verifier`'))).toBe(true);
   });
 
   it('routes builder-discovered issues to the registered repo named by evidence paths', async () => {
