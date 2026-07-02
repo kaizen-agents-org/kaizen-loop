@@ -62,4 +62,4 @@ If no fixes were needed, still comment that the PR was monitored and is mergeabl
 
 ## Final Report
 
-Include the PR URL, final mergeability, watched runs, commits pushed, feedback addressed, unresolved current review-thread count, and remaining blockers.
+Include the PR URL, final mergeability, watched runs, commits pushed, feedback addressed, unresolved review-thread count (current + outdated), and remaining blockers.
