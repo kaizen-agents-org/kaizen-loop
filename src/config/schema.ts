@@ -107,11 +107,13 @@ export const configSchema = z
     safety: z
       .object({
         minFreeDiskMb: z.number().int().nonnegative().default(1024),
+        wipLimit: z.number().int().nonnegative().default(5),
         envAllowlist: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default(DEFAULT_ENV_ALLOWLIST)
       })
       .strict()
       .default({
         minFreeDiskMb: 1024,
+        wipLimit: 5,
         envAllowlist: DEFAULT_ENV_ALLOWLIST
       }),
     scheduler: z

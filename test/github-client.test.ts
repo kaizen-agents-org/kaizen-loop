@@ -200,6 +200,52 @@ describe('GitHubClient', () => {
     }
   });
 
+  it('searches owner pull requests for generated backlog metrics', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: JSON.stringify({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                number: 7,
+                headRefName: 'codex/sync-kaizen-shared-skills',
+                author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                repository: { nameWithOwner: 'o/r' },
+                url: 'https://github.com/o/r/pull/7'
+              }
+            ]
+          }
+        }
+      }),
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    const prs = await client.searchOpenPullRequestsForOwner('o', 5);
+
+    expect(prs[0]).toMatchObject({
+      number: 7,
+      headRefName: 'codex/sync-kaizen-shared-skills',
+      author: { login: 'github-actions[bot]', type: 'Bot' },
+      repository: { nameWithOwner: 'o/r' }
+    });
+    expect(runner.mock.calls[0][1]).toEqual([
+      'api',
+      'graphql',
+      '-f',
+      expect.stringContaining('query='),
+      '-F',
+      'searchQuery=is:pr is:open owner:o',
+      '-F',
+      'limit=5'
+    ]);
+  });
+
   it('preserves the base label when an optional target repo label is missing', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       const labelValue = String(args.at(args.indexOf('--label') + 1));

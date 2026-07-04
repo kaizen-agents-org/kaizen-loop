@@ -26,6 +26,7 @@ describe('configSchema', () => {
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.run.maxOpenPullRequests).toBe(1);
     expect(config.safety.minFreeDiskMb).toBe(1024);
+    expect(config.safety.wipLimit).toBe(5);
     expect(config.safety.envAllowlist).toContain('PATH');
     expect(config.safety.envAllowlist).toContain('KAIZEN_TMPDIR');
     expect(config.safety.envAllowlist).not.toContain('SECRET_TOKEN');
@@ -57,6 +58,13 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'daily', time: '24:00' }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'times', times: [] }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, run: { maxOpenPullRequests: -1 } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, safety: { wipLimit: -1 } })).toThrow();
+  });
+
+  it('accepts a custom generated PR WIP limit', () => {
+    const config = configSchema.parse({ version: 1, safety: { wipLimit: 7 } });
+
+    expect(config.safety.wipLimit).toBe(7);
   });
 
   it('accepts scheduler jobs', () => {

@@ -39,6 +39,8 @@ run:
 safety:
   # workspace / worktree 作成前に必要な空き容量(MB)
   minFreeDiskMb: 1024
+  # owner 全体の open 生成 PR がこの数に達したら自動 intake を止める
+  wipLimit: 5
   # setup / verify / builder / verifier / guardian へ渡す process.env の allowlist
   # Kaizen 専用変数と短い Kaizen TMPDIR は実行時に追加される
   envAllowlist:
@@ -191,6 +193,7 @@ issues:
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `safety.minFreeDiskMb` は workspace / worktree 作成前の空き容量 preflight。対象パスがまだ存在しない場合は既存の親ディレクトリを検査する
+- `safety.wipLimit` は owner 全体の open 生成 PR 数に対する自動 intake の WIP 上限。bot が作成した open PR が上限以上なら新しい Issue は選択せず、run summary に skip reason を残す。`kaizen status --metrics` は repository / organization の現在値と上限到達有無を表示する
 - `safety.envAllowlist` は agent と shell command へ渡す環境変数名の allowlist。`KAIZEN_BUILD_RESULT_PATH` などの Kaizen 専用変数と短い Kaizen `TMPDIR` / `TMP` / `TEMP` は実行時に追加される。`KAIZEN_TMPDIR` を渡すと短い temp root を明示的に上書きでき、その配下に Kaizen 専用 child directory が作られる
 - `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する

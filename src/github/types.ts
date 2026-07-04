@@ -27,6 +27,8 @@ export interface GitHubPullRequest {
   number: number;
   headRefName?: string;
   headRepositoryOwner?: { login?: string };
+  author?: { login?: string; type?: string; is_bot?: boolean };
+  repository?: { nameWithOwner?: string };
   url: string;
 }
 

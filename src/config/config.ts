@@ -48,6 +48,7 @@ export function defaultConfigYaml(options: {
     },
     safety: {
       minFreeDiskMb: 1024,
+      wipLimit: 5,
       envAllowlist: DEFAULT_ENV_ALLOWLIST
     },
     scheduler: {
