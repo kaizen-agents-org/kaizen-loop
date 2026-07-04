@@ -27,6 +27,12 @@ Each run writes:
 ~/.kaizen/projects/<slug>/smoke-runs/<run-id>-issue-<number>.json
 ```
 
+Readiness evidence that should survive outside one operator's home directory can be copied into:
+
+```text
+docs/smoke-runs/<run-id>-issue-<number>.json
+```
+
 The artifact indexes the normal run logs:
 
 - `runs/<run-id>/summary.json`

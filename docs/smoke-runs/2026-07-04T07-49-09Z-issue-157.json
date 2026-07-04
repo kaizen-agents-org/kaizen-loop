@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "kind": "sandbox-e2e-smoke",
+  "project": {
+    "slug": "kaizen-agents-org-kaizen-loop",
+    "repo": "kaizen-agents-org/kaizen-loop"
+  },
+  "startedAt": "2026-07-04T07:49:04.852Z",
+  "finishedAt": "2026-07-04T07:55:04.759Z",
+  "result": "success",
+  "issue": {
+    "number": 157,
+    "title": "[sandbox-smoke] Verify Kaizen issue-to-PR path 2026-07-04T07:49:04.852Z",
+    "url": "https://github.com/kaizen-agents-org/kaizen-loop/issues/157"
+  },
+  "run": {
+    "id": "2026-07-04T07-49-09Z",
+    "trigger": "instant",
+    "summaryPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/summary.json",
+    "issueLogDir": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/issue-157"
+  },
+  "implementation": {
+    "outcome": "pr-created",
+    "branch": "kaizen/issue-157-sandbox-smoke-verify-kaizen-issue-to-pr-path-202",
+    "changedFiles": 1,
+    "changedLines": 6
+  },
+  "verification": {
+    "commands": [
+      "npm test",
+      "npm run typecheck",
+      "npm run build",
+      "test -f skills/gh-link-issue-pr/SKILL.md && test -f skills/kaizen-bug-router/SKILL.md && test -f skills/pr-guardian/SKILL.md"
+    ],
+    "verifyLogPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/issue-157/verify.log",
+    "verifier": {
+      "enabled": true,
+      "verdict": "open_pr",
+      "logPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/issue-157/verifier.log"
+    }
+  },
+  "pullRequest": {
+    "number": 164,
+    "url": "https://github.com/kaizen-agents-org/kaizen-loop/pull/164",
+    "baseRefName": "main",
+    "defaultBranch": "main",
+    "isDraft": false,
+    "closingIssuesReferences": [
+      {
+        "id": "I_kwDOS4G0Ms8AAAABHpaZPw",
+        "number": 157,
+        "repository": {
+          "id": "R_kgDOS4G0Mg",
+          "name": "kaizen-loop",
+          "owner": {
+            "id": "O_kgDOEXq1Wg",
+            "login": "kaizen-agents-org"
+          }
+        },
+        "url": "https://github.com/kaizen-agents-org/kaizen-loop/issues/157"
+      }
+    ],
+    "issueLinkRecognized": true
+  },
+  "guardian": {
+    "status": "success",
+    "summary": "PR guardian skill completed; no unresolved review threads remain.",
+    "mode": "sync"
+  },
+  "artifactPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/smoke-runs/2026-07-04T07-49-09Z-issue-157.json"
+}
