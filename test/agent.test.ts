@@ -208,6 +208,35 @@ describe('buildFixPrompt', () => {
     expect(prompt).not.toContain('forbidden/protected path');
   });
 
+  it('keeps git commit ownership in the orchestrator', () => {
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        verify: ['npm test']
+      }
+    });
+
+    const prompt = buildFixPrompt({
+      repo: 'o/r',
+      config,
+      attempt: 1,
+      issue: {
+        number: 139,
+        title: 'Keep builder prompt scoped to file edits',
+        body: 'Builder should leave changed files for kaizen-loop orchestration.',
+        labels: [{ name: 'kaizen' }],
+        createdAt: '2026-06-13T00:00:00Z',
+        comments: []
+      }
+    });
+
+    expect(prompt).toContain('Do not run git push, gh commands, or create pull requests.');
+    expect(prompt).toContain('Leave your file changes uncommitted in the workspace.');
+    expect(prompt).toContain('kaizen-loop will commit, push, and open a pull request after verification.');
+    expect(prompt).not.toContain('Commit your changes');
+    expect(prompt).not.toContain('git commit');
+  });
+
   it('renders heredoc verification commands as runnable shell', () => {
     const heredoc = "python3 <<'PY'\nprint('ok')\nPY";
     const config = configSchema.parse({
