@@ -468,25 +468,34 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
         return result(command, args, repo, '[]');
       }
-      if (command === 'gh' && args[0] === 'search' && args[1] === 'prs') {
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
         return result(
           command,
           args,
           repo,
-          JSON.stringify([
-            {
-              number: 10,
-              author: { login: 'github-actions[bot]', type: 'Bot' },
-              repository: { nameWithOwner: 'o/r' },
-              url: 'https://github.com/o/r/pull/10'
-            },
-            {
-              number: 11,
-              author: { login: 'github-actions[bot]', type: 'Bot' },
-              repository: { nameWithOwner: 'o/other' },
-              url: 'https://github.com/o/other/pull/11'
+          JSON.stringify({
+            data: {
+              search: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    number: 10,
+                    headRefName: 'kaizen/issue-10-x',
+                    author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                    repository: { nameWithOwner: 'o/r' },
+                    url: 'https://github.com/o/r/pull/10'
+                  },
+                  {
+                    number: 11,
+                    headRefName: 'kaizen/issue-11-x',
+                    author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                    repository: { nameWithOwner: 'o/other' },
+                    url: 'https://github.com/o/other/pull/11'
+                  }
+                ]
+              }
             }
-          ])
+          })
         );
       }
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`);

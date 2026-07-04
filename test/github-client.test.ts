@@ -205,14 +205,22 @@ describe('GitHubClient', () => {
       command,
       args,
       exitCode: 0,
-      stdout: JSON.stringify([
-        {
-          number: 7,
-          author: { login: 'github-actions[bot]', type: 'Bot' },
-          repository: { nameWithOwner: 'o/r' },
-          url: 'https://github.com/o/r/pull/7'
+      stdout: JSON.stringify({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                number: 7,
+                headRefName: 'codex/sync-kaizen-shared-skills',
+                author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                repository: { nameWithOwner: 'o/r' },
+                url: 'https://github.com/o/r/pull/7'
+              }
+            ]
+          }
         }
-      ]),
+      }),
       stderr: '',
       durationMs: 1
     }));
@@ -222,20 +230,19 @@ describe('GitHubClient', () => {
 
     expect(prs[0]).toMatchObject({
       number: 7,
+      headRefName: 'codex/sync-kaizen-shared-skills',
       author: { login: 'github-actions[bot]', type: 'Bot' },
       repository: { nameWithOwner: 'o/r' }
     });
     expect(runner.mock.calls[0][1]).toEqual([
-      'search',
-      'prs',
-      '--owner',
-      'o',
-      '--state',
-      'open',
-      '--json',
-      'number,url,author,repository',
-      '--limit',
-      '5'
+      'api',
+      'graphql',
+      '-f',
+      expect.stringContaining('query='),
+      '-F',
+      'searchQuery=is:pr is:open owner:o',
+      '-F',
+      'limit=5'
     ]);
   });
 

@@ -84,19 +84,19 @@ export class GitHubClient {
   }
 
   async searchOpenPullRequestsForOwner(owner: string, limit = 1000): Promise<GitHubPullRequest[]> {
-    const result = await this.gh([
-      'search',
-      'prs',
-      '--owner',
-      owner,
-      '--state',
-      'open',
-      '--json',
-      'number,url,author,repository',
-      '--limit',
-      String(limit)
-    ]);
-    return JSON.parse(result.stdout || '[]') as GitHubPullRequest[];
+    const pullRequests: GitHubPullRequest[] = [];
+    let cursor: string | undefined;
+
+    while (pullRequests.length < limit) {
+      const pageLimit = Math.min(100, limit - pullRequests.length);
+      const result = await this.gh(searchOpenPullRequestsForOwnerArgs(owner, pageLimit, cursor));
+      const page = parseOwnerPullRequestSearchPage(result.stdout);
+      pullRequests.push(...page.pullRequests);
+      if (!page.hasNextPage || !page.endCursor) break;
+      cursor = page.endCursor;
+    }
+
+    return pullRequests;
   }
 
   async getPullRequest(number: number): Promise<GitHubPullRequestDetails> {
@@ -267,6 +267,86 @@ export class GitHubClient {
     }
     throw lastError;
   }
+}
+
+const OWNER_PULL_REQUEST_SEARCH_QUERY = `
+query($searchQuery: String!, $limit: Int!, $cursor: String) {
+  search(query: $searchQuery, type: ISSUE, first: $limit, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        number
+        headRefName
+        url
+        author {
+          login
+          __typename
+        }
+        repository {
+          nameWithOwner
+        }
+      }
+    }
+  }
+}`;
+
+function searchOpenPullRequestsForOwnerArgs(owner: string, limit: number, cursor?: string): string[] {
+  const args = [
+    'api',
+    'graphql',
+    '-f',
+    `query=${OWNER_PULL_REQUEST_SEARCH_QUERY}`,
+    '-F',
+    `searchQuery=is:pr is:open owner:${owner}`,
+    '-F',
+    `limit=${limit}`
+  ];
+  if (cursor) args.push('-F', `cursor=${cursor}`);
+  return args;
+}
+
+function parseOwnerPullRequestSearchPage(stdout: string): {
+  pullRequests: GitHubPullRequest[];
+  hasNextPage: boolean;
+  endCursor?: string;
+} {
+  const payload = JSON.parse(stdout || '{}') as {
+    data?: {
+      search?: {
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+        nodes?: Array<{
+          number?: number;
+          headRefName?: string;
+          url?: string;
+          author?: { login?: string; __typename?: string };
+          repository?: { nameWithOwner?: string };
+        } | null>;
+      };
+    };
+  };
+  const search = payload.data?.search;
+  return {
+    pullRequests:
+      search?.nodes
+        ?.filter((node): node is NonNullable<typeof node> => Boolean(node?.number && node.url))
+        .map((node) => ({
+          number: node.number as number,
+          headRefName: node.headRefName,
+          url: node.url as string,
+          author: node.author
+            ? {
+                login: node.author.login,
+                type: node.author.__typename
+              }
+            : undefined,
+          repository: node.repository
+        })) ?? [],
+    hasNextPage: Boolean(search?.pageInfo?.hasNextPage),
+    endCursor: search?.pageInfo?.endCursor ?? undefined
+  };
 }
 
 export class CreatedPullRequestValidationError extends Error {

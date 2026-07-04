@@ -180,31 +180,41 @@ describe('statusProject', () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
-      if (command === 'gh' && args[0] === 'search' && args[1] === 'prs') {
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
         return result(
           command,
           args,
           repo,
-          JSON.stringify([
-            {
-              number: 7,
-              author: { login: 'github-actions[bot]', type: 'Bot' },
-              repository: { nameWithOwner: 'o/r' },
-              url: 'https://github.com/o/r/pull/7'
-            },
-            {
-              number: 8,
-              author: { login: 'dependabot[bot]' },
-              repository: { nameWithOwner: 'o/other' },
-              url: 'https://github.com/o/other/pull/8'
-            },
-            {
-              number: 9,
-              author: { login: 'human', type: 'User' },
-              repository: { nameWithOwner: 'o/r' },
-              url: 'https://github.com/o/r/pull/9'
+          JSON.stringify({
+            data: {
+              search: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    number: 7,
+                    headRefName: 'kaizen/issue-7-x',
+                    author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                    repository: { nameWithOwner: 'o/r' },
+                    url: 'https://github.com/o/r/pull/7'
+                  },
+                  {
+                    number: 8,
+                    headRefName: 'kaizen/issue-8-x',
+                    author: { login: 'dependabot[bot]' },
+                    repository: { nameWithOwner: 'o/other' },
+                    url: 'https://github.com/o/other/pull/8'
+                  },
+                  {
+                    number: 9,
+                    headRefName: 'human/change',
+                    author: { login: 'human', __typename: 'User' },
+                    repository: { nameWithOwner: 'o/r' },
+                    url: 'https://github.com/o/r/pull/9'
+                  }
+                ]
+              }
             }
-          ])
+          })
         );
       }
       if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
