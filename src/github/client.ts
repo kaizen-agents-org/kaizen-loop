@@ -83,6 +83,22 @@ export class GitHubClient {
     return JSON.parse(result.stdout || '[]') as GitHubPullRequest[];
   }
 
+  async searchOpenPullRequestsForOwner(owner: string, limit = 1000): Promise<GitHubPullRequest[]> {
+    const result = await this.gh([
+      'search',
+      'prs',
+      '--owner',
+      owner,
+      '--state',
+      'open',
+      '--json',
+      'number,url,author,repository',
+      '--limit',
+      String(limit)
+    ]);
+    return JSON.parse(result.stdout || '[]') as GitHubPullRequest[];
+  }
+
   async getPullRequest(number: number): Promise<GitHubPullRequestDetails> {
     const result = await this.gh([
       'pr',

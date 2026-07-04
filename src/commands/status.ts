@@ -8,6 +8,11 @@ import { projectStateDir } from '../utils/paths.js';
 import { GitClient } from '../workspace/git.js';
 import { listPrGuardianJobs } from '../orchestrator/prGuardian.js';
 import type { RunIssueSummary, RunSummary } from '../orchestrator/summary.js';
+import {
+  GENERATED_PULL_REQUEST_FETCH_LIMIT,
+  type GeneratedPullRequestBacklog,
+  summarizeGeneratedPullRequestBacklog
+} from '../orchestrator/wipLimit.js';
 
 interface UnreviewedRemoteBranch {
   branch: string;
@@ -28,6 +33,16 @@ export async function statusProject(options: { cwd: string; project?: string; me
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const issues = await github.listIssues(config.issues.label);
   const openPullRequests = await github.listOpenPullRequests();
+  const generatedPullRequestBacklog = options.metrics
+    ? summarizeGeneratedPullRequestBacklog({
+        pullRequests: await github.searchOpenPullRequestsForOwner(
+          resolved.project.repo.split('/')[0],
+          GENERATED_PULL_REQUEST_FETCH_LIMIT
+        ),
+        repo: resolved.project.repo,
+        wipLimit: config.safety.wipLimit
+      })
+    : undefined;
   const stateDir = projectStateDir(resolved.slug);
   const lastSummary = await readLatestSummary(stateDir);
   const guardianJobs = await listPrGuardianJobs(stateDir);
@@ -72,7 +87,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
           repositoryOwner: pr.headRepositoryOwner?.login?.toLowerCase()
         }))
     }),
-    metrics: options.metrics ? await collectMetrics(stateDir) : undefined
+    metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestBacklog) : undefined
   };
 }
 
@@ -92,7 +107,7 @@ async function readLatestSummary(stateDir: string) {
   }
 }
 
-async function collectMetrics(stateDir: string) {
+async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestBacklog) {
   try {
     const runsDir = path.join(stateDir, 'runs');
     const runs = await fs.readdir(runsDir);
@@ -126,7 +141,8 @@ async function collectMetrics(stateDir: string) {
         since: reviewWindowSince.toISOString(),
         until: now.toISOString(),
         ...reviewWindow
-      }
+      },
+      wipLimit
     };
   } catch {
     return {
@@ -148,7 +164,8 @@ async function collectMetrics(stateDir: string) {
         since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
         until: new Date().toISOString(),
         ...emptyRunMetrics()
-      }
+      },
+      wipLimit
     };
   }
 }

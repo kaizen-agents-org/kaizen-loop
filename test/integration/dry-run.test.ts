@@ -437,6 +437,85 @@ describe('runKaizen dry-run', () => {
 });
 
 describe('runKaizen PR flow', () => {
+  it('persists generated pull request WIP limit skips before starting work', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ safety: { wipLimit: 2 } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1)]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, '[]');
+      }
+      if (command === 'gh' && args[0] === 'search' && args[1] === 'prs') {
+        return result(
+          command,
+          args,
+          repo,
+          JSON.stringify([
+            {
+              number: 10,
+              author: { login: 'github-actions[bot]', type: 'Bot' },
+              repository: { nameWithOwner: 'o/r' },
+              url: 'https://github.com/o/r/pull/10'
+            },
+            {
+              number: 11,
+              author: { login: 'github-actions[bot]', type: 'Bot' },
+              repository: { nameWithOwner: 'o/other' },
+              url: 'https://github.com/o/other/pull/11'
+            }
+          ])
+        );
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'afternoon',
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues).toEqual([]);
+    expect('issues' in summary && summary.skipped).toEqual([
+      {
+        number: 1,
+        reason: 'generated pull request WIP limit reached (organization 2/2, repository 1/2)'
+      }
+    ]);
+    expect(runner.mock.calls.some(([command]) => command === 'git')).toBe(false);
+    const runsDir = path.join(home, 'projects', 'o-r', 'runs');
+    const runIds = await fs.readdir(runsDir);
+    const persisted = JSON.parse(await fs.readFile(path.join(runsDir, runIds[0], 'summary.json'), 'utf8'));
+    expect(persisted.skipped).toEqual(summary.skipped);
+  });
+
   it('persists scheduled skips caused by latestStartHour', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-12T12:00:00Z'));

@@ -29,6 +29,12 @@ import {
 } from './issueIntake.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
 import type { RunDiscoveredFollowupSummary, RunIssueSummary, RunSummary } from './summary.js';
+import {
+  GENERATED_PULL_REQUEST_FETCH_LIMIT,
+  generatedPullRequestWipLimitReason,
+  isSyncPullRequest,
+  summarizeGeneratedPullRequestBacklog
+} from './wipLimit.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
 
 export interface RunOptions {
@@ -120,7 +126,14 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       automatic,
       openPullRequests
     });
-    return { ...limited, openPullRequests };
+    const wipLimited = await applyGeneratedPullRequestWipLimit({
+      config,
+      selection: limited,
+      automatic,
+      repo: resolved.project.repo,
+      github
+    });
+    return { ...wipLimited, openPullRequests };
   };
 
   if (options.dryRun) {
@@ -395,12 +408,23 @@ async function applyOpenPullRequestLimit(options: {
   };
 }
 
-function isSyncPullRequest(pullRequest: GitHubPullRequest): boolean {
-  return [
-    'codex/daily-dogfood-sync',
-    'codex/sync-kaizen-dogfood',
-    'codex/sync-kaizen-shared-skills'
-  ].includes(pullRequest.headRefName ?? '');
+async function applyGeneratedPullRequestWipLimit(options: {
+  config: KaizenConfig;
+  selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> };
+  automatic: boolean;
+  repo: string;
+  github: GitHubClient;
+}): Promise<{ selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
+  if (!options.automatic || options.selection.selected.length === 0) return options.selection;
+  const owner = options.repo.split('/')[0];
+  const pullRequests = await options.github.searchOpenPullRequestsForOwner(owner, GENERATED_PULL_REQUEST_FETCH_LIMIT);
+  const backlog = summarizeGeneratedPullRequestBacklog({
+    pullRequests,
+    repo: options.repo,
+    wipLimit: options.config.safety.wipLimit
+  });
+  if (!backlog.exceeded) return options.selection;
+  return skipSelectedForOpenPrLimit(options.selection, generatedPullRequestWipLimitReason(backlog));
 }
 
 function skipSelectedForOpenPrLimit(

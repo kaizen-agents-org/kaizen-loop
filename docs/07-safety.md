@@ -11,6 +11,7 @@
 | パス | `protectedPaths`(変更可だが強制 PR)/ `forbiddenPaths`(変更即失敗) | CI・秘密情報・ループ自身の設定の無審査変更 |
 | 検証 | テスト・lint 必須。検証なしプロジェクトは直接コミット禁止 | 壊れたコードの main 混入、または壊れた PR の量産 |
 | 量 | `maxChangedLines` / `maxChangedFiles` 超は強制 PR | 大規模変更の無審査反映 |
+| WIP | `safety.wipLimit` の owner-wide 生成 PR backpressure | 生成 PR が review 帯域を超えて蓄積すること |
 | 回数 | `maxVerifyRetries` / `maxAttemptsPerIssue` / `maxIssuesPerNight` | 無限リトライ・暴走によるトークン浪費 |
 | 時間 | Issue 単位・実行全体のタイムアウト、プロセスツリー kill | ハング・長時間占有、子プロセス残留 |
 | 容量 | `safety.minFreeDiskMb` の preflight | clone / worktree / install 中のディスク逼迫 |

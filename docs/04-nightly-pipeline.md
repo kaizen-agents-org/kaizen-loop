@@ -69,6 +69,8 @@ gh issue list --label kaizen --state open \
 
 固定ブランチを再利用する deterministic sync PR は、通常の Issue 実装 PR と別扱いにする。`codex/daily-dogfood-sync`、`codex/sync-kaizen-dogfood`、`codex/sync-kaizen-shared-skills` の open PR は `run.maxOpenPullRequests` のカウント対象に含めない。
 
+さらに `--scheduled` の自動実行では、owner 全体の open 生成 PR 数を確認する。bot が作成した open PR が `safety.wipLimit`(デフォルト 5) 以上なら、新しい Issue は処理せず `generated pull request WIP limit reached` として run summary に記録する。これは scout / monitor などの生成側が、人間の review 帯域を超えて PR を積み上げ続けることを防ぐための組織横断 backpressure である。
+
 ### 優先順位
 
 1. `priorityOrder` のラベル順(P0 → P1 → P2 → ラベルなし)
