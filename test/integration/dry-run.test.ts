@@ -506,7 +506,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.skipped).toEqual([
       {
         number: 1,
-        reason: 'generated pull request WIP limit reached (organization 2/2, repository 1/2)'
+        reason: 'generated pull request WIP limit reached (organization 2/2, repository 1)'
       }
     ]);
     expect(runner.mock.calls.some(([command]) => command === 'git')).toBe(false);

@@ -61,6 +61,12 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, safety: { wipLimit: -1 } })).toThrow();
   });
 
+  it('accepts a custom generated PR WIP limit', () => {
+    const config = configSchema.parse({ version: 1, safety: { wipLimit: 7 } });
+
+    expect(config.safety.wipLimit).toBe(7);
+  });
+
   it('accepts scheduler jobs', () => {
     const config = configSchema.parse({
       version: 1,

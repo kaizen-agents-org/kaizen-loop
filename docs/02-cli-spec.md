@@ -230,7 +230,7 @@ kaizen status [--project <slug>] [--metrics] [--json]
 - オープン中の kaizen PR 一覧(レビュー待ち)
 - PR guardian job 数。open PR に対応しない非終端 job は `guardian.stale` として表示する
 - `origin/main` に未取り込みのコミットがあり、対応するオープン PR がない remote branch
-- `--metrics`: 累積メトリクスと直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
+- `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)を表示する。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
 
 朝のルーティンは `kaizen status` → `git pull` → 必要なら PR レビュー、を想定する。
 

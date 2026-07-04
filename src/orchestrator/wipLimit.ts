@@ -30,7 +30,7 @@ export function summarizeGeneratedPullRequestBacklog(options: {
 }
 
 export function generatedPullRequestWipLimitReason(backlog: GeneratedPullRequestBacklog): string {
-  return `generated pull request WIP limit reached (organization ${backlog.organization}/${backlog.limit}, repository ${backlog.repository}/${backlog.limit})`;
+  return `generated pull request WIP limit reached (organization ${backlog.organization}/${backlog.limit}, repository ${backlog.repository})`;
 }
 
 export function isGeneratedPullRequest(pullRequest: GitHubPullRequest): boolean {
