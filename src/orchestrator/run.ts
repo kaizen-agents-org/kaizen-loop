@@ -1072,6 +1072,16 @@ function buildPullRequestBody(
     : '- Verification commands are not configured';
   const notes = agentResult.notes.trim() ? `\n## Builder notes\n${agentResult.notes.trim()}\n` : '';
   const verifier = verifierResult ? `\n## Verifier\nverifier: ${verifierResult.status}\nsummary: ${verifierResult.summary || '(none)'}${verifierResult.reason ? `\nreason: ${verifierResult.reason}` : ''}${verifierResult.notes.trim() ? `\nnotes: ${verifierResult.notes.trim()}` : ''}\n` : '';
+  const evidence = [
+    '- reported: builder summary and builder notes come from the builder-agent self-report.',
+    verifyResults.length > 0
+      ? '- executed: Kaizen Loop ran the verification commands listed above.'
+      : '- unverified: no repository verification commands are configured.',
+    verifierResult
+      ? '- executed: Kaizen Loop ran verifier and recorded the status below.'
+      : '- unverified: verifier was not run for this PR body.',
+    '- static: changed file and line counts come from git diff metadata.'
+  ].join('\n');
   return `Closes #${issue.number}
 
 ## Summary
@@ -1081,6 +1091,9 @@ ${notes}
 ## Verification
 ${verify}
 ${verifier}
+
+## Evidence strength
+${evidence}
 
 ## Kaizen risk policy
 ${riskReason}

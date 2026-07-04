@@ -1800,6 +1800,11 @@ describe('runKaizen PR flow', () => {
     expect(prBodies[0]).toContain('## Verifier');
     expect(prBodies[0]).toContain('verifier: open_pr');
     expect(prBodies[0]).toContain('summary: 確認した');
+    expect(prBodies[0]).toContain('## Evidence strength');
+    expect(prBodies[0]).toContain('reported: builder summary and builder notes come from the builder-agent self-report');
+    expect(prBodies[0]).toContain('executed: Kaizen Loop ran the verification commands listed above');
+    expect(prBodies[0]).toContain('executed: Kaizen Loop ran verifier and recorded the status below');
+    expect(prBodies[0]).toContain('static: changed file and line counts come from git diff metadata');
   });
 
   it('surfaces open_pr_with_warning verifier status in generated PR bodies', async () => {
@@ -1873,6 +1878,10 @@ describe('runKaizen PR flow', () => {
     expect(prBody).toContain('summary: 確認したが注意あり');
     expect(prBody).toContain('reason: low confidence');
     expect(prBody).toContain('notes: human should double-check docs');
+    expect(prBody).toContain('## Evidence strength');
+    expect(prBody).toContain('reported: builder summary and builder notes come from the builder-agent self-report');
+    expect(prBody).toContain('executed: Kaizen Loop ran the verification commands listed above');
+    expect(prBody).toContain('executed: Kaizen Loop ran verifier and recorded the status below');
   });
 
   it('accepts legacy approved verifier payloads as open_pr', async () => {
