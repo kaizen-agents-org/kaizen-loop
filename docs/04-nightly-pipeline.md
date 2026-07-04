@@ -227,7 +227,8 @@ gh pr create --base <defaultBranch> --head kaizen/issue-<N>-<slug> \
 codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 ```
 
-- PR 本文: 修正サマリ、対象 Issue へのリンク(`Closes #N`)、変更概要、検証結果、verifier 有効時の `verifier: open_pr` / `verifier: open_pr_with_warning`、リスク判定または並列実行で PR になった理由
+- PR 本文: 修正サマリ、対象 Issue へのリンク(`Closes #N`)、変更概要、検証結果、verifier 有効時の `verifier: open_pr` / `verifier: open_pr_with_warning`、証拠強度(`reported` / `executed` / `unverified` / `static`)、リスク判定または並列実行で PR になった理由
+- 証拠強度では、builder-agent の自己申告は `reported`、Kaizen Loop が実行した verify / verifier は `executed`、未設定の verify / verifier は `unverified`、git diff 由来の変更ファイル・行数は `static` として表示する
 - PR 作成直後、Kaizen Loop は Issue に PR リンクと「monitoring CI and review feedback」をコメントする
 - `guardian.mode: sync` では、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を設定済みの `guardian.command` で実行する。CI 監視、`gh run watch`、未解決の actionable review feedback 対応、mergeable 判定は `pr-guardian` skill の責務。TypeScript 側は各 pass 後に未解決・非 outdated の review thread を確認し、残っていれば `guardian.maxAttempts` まで再実行する。approval 不足は branch protection が明示要求している場合だけ blocker として扱う
 - `guardian.mode: async` では、PR 作成後に `~/.kaizen/projects/<slug>/guardian/jobs/` へ job を保存して foreground run を終了する。job は repo、PR 番号、URL、branch、base branch、head SHA、retry budget、attempt count、status、last checked time、last blocker を持つ。`kaizen guardian watch` が pending job を再開し、`kaizen guardian run <pr>` は head SHA が変わっていれば新しい job として実行する
