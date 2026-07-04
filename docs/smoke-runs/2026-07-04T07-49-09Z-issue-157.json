@@ -16,8 +16,8 @@
   "run": {
     "id": "2026-07-04T07-49-09Z",
     "trigger": "instant",
-    "summaryPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/summary.json",
-    "issueLogDir": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/issue-157"
+    "summaryPath": "runs/2026-07-04T07-49-09Z/summary.json",
+    "issueLogDir": "runs/2026-07-04T07-49-09Z/issue-157"
   },
   "implementation": {
     "outcome": "pr-created",
@@ -32,11 +32,11 @@
       "npm run build",
       "test -f skills/gh-link-issue-pr/SKILL.md && test -f skills/kaizen-bug-router/SKILL.md && test -f skills/pr-guardian/SKILL.md"
     ],
-    "verifyLogPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/issue-157/verify.log",
+    "verifyLogPath": "runs/2026-07-04T07-49-09Z/issue-157/verify.log",
     "verifier": {
       "enabled": true,
       "verdict": "open_pr",
-      "logPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/runs/2026-07-04T07-49-09Z/issue-157/verifier.log"
+      "logPath": "runs/2026-07-04T07-49-09Z/issue-157/verifier.log"
     }
   },
   "pullRequest": {
@@ -67,5 +67,5 @@
     "summary": "PR guardian skill completed; no unresolved review threads remain.",
     "mode": "sync"
   },
-  "artifactPath": "/Users/hiraoku.shinichi/.kaizen/projects/kaizen-agents-org-kaizen-loop/smoke-runs/2026-07-04T07-49-09Z-issue-157.json"
+  "artifactPath": "docs/smoke-runs/2026-07-04T07-49-09Z-issue-157.json"
 }
