@@ -53,6 +53,12 @@ Readiness reviews should record the artifact path and check these fields:
 
 `pullRequest.issueLinkRecognized` is computed from `gh pr view --json closingIssuesReferences`. It is stronger evidence than a branch name, PR title, or issue comment because it confirms GitHub recognizes the closing keyword on the PR.
 
+## Recorded Smoke Runs
+
+| Timestamp | Issue | Required artifact evidence |
+|---|---|---|
+| `2026-07-04T07:49:04.852Z` | `#157` | Ready-for-review PR, closing issue keyword, mechanical verification log, verifier verdict, issue-link recognition, and PR guardian status |
+
 ## Safety Notes
 
 - `kaizen smoke` always creates the issue with `kaizen:pr-only`; it does not intentionally exercise direct-commit reflection.
