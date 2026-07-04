@@ -8,8 +8,8 @@ import type { AgentAdapter, AgentRequest, AgentResult } from './types.js';
 const builderPayloadSchema = z
   .object({
     status: z.enum(['fixed', 'partial', 'blocked']),
-    summary: z.string().default(''),
-    notes: z.string().default(''),
+    summary: z.string(),
+    notes: z.string(),
     blockedReason: z.string().optional(),
     discoveredIssues: z
       .array(
@@ -23,11 +23,11 @@ const builderPayloadSchema = z
             severity: z.string().optional(),
             labels: z.array(z.string()).optional()
           })
-          .passthrough()
+          .strict()
       )
       .default([])
   })
-  .passthrough();
+  .strict();
 
 export interface BuilderAgentOptions {
   command: string;

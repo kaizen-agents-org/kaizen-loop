@@ -34,6 +34,24 @@ describe('parseAgentResult', () => {
 });
 
 describe('BuilderAgentAdapter', () => {
+  async function runBuilderPayload(payload: Record<string, unknown>) {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
+    const runner: CommandRunner = async (command, args, options) => {
+      expect(command).toBe('builder-agent');
+      expect(args).toEqual([]);
+      if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
+      await fs.writeFile(options.env.KAIZEN_BUILD_RESULT_PATH, JSON.stringify(payload));
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 123 };
+    };
+
+    const adapter = new BuilderAgentAdapter(runner, {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
+    });
+    return adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+  }
+
   it('reads the build result file produced by builder-agent', async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
     const runner: CommandRunner = async (command, args, options) => {
@@ -72,6 +90,40 @@ describe('BuilderAgentAdapter', () => {
     expect(result.summary).toBe('直した');
     expect(result.discoveredIssues).toEqual([{ title: '別バグ', repo: 'kaizen-loop', body: '見つけた' }]);
     await expect(fs.access(path.join(workspace, '.kaizen', 'builder', 'build-result.json'))).rejects.toThrow();
+  });
+
+  it.each([
+    ['summary', { status: 'fixed', notes: '' }],
+    ['notes', { status: 'fixed', summary: '直した' }]
+  ])('rejects builder payloads missing required %s', async (field, payload) => {
+    const result = await runBuilderPayload(payload);
+
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain(field);
+  });
+
+  it('rejects unknown top-level builder payload fields', async () => {
+    const result = await runBuilderPayload({
+      status: 'fixed',
+      summary: '直した',
+      notes: '',
+      extra: true
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain('extra');
+  });
+
+  it('rejects unknown discovered issue fields', async () => {
+    const result = await runBuilderPayload({
+      status: 'fixed',
+      summary: '直した',
+      notes: '',
+      discoveredIssues: [{ title: '別バグ', extra: true }]
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain('extra');
   });
 });
 
