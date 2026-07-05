@@ -15,6 +15,8 @@ import { GoalLock } from './lock.js';
 import { buildGoalEvaluatorPrompt, buildGoalPlannerPrompt } from './prompts.js';
 import type { GoalEvaluation, GoalMechanicalEvaluation, GoalNextIssue, GoalPlan, GoalState } from './types.js';
 
+const GOAL_MECHANICAL_EVALUATION_OUTPUT_MAX_CHARS = 8_000;
+
 export interface RunGoalOptions {
   cwd: string;
   project?: string;
@@ -88,6 +90,7 @@ export async function runGoal(options: RunGoalOptions): Promise<GoalState> {
           issue: issuePlan,
           iterationNumber,
           issueLabel: config.goal.issueLabel,
+          mechanicalEvaluation: goal.iterations.at(-1)?.mechanicalEvaluation,
           runCommand: options.runCommand
         });
       } catch (error) {
@@ -314,6 +317,7 @@ async function createGoalIssue(options: {
   issue: GoalNextIssue;
   iterationNumber: number;
   issueLabel: string;
+  mechanicalEvaluation?: GoalMechanicalEvaluation;
   runCommand: CommandRunner;
 }) {
   const github = new GitHubClient(options.runCommand, options.repoDir);
@@ -322,7 +326,7 @@ async function createGoalIssue(options: {
     cwd: options.cwd,
     project: options.project,
     title: options.issue.title,
-    body: goalIssueBody(options.goal, options.issue, options.iterationNumber),
+    body: goalIssueBody(options.goal, options.issue, options.iterationNumber, options.mechanicalEvaluation),
     priority: options.issue.priority,
     queue: true,
     extraLabels: [options.issueLabel],
@@ -330,7 +334,12 @@ async function createGoalIssue(options: {
   });
 }
 
-function goalIssueBody(goal: GoalState, issue: GoalNextIssue, iterationNumber: number): string {
+function goalIssueBody(
+  goal: GoalState,
+  issue: GoalNextIssue,
+  iterationNumber: number,
+  mechanicalEvaluation?: GoalMechanicalEvaluation
+): string {
   return [
     `<!-- kaizen-loop:goal ${JSON.stringify({ goalId: goal.id, iteration: iterationNumber })} -->`,
     '',
@@ -345,9 +354,36 @@ function goalIssueBody(goal: GoalState, issue: GoalNextIssue, iterationNumber: n
     '## This Iteration',
     issue.body || '(no body)',
     '',
+    ...previousMechanicalEvaluationFailureSection(mechanicalEvaluation),
     '## Constraints',
     ...(goal.constraints.length ? goal.constraints : ['Follow the repository Kaizen safety policy.']).map((constraint) => `- ${constraint}`)
   ].join('\n');
+}
+
+function previousMechanicalEvaluationFailureSection(mechanicalEvaluation?: GoalMechanicalEvaluation): string[] {
+  if (!mechanicalEvaluation || mechanicalEvaluation.ok) return [];
+  const output = truncateText(mechanicalEvaluation.output.trim(), GOAL_MECHANICAL_EVALUATION_OUTPUT_MAX_CHARS) || '(no output)';
+  return [
+    '## Previous Mechanical Evaluation Failure',
+    '',
+    '### Command',
+    '',
+    indentCodeBlock(mechanicalEvaluation.command),
+    '',
+    '### Output',
+    '',
+    indentCodeBlock(output),
+    ''
+  ];
+}
+
+function indentCodeBlock(value: string): string {
+  return value.split(/\r?\n/).map((line) => `    ${line}`).join('\n');
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]`;
 }
 
 async function runSingleGoalIssue(options: {

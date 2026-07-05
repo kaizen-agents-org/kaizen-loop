@@ -354,6 +354,43 @@ describe('goal commands', () => {
     const mechanicalCall = runner.mock.calls.find(([command, args]) => command === 'sh' && args.join(' ') === '-lc npm run goal-check');
     expect(mechanicalCall?.[2]?.cwd).toBe(workspace);
   });
+
+  it('includes previous mechanical evaluation failure output in the next iteration issue body', async () => {
+    const { repo, workspace } = await setupProject({ maxIterations: 2, evaluationCommand: 'npm run goal-check' });
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Improve onboarding',
+      description: 'Make first-run setup reliable.',
+      successCriteria: ['goal-check passes'],
+      constraints: []
+    });
+    const runner = goalRunner({ repo, workspace, evaluationStatus: 'succeeded', failMechanicalEvaluation: true });
+
+    const result = await runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect(result.status).toBe('blocked');
+    expect(result.finalReason).toBe('maxIterations(2) reached');
+    expect(result.iterations).toHaveLength(2);
+
+    const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'create');
+    expect(issueCreates).toHaveLength(2);
+    const firstBody = issueBodyArg(issueCreates[0][1]);
+    const secondBody = issueBodyArg(issueCreates[1][1]);
+    expect(firstBody).not.toContain('## Previous Mechanical Evaluation Failure');
+    expect(secondBody).toContain('## Previous Mechanical Evaluation Failure');
+    expect(secondBody).toContain('### Command');
+    expect(secondBody).toContain('    npm run goal-check');
+    expect(secondBody).toContain('### Output');
+    expect(secondBody).toContain('    goal check failed');
+  });
 });
 
 async function setupProject(options: { maxIterations?: number; evaluationCommand?: string } = {}) {
@@ -508,6 +545,10 @@ function githubReadinessResult(command: string, args: string[], cwd: string | un
     );
   }
   return result(command, args, cwd, '');
+}
+
+function issueBodyArg(args: string[]) {
+  return String(args[args.indexOf('--body') + 1]);
 }
 
 async function writeJsonResult(filePath: unknown, payload: unknown) {
