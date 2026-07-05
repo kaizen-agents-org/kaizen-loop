@@ -92,4 +92,4 @@ flowchart TB
 - エージェント実行時間・リトライ回数
 - 明示 opt-in 直接コミット後に revert された数(自動修正の品質指標。revert 検知は Phase 3 → [08-roadmap.md](./08-roadmap.md))
 
-`kaizen status --metrics` で累積値と直近 7 日の review window 値を確認できる。欠損して読めない run ディレクトリは集計全体を 0 にせず、`unreadableRuns` として明示する。metrics には処理件数、PR 数、失敗数、blocked/skipped 数、verification failure、verifier block/needs-context/failure、guardian outcome の分母付きカウンタを含める。
+`kaizen status --metrics` で累積値と直近 7 日の review window 値を確認できる。欠損して読めない run ディレクトリは集計全体を 0 にせず、`unreadableRuns` として明示する。metrics には処理件数、PR 数、失敗数、blocked/skipped 数、verification failure、verifier block/needs-context/failure、guardian outcome の分母付きカウンタ、owner-wide 生成 PR WIP と最古の生成 PR の滞留日数を含める。

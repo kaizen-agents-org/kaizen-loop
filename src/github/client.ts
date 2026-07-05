@@ -76,7 +76,7 @@ export class GitHubClient {
       '--state',
       'open',
       '--json',
-      'number,headRefName,headRepositoryOwner,url',
+      'number,headRefName,headRepositoryOwner,createdAt,url',
       '--limit',
       String(limit)
     ]);
@@ -280,6 +280,7 @@ query($searchQuery: String!, $limit: Int!, $cursor: String) {
       ... on PullRequest {
         number
         headRefName
+        createdAt
         url
         author {
           login
@@ -320,6 +321,7 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
         nodes?: Array<{
           number?: number;
           headRefName?: string;
+          createdAt?: string;
           url?: string;
           author?: { login?: string; __typename?: string };
           repository?: { nameWithOwner?: string };
@@ -335,6 +337,7 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
         .map((node) => ({
           number: node.number as number,
           headRefName: node.headRefName,
+          createdAt: node.createdAt,
           url: node.url as string,
           author: node.author
             ? {

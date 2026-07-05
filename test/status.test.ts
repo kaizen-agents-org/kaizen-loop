@@ -181,6 +181,7 @@ describe('statusProject', () => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
       if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
+        const oldestGeneratedPullRequestCreatedAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
         return result(
           command,
           args,
@@ -193,6 +194,7 @@ describe('statusProject', () => {
                   {
                     number: 7,
                     headRefName: 'kaizen/issue-7-x',
+                    createdAt: oldestGeneratedPullRequestCreatedAt,
                     author: { login: 'github-actions[bot]', __typename: 'Bot' },
                     repository: { nameWithOwner: 'o/r' },
                     url: 'https://github.com/o/r/pull/7'
@@ -200,6 +202,7 @@ describe('statusProject', () => {
                   {
                     number: 8,
                     headRefName: 'kaizen/issue-8-x',
+                    createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
                     author: { login: 'dependabot[bot]' },
                     repository: { nameWithOwner: 'o/other' },
                     url: 'https://github.com/o/other/pull/8'
@@ -262,9 +265,11 @@ describe('statusProject', () => {
         repository: 1,
         organization: 2,
         limit: 5,
-        exceeded: false
+        exceeded: false,
+        oldestGeneratedPullRequestAgeDays: 3
       }
     });
+    expect(output.metrics?.wipLimit?.oldestGeneratedPullRequestCreatedAt).toBeTypeOf('string');
   });
 });
 

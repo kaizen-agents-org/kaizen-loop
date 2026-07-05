@@ -161,6 +161,7 @@ describe('GitHubClient', () => {
           number: 7,
           headRefName: 'kaizen/issue-1-x',
           headRepositoryOwner: { login: 'o' },
+          createdAt: '2026-07-01T00:00:00Z',
           url: 'https://github.com/o/r/pull/7'
         }
       ]),
@@ -177,6 +178,7 @@ describe('GitHubClient', () => {
           number: 7,
           headRefName: 'kaizen/issue-1-x',
           headRepositoryOwner: { login: 'o' },
+          createdAt: '2026-07-01T00:00:00Z',
           url: 'https://github.com/o/r/pull/7'
         }
       ]);
@@ -186,7 +188,7 @@ describe('GitHubClient', () => {
         '--state',
         'open',
         '--json',
-        'number,headRefName,headRepositoryOwner,url',
+        'number,headRefName,headRepositoryOwner,createdAt,url',
         '--limit',
         '3'
       ]);
@@ -213,6 +215,7 @@ describe('GitHubClient', () => {
               {
                 number: 7,
                 headRefName: 'codex/sync-kaizen-shared-skills',
+                createdAt: '2026-07-01T00:00:00Z',
                 author: { login: 'github-actions[bot]', __typename: 'Bot' },
                 repository: { nameWithOwner: 'o/r' },
                 url: 'https://github.com/o/r/pull/7'
@@ -231,6 +234,7 @@ describe('GitHubClient', () => {
     expect(prs[0]).toMatchObject({
       number: 7,
       headRefName: 'codex/sync-kaizen-shared-skills',
+      createdAt: '2026-07-01T00:00:00Z',
       author: { login: 'github-actions[bot]', type: 'Bot' },
       repository: { nameWithOwner: 'o/r' }
     });

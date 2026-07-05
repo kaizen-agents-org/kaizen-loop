@@ -5,9 +5,12 @@ export interface GeneratedPullRequestBacklog {
   organization: number;
   limit: number;
   exceeded: boolean;
+  oldestGeneratedPullRequestCreatedAt?: string;
+  oldestGeneratedPullRequestAgeDays?: number;
 }
 
 export const GENERATED_PULL_REQUEST_FETCH_LIMIT = 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function summarizeGeneratedPullRequestBacklog(options: {
   pullRequests: GitHubPullRequest[];
@@ -20,12 +23,17 @@ export function summarizeGeneratedPullRequestBacklog(options: {
   const repository = generatedPullRequests.filter(
     (pullRequest) => pullRequest.repository?.nameWithOwner?.toLowerCase() === normalizedRepo
   ).length;
+  const oldestGeneratedPullRequestCreatedAt = oldestPullRequestCreatedAt(generatedPullRequests);
 
   return {
     repository,
     organization,
     limit: options.wipLimit,
-    exceeded: options.wipLimit === 0 || organization >= options.wipLimit
+    exceeded: options.wipLimit === 0 || organization >= options.wipLimit,
+    oldestGeneratedPullRequestCreatedAt,
+    oldestGeneratedPullRequestAgeDays: oldestGeneratedPullRequestCreatedAt
+      ? elapsedDaysSince(oldestGeneratedPullRequestCreatedAt)
+      : undefined
   };
 }
 
@@ -45,4 +53,20 @@ export function isSyncPullRequest(pullRequest: GitHubPullRequest): boolean {
     'codex/sync-kaizen-dogfood',
     'codex/sync-kaizen-shared-skills'
   ].includes(pullRequest.headRefName ?? '');
+}
+
+function oldestPullRequestCreatedAt(pullRequests: GitHubPullRequest[]): string | undefined {
+  return pullRequests.reduce<string | undefined>((oldest, pullRequest) => {
+    if (!isValidIsoDate(pullRequest.createdAt)) return oldest;
+    if (!oldest) return pullRequest.createdAt;
+    return Date.parse(pullRequest.createdAt) < Date.parse(oldest) ? pullRequest.createdAt : oldest;
+  }, undefined);
+}
+
+function elapsedDaysSince(isoDate: string): number {
+  return Math.max(0, Math.floor((Date.now() - Date.parse(isoDate)) / DAY_MS));
+}
+
+function isValidIsoDate(value: string | undefined): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
