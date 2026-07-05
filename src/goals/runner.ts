@@ -383,7 +383,7 @@ function indentCodeBlock(value: string): string {
 
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]`;
+  return `[truncated to last ${maxChars} characters]\n\n${text.slice(-maxChars)}`;
 }
 
 async function runSingleGoalIssue(options: {

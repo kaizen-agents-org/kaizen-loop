@@ -50,7 +50,7 @@ Goal 状態はローカル状態として保存し、対象リポジトリには
 6. 未達なら次 iteration、達成・blocked・failed なら終了する。
 
 `goal.evaluation.command` が設定されている場合、Goal runner は evaluator の前にそのコマンドを実行する。コマンドが失敗した場合、AI evaluator が誤って `succeeded` を返しても Goal は成功扱いにならず、`continue` として扱われる。これにより coverage、統合テスト、ドキュメント検査などの機械的な達成条件を Goal の終了条件に組み込める。
-機械評価の失敗後に次 iteration の Issue を作る場合、Issue 本文には `Previous Mechanical Evaluation Failure` セクションとして直前の command と output が明示的に含まれる。
+機械評価の失敗後に次 iteration の Issue を作る場合、Issue 本文には `Previous Mechanical Evaluation Failure` セクションとして直前の command と output が明示的に含まれる。長い output は失敗原因が残りやすいように末尾を保持して切り詰める。
 
 Issue marker:
 

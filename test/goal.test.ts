@@ -365,7 +365,14 @@ describe('goal commands', () => {
       successCriteria: ['goal-check passes'],
       constraints: []
     });
-    const runner = goalRunner({ repo, workspace, evaluationStatus: 'succeeded', failMechanicalEvaluation: true });
+    const longFailureOutput = `${'setup log line\n'.repeat(700)}goal check failed at final assertion`;
+    const runner = goalRunner({
+      repo,
+      workspace,
+      evaluationStatus: 'succeeded',
+      failMechanicalEvaluation: true,
+      mechanicalEvaluationOutput: longFailureOutput
+    });
 
     const result = await runGoalCommand({
       cwd: repo,
@@ -389,7 +396,8 @@ describe('goal commands', () => {
     expect(secondBody).toContain('### Command');
     expect(secondBody).toContain('    npm run goal-check');
     expect(secondBody).toContain('### Output');
-    expect(secondBody).toContain('    goal check failed');
+    expect(secondBody).toContain('    [truncated to last 8000 characters]');
+    expect(secondBody).toContain('goal check failed at final assertion');
   });
 });
 
@@ -437,6 +445,7 @@ function goalRunner(options: {
   invalidPlanner?: boolean;
   invalidEvaluator?: boolean;
   failMechanicalEvaluation?: boolean;
+  mechanicalEvaluationOutput?: string;
 }) {
   return vi.fn<CommandRunner>(async (command, args, runOptions) => {
     if (command === 'goal-agent') {
@@ -494,8 +503,11 @@ function goalRunner(options: {
     if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, runOptions?.cwd, options.noDiff ? '' : 'src/file.ts\n');
     if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, runOptions?.cwd, options.noDiff ? '' : '1\t0\tsrc/file.ts\n');
     if (command === 'sh' && args.join(' ') === '-lc npm run goal-check') {
+      const output = options.failMechanicalEvaluation
+        ? options.mechanicalEvaluationOutput ?? 'goal check failed'
+        : 'goal check passed';
       return {
-        ...result(command, args, runOptions?.cwd, options.failMechanicalEvaluation ? 'goal check failed' : 'goal check passed'),
+        ...result(command, args, runOptions?.cwd, output),
         exitCode: options.failMechanicalEvaluation ? 1 : 0
       };
     }
