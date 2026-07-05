@@ -181,6 +181,11 @@ describe('VerifierAgentAdapter', () => {
     const result = await runVerifier({ status: 'nonsense', summary: 's', notes: '' });
     expect(result.status).toBe('error');
   });
+
+  it.each(['executed', 'reported'] as const)('passes through evidence_grade %s', async (evidenceGrade) => {
+    const result = await runVerifier({ status: 'open_pr', summary: 's', notes: '', evidence_grade: evidenceGrade });
+    expect(result.evidenceGrade).toBe(evidenceGrade);
+  });
 });
 
 describe('buildVerifierPrompt', () => {

@@ -14,6 +14,7 @@ import { envWithKaizenTemp } from '../utils/temp.js';
  * - `needs_context`: verifier lacks information to decide; return to the builder.
  */
 export type VerifierGateStatus = 'open_pr' | 'open_pr_with_warning' | 'block_pr' | 'needs_context';
+export type VerifierEvidenceGrade = 'executed' | 'reported';
 
 /** Legacy statuses kept for temporary backward compatibility with older verifier payloads. */
 const legacyStatusMap: Record<string, VerifierGateStatus> = {
@@ -29,7 +30,11 @@ const verifierPayloadSchema = z
       .transform((status) => legacyStatusMap[status] ?? (status as VerifierGateStatus)),
     summary: z.string().default(''),
     notes: z.string().default(''),
-    reason: z.string().optional()
+    reason: z.string().optional(),
+    evidence_grade: z.preprocess(
+      (value) => (value === 'executed' || value === 'reported' ? value : undefined),
+      z.enum(['executed', 'reported']).optional()
+    )
   })
   .passthrough();
 
@@ -51,6 +56,7 @@ export interface VerifierResult {
   summary: string;
   notes: string;
   reason?: string;
+  evidenceGrade?: VerifierEvidenceGrade;
   raw: string;
   durationMs: number;
 }
@@ -122,6 +128,7 @@ export class VerifierAgentAdapter {
         summary: payload.summary,
         notes: payload.notes,
         reason: payload.reason,
+        evidenceGrade: payload.evidence_grade,
         raw: `${raw}\n${JSON.stringify(payload)}`,
         durationMs: result.durationMs
       };
