@@ -142,10 +142,22 @@ export async function runPendingPrGuardianJobs(options: {
   runCommand: CommandRunner;
 }): Promise<PrGuardianJob[]> {
   const jobs = await listPrGuardianJobs(options.stateDir);
+  for (const job of jobs) {
+    if (isStaleRunningJob(job, options.config.guardian.timeoutMinutes) && job.attemptCount >= job.retryBudget) {
+      const now = new Date().toISOString();
+      await writeGuardianJob(options.stateDir, {
+        ...job,
+        status: 'blocked',
+        updatedAt: now,
+        lastCheckedAt: now,
+        lastBlocker: `PR guardian retry budget exhausted after ${job.attemptCount} attempts.`
+      });
+    }
+  }
   const runnable = jobs.filter(
     (job) =>
       job.status === 'pending' ||
-      isStaleRunningJob(job, options.config.guardian.timeoutMinutes) ||
+      (isStaleRunningJob(job, options.config.guardian.timeoutMinutes) && job.attemptCount < job.retryBudget) ||
       (job.status === 'blocked' && job.attemptCount < job.retryBudget)
   );
   const results: PrGuardianJob[] = [];
