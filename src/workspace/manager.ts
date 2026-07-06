@@ -70,7 +70,7 @@ export class WorkspaceManager {
   async runVerify(config: KaizenConfig, runDeadlineAt?: number): Promise<WorkspaceCommandResult[]> {
     const results = [];
     for (const command of config.commands.verify) {
-      const result = await this.runShell(command, config.commands.verifyTimeoutMinutes * 60_000, config, runDeadlineAt);
+      const result = await this.runVerifyCommand(command, config, runDeadlineAt);
       results.push({
         command,
         ok: result.exitCode === 0,
@@ -79,6 +79,34 @@ export class WorkspaceManager {
       if (result.exitCode !== 0) break;
     }
     return results;
+  }
+
+  private async runVerifyCommand(command: string, config: KaizenConfig, runDeadlineAt?: number) {
+    const timeoutMs = config.commands.verifyTimeoutMinutes * 60_000;
+    const result = await this.runShell(command, timeoutMs, config, runDeadlineAt);
+    const output = `${result.stdout}${result.stderr}`;
+    if (result.exitCode === 0 || !config.commands.setup || !isTransientDependencyFailure(output)) {
+      return result;
+    }
+
+    const setup = await this.runSetup(config, runDeadlineAt);
+    if (!setup) return result;
+    const retried = setup.ok
+      ? await this.runShell(command, timeoutMs, config, runDeadlineAt)
+      : result;
+    const retryOutput = retried === result ? '' : `${retried.stdout}${retried.stderr}`;
+    return {
+      ...retried,
+      stdout: [
+        output,
+        '',
+        `# kaizen-loop dependency repair: ${config.commands.setup}`,
+        setup.output,
+        setup.ok ? '# kaizen-loop dependency repair: retrying verification command' : '',
+        retryOutput
+      ].filter(Boolean).join('\n'),
+      stderr: ''
+    };
   }
 
   async createIssueBranch(config: KaizenConfig, issue: { number: number; title: string }): Promise<string> {
@@ -177,4 +205,11 @@ function matchesAny(file: string, patterns: string[]): boolean {
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]`;
+}
+
+function isTransientDependencyFailure(output: string): boolean {
+  return (
+    /Cannot find module ['"]?@rollup\/rollup-/i.test(output) ||
+    /npm has a bug related to optional dependencies/i.test(output)
+  );
 }

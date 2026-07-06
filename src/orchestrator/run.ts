@@ -988,6 +988,7 @@ async function finishBlocked(
   agentResult: AgentResult,
   started: number
 ): Promise<RunIssueSummary> {
+  const requiresHuman = requiresHumanForBlockedAgent(agentResult);
   await options.github.comment(
     options.issue.number,
     buildResultComment({
@@ -1000,10 +1001,13 @@ async function finishBlocked(
       notes: agentResult.notes,
       reason: agentResult.blockedReason ?? agentResult.summary,
       trigger: options.trigger,
-      maxAttempts: options.config.run.maxAttemptsPerIssue
+      maxAttempts: options.config.run.maxAttemptsPerIssue,
+      requiresHuman
     })
   );
-  await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  if (requiresHuman) {
+    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  }
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
   return {
     number: options.issue.number,
@@ -1014,6 +1018,23 @@ async function finishBlocked(
     reason: agentResult.blockedReason ?? agentResult.summary,
     durationMs: Date.now() - started
   };
+}
+
+export function requiresHumanForBlockedAgent(agentResult: AgentResult): boolean {
+  const text = `${agentResult.blockedReason ?? ''}\n${agentResult.notes}\n${agentResult.raw}`;
+  if (isProviderCapacityBlock(text)) return false;
+  return true;
+}
+
+function isProviderCapacityBlock(text: string): boolean {
+  return [
+    /\bfailureclass\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
+    /\bfallbackreason\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
+    /\bapi_error_status["']?\s*[:=]\s*429\b/i,
+    /\b(?:http|status)\s*[:=]\s*429\b/i,
+    /\bagent command timed out after \d+ms\b/i,
+    /["']result["']\s*:\s*["'][^"']*(session limit|rate limit exceeded|too many requests)/i
+  ].some((pattern) => pattern.test(text));
 }
 
 async function finishFailed(

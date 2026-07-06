@@ -23,7 +23,7 @@ Use this workflow by default after opening a pull request in any repository wher
 6. Address each actionable review comment with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. Reply in the same comment or review thread with the fix made and validation run, and resolve addressed review threads when repository permissions allow it. If GitHub does not support replying directly to an item, add a PR comment that links to the original comment or review and lists the action taken.
 7. Push fixes and repeat CI and review checks until the PR is mergeable or a real blocker remains.
 8. Stop only when one of these is true:
-   - The PR is non-conflicting, required checks are passing, and there are no non-outdated unresolved review threads or actionable PR comments left. Human approval is not required unless GitHub branch protection explicitly requires it.
+   - The PR is non-conflicting, required checks are passing, and there are no unresolved review threads or actionable PR comments left. If branch protection enables required conversation resolution, outdated review threads still count until they are replied to or resolved. Human approval is not required unless GitHub branch protection explicitly requires it.
    - retry budget is exhausted.
    - an external blocker remains that cannot be fixed from the repository.
    - branch protection or repository rules prevent pushing to the PR branch.
@@ -35,6 +35,7 @@ Use this workflow by default after opening a pull request in any repository wher
 - Cap retries at 5 unless the user or project configuration gives a different limit.
 - Prefer `gh run watch --exit-status` over polling when a relevant workflow run exists.
 - Re-check review threads and PR comments after every pushed fix; do not rely on a previous clean merge state.
+- When `mergeStateStatus` is `BLOCKED` while required checks pass, inspect branch protection and fetch thread-aware review data with GraphQL. Resolve every unresolved review thread, including outdated threads, before calling the PR mergeable.
 - Do not rewrite unrelated user changes or broaden the PR scope.
 - Do not merge the PR.
 
