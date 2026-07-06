@@ -22,10 +22,26 @@ describe('blocked agent classification', () => {
     }))).toBe(false);
   });
 
+  it('does not require human input for runner sandbox app-server failures', () => {
+    expect(requiresHumanForBlockedAgent(agentResult({
+      raw: [
+        'WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)',
+        'Error: failed to initialize in-process app-server client: Operation not permitted (os error 1)',
+        '{"result":"Not logged in · Please run /login"}'
+      ].join('\n')
+    }))).toBe(false);
+  });
+
   it('keeps human-input labeling for ordinary blocked builder results', () => {
     expect(requiresHumanForBlockedAgent(agentResult({
       summary: 'Production credentials are required.',
       blockedReason: 'Needs human approval for billing credentials.'
+    }))).toBe(true);
+  });
+
+  it('keeps human-input labeling for plain login failures', () => {
+    expect(requiresHumanForBlockedAgent(agentResult({
+      raw: '{"result":"Not logged in · Please run /login"}'
     }))).toBe(true);
   });
 
