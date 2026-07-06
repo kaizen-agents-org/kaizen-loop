@@ -598,10 +598,18 @@ async function processIssue(options: {
       );
 
       if (agentResult.status === 'blocked') {
-        return withDiscoveredFollowups(await finishBlocked(options, agent, attempts, agentResult, started), discoveredFollowups);
+        return withDiscoveredFollowups(
+          await finishBlocked(options, agent, attempts, agentResult, started, isRetryableExternalBlock(agentResult)),
+          discoveredFollowups
+        );
       }
       if (agentResult.status === 'error' || agentResult.status === 'timeout') {
-        return withDiscoveredFollowups(await finishFailed(options, agent, attempts, agentResult.summary, started), discoveredFollowups);
+        return withDiscoveredFollowups(
+          await finishFailed(options, agent, attempts, agentResult.summary, started, undefined, {
+            retryableExternal: agentResult.status === 'timeout' || isRetryableExternalBlock(agentResult)
+          }),
+          discoveredFollowups
+        );
       }
 
       await commitLeftovers(workspace, options.issue, agentResult);
@@ -651,13 +659,18 @@ async function processIssue(options: {
       if (verifierResult.status === 'open_pr' || verifierResult.status === 'open_pr_with_warning') break;
       if (verifierResult.status === 'error' || verifierResult.status === 'timeout') {
         return withDiscoveredFollowups(
-          await finishFailed(options, agent, attempts, `Verifier failed: ${verifierResult.summary}`, started, verifyResults),
+          await finishFailed(options, agent, attempts, `Verifier failed: ${verifierResult.summary}`, started, verifyResults, {
+            retryableExternal: verifierResult.status === 'timeout' || isRetryableExternalText(verifierResult.summary, verifierResult.raw)
+          }),
           discoveredFollowups
         );
       }
       if (retry >= options.config.run.maxVerifyRetries) {
+        const reason = verifierBlockedReason(verifierResult);
         return withDiscoveredFollowups(
-          await finishFailed(options, agent, attempts, verifierBlockedReason(verifierResult), started, verifyResults),
+          await finishFailed(options, agent, attempts, reason, started, verifyResults, {
+            retryableExternal: isRetryableExternalText(reason, verifierResult.notes, verifierResult.raw)
+          }),
           discoveredFollowups
         );
       }
@@ -986,7 +999,8 @@ async function finishBlocked(
   agent: AgentAdapter,
   attempt: number,
   agentResult: AgentResult,
-  started: number
+  started: number,
+  retryableExternal = false
 ): Promise<RunIssueSummary> {
   await options.github.comment(
     options.issue.number,
@@ -1000,10 +1014,13 @@ async function finishBlocked(
       notes: agentResult.notes,
       reason: agentResult.blockedReason ?? agentResult.summary,
       trigger: options.trigger,
-      maxAttempts: options.config.run.maxAttemptsPerIssue
+      maxAttempts: options.config.run.maxAttemptsPerIssue,
+      retryableExternal
     })
   );
-  await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  if (!retryableExternal) {
+    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  }
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
   return {
     number: options.issue.number,
@@ -1028,7 +1045,8 @@ async function finishFailed(
   attempt: number,
   reason: string,
   started: number,
-  verifyResults?: Array<{ command: string; ok: boolean; output: string }>
+  verifyResults?: Array<{ command: string; ok: boolean; output: string }>,
+  classification: { retryableExternal?: boolean } = {}
 ): Promise<RunIssueSummary> {
   await options.github.comment(
     options.issue.number,
@@ -1042,10 +1060,11 @@ async function finishFailed(
       verifyResults,
       reason,
       trigger: options.trigger,
-      maxAttempts: options.config.run.maxAttemptsPerIssue
+      maxAttempts: options.config.run.maxAttemptsPerIssue,
+      retryableExternal: classification.retryableExternal
     })
   );
-  if (attempt >= options.config.run.maxAttemptsPerIssue) {
+  if (attempt >= options.config.run.maxAttemptsPerIssue && !classification.retryableExternal) {
     await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
   }
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
@@ -1324,6 +1343,27 @@ function verifierBlockedReason(result: VerifierResult): string {
   return result.status === 'needs_context'
     ? `Verifier needs context: ${detail}`
     : `Verifier blocked PR: ${detail}`;
+}
+
+function isRetryableExternalBlock(result: AgentResult): boolean {
+  return isRetryableExternalText(result.summary, result.blockedReason, result.notes, result.raw);
+}
+
+function isRetryableExternalText(...values: Array<string | undefined>): boolean {
+  const text = values.filter(Boolean).join('\n').toLowerCase();
+  if (!text) return false;
+  return [
+    /\b429\b/,
+    /too many requests/,
+    /rate[- ]?limit(?:ed|s)?/,
+    /session[- ]?limit/,
+    /(?:provider|codex|claude|model|session)[^.\n]*capacity/,
+    /capacity[^.\n]*(?:provider|codex|claude|model|session)/,
+    /temporarily unavailable/,
+    /overloaded/,
+    /try again later/,
+    /provider[^.\n]*(?:timed out|timeout)/
+  ].some((pattern) => pattern.test(text));
 }
 
 function withDiscoveredFollowups(

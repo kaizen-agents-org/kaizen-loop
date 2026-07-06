@@ -2119,6 +2119,72 @@ describe('runKaizen PR flow', () => {
     expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
   });
 
+  it('keeps provider capacity blocks retryable without adding needs-human', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'codex', setup: null, verify: ['npm test'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue()]));
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'blocked',
+          summary: 'Codex session capacity returned 429; retry after provider capacity recovers.',
+          notes: '',
+          blockedReason: 'Codex session-limit / 429 capacity block'
+        });
+        return result(command, args, options?.cwd, 'capacity block');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, options?.cwd, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0]).toMatchObject({
+      outcome: 'blocked',
+      reason: 'Codex session-limit / 429 capacity block'
+    });
+    const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('Blocked; retryable external dependency');
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('"retryableExternal":true');
+    const edits = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue edit'));
+    expect(edits.some(([, args]) => args.includes('--add-label') && args.includes('kaizen:needs-human'))).toBe(false);
+    expect(edits.some(([, args]) => args.includes('--add-label') && args.includes('kaizen:in-progress'))).toBe(true);
+  });
+
   it('fails an issue immediately when worktree setup fails', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

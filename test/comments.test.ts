@@ -18,6 +18,25 @@ describe('result comments', () => {
     expect(countAttempts([{ body }, { body: 'not a marker' }])).toBe(1);
   });
 
+  it('does not count retryable external dependency blocks as attempts', () => {
+    const body = buildResultComment({
+      runId: '2026-06-12T02-00-00Z',
+      issue: 42,
+      attempt: 1,
+      outcome: 'blocked',
+      agent: 'codex',
+      summary: 'Provider capacity hit a 429 rate limit',
+      reason: 'Provider capacity hit a 429 rate limit',
+      maxAttempts: 3,
+      retryableExternal: true
+    });
+
+    expect(body).toContain('Blocked; retryable external dependency');
+    expect(body).not.toContain('Blocked; needs human input');
+    expect(body).toContain('"retryableExternal":true');
+    expect(countAttempts([{ body }])).toBe(0);
+  });
+
   it('surfaces builder notes when present', () => {
     const body = buildResultComment({
       runId: '2026-06-12T02-00-00Z',

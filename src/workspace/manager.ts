@@ -69,14 +69,34 @@ export class WorkspaceManager {
 
   async runVerify(config: KaizenConfig, runDeadlineAt?: number): Promise<WorkspaceCommandResult[]> {
     const results = [];
+    let retriedOptionalDependencySetup = false;
     for (const command of config.commands.verify) {
       const result = await this.runShell(command, config.commands.verifyTimeoutMinutes * 60_000, config, runDeadlineAt);
-      results.push({
+      let commandResult = {
         command,
         ok: result.exitCode === 0,
         output: `${result.stdout}${result.stderr}`
+      };
+      if (!commandResult.ok && !retriedOptionalDependencySetup && config.commands.setup && isTransientOptionalDependencyFailure(commandResult.output)) {
+        retriedOptionalDependencySetup = true;
+        const setupResult = await this.runSetup(config, runDeadlineAt);
+        const retry = await this.runShell(command, config.commands.verifyTimeoutMinutes * 60_000, config, runDeadlineAt);
+        commandResult = {
+          command,
+          ok: retry.exitCode === 0,
+          output: formatRetriedVerificationOutput(commandResult, setupResult, {
+            command,
+            ok: retry.exitCode === 0,
+            output: `${retry.stdout}${retry.stderr}`
+          })
+        };
+      }
+      results.push({
+        command: commandResult.command,
+        ok: commandResult.ok,
+        output: commandResult.output
       });
-      if (result.exitCode !== 0) break;
+      if (!commandResult.ok) break;
     }
     return results;
   }
@@ -177,4 +197,22 @@ function matchesAny(file: string, patterns: string[]): boolean {
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]`;
+}
+
+function isTransientOptionalDependencyFailure(output: string): boolean {
+  return /@rollup\/rollup-[\w-]+/.test(output) || (/rollup/i.test(output) && /optional dependenc/i.test(output));
+}
+
+function formatRetriedVerificationOutput(
+  first: WorkspaceCommandResult,
+  setup: WorkspaceCommandResult | undefined,
+  retry: WorkspaceCommandResult
+): string {
+  return [
+    '# Initial verification failure',
+    first.output,
+    setup ? `# Setup retry: ${setup.command}\n${setup.output}` : '# Setup retry was skipped because setup is not configured.',
+    '# Verification retry',
+    retry.output
+  ].join('\n\n');
 }

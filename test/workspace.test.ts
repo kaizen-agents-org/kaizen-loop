@@ -231,6 +231,62 @@ describe('workspace branch handling', () => {
     }
   });
 
+  it('runs setup once and retries a Rollup optional dependency verification failure', async () => {
+    const calls: string[] = [];
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      const shellCommand = args.join(' ');
+      calls.push(shellCommand);
+      if (command === 'sh' && shellCommand === '-lc npm test') {
+        const verifyCalls = calls.filter((call) => call === '-lc npm test').length;
+        return verifyCalls === 1
+          ? {
+              command,
+              args,
+              cwd: options?.cwd,
+              exitCode: 1,
+              stdout: '',
+              stderr: "Error: Cannot find module '@rollup/rollup-darwin-arm64'. npm has a bug related to optional dependencies.",
+              durationMs: 1
+            }
+          : {
+              command,
+              args,
+              cwd: options?.cwd,
+              exitCode: 0,
+              stdout: 'ok',
+              stderr: '',
+              durationMs: 1
+            };
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: 'installed',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+    const workspace = new WorkspaceManager(runner, '/workspace');
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        setup: 'npm ci',
+        verify: ['npm test']
+      }
+    });
+
+    const results = await workspace.runVerify(config);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(true);
+    expect(results[0].output).toContain('Initial verification failure');
+    expect(results[0].output).toContain('Setup retry: npm ci');
+    expect(results[0].output).toContain('Verification retry');
+    expect(calls).toEqual(['-lc npm test', '-lc npm ci', '-lc npm test']);
+  });
+
   it('caps verification command timeout at the remaining run deadline', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
     const workspacePath = path.join(root, 'workspace');
