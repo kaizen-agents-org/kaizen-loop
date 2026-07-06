@@ -286,6 +286,57 @@ describe('runPrGuardianSkill', () => {
     expect(jobs[0].attemptCount).toBe(2);
   });
 
+  it('blocks stale running guardian jobs that exhausted their retry budget', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({
+        ...job,
+        status: 'running',
+        attemptCount: 2,
+        updatedAt: '2026-06-12T00:00:00Z',
+        lastCheckedAt: '2026-06-12T00:00:00Z'
+      }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+    const storedJobs = await listPrGuardianJobs(stateDir);
+
+    expect(jobs).toEqual([]);
+    expect(runner).not.toHaveBeenCalled();
+    expect(storedJobs[0].status).toBe('blocked');
+    expect(storedJobs[0].attemptCount).toBe(2);
+    expect(storedJobs[0].lastBlocker).toBe('PR guardian retry budget exhausted after 2 attempts.');
+  });
+
   it('leaves active running guardian jobs alone', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
