@@ -257,4 +257,101 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls[0][2]?.timeoutMs).toBeLessThanOrEqual(2_000);
     expect(runner.mock.calls[0][2]?.timeoutMs).toBeGreaterThan(0);
   });
+
+  it('repairs transient Rollup optional dependency verification failures once', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    let verifyAttempts = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      const shellCommand = args.at(-1);
+      if (shellCommand === 'pnpm test') {
+        verifyAttempts += 1;
+        return {
+          command,
+          args,
+          cwd: options?.cwd,
+          exitCode: verifyAttempts === 1 ? 1 : 0,
+          stdout: verifyAttempts === 1 ? '' : 'ok\n',
+          stderr:
+            verifyAttempts === 1
+              ? [
+                  "Error: Cannot find module '@rollup/rollup-darwin-x64'",
+                  'npm has a bug related to optional dependencies'
+                ].join('\n')
+              : '',
+          durationMs: 1
+        };
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: 'installed\n',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+    const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        setup: 'pnpm install --frozen-lockfile',
+        verify: ['pnpm test'],
+        verifyTimeoutMinutes: 15
+      }
+    });
+
+    const results = await workspace.runVerify(config);
+
+    expect(results).toEqual([
+      {
+        command: 'pnpm test',
+        ok: true,
+        output: expect.stringContaining('# kaizen-loop dependency repair: retrying verification command')
+      }
+    ]);
+    expect(results[0].output).toContain("Cannot find module '@rollup/rollup-darwin-x64'");
+    expect(results[0].output).toContain('installed');
+    expect(results[0].output).toContain('ok');
+    expect(runner.mock.calls.map(([, args]) => args.at(-1))).toEqual([
+      'pnpm test',
+      'pnpm install --frozen-lockfile',
+      'pnpm test'
+    ]);
+  });
+
+  it('does not run setup for ordinary verification failures', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 1,
+      stdout: '',
+      stderr: 'AssertionError: expected true to be false\n',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        setup: 'pnpm install --frozen-lockfile',
+        verify: ['pnpm test'],
+        verifyTimeoutMinutes: 15
+      }
+    });
+
+    const results = await workspace.runVerify(config);
+
+    expect(results).toEqual([
+      {
+        command: 'pnpm test',
+        ok: false,
+        output: 'AssertionError: expected true to be false\n'
+      }
+    ]);
+    expect(runner).toHaveBeenCalledOnce();
+  });
 });

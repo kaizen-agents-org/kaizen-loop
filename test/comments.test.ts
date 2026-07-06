@@ -33,4 +33,29 @@ describe('result comments', () => {
     expect(body).toContain('### Notes');
     expect(body).toContain('Protected path changed');
   });
+
+  it('distinguishes retryable external blocks from human-input blocks', () => {
+    const retryable = buildResultComment({
+      runId: '2026-06-12T02-00-00Z',
+      issue: 42,
+      attempt: 1,
+      outcome: 'blocked',
+      agent: 'codex',
+      summary: 'provider capacity exhausted',
+      requiresHuman: false,
+      maxAttempts: 3
+    });
+    const human = buildResultComment({
+      runId: '2026-06-12T02-00-00Z',
+      issue: 43,
+      attempt: 1,
+      outcome: 'blocked',
+      agent: 'codex',
+      summary: 'needs credentials',
+      maxAttempts: 3
+    });
+
+    expect(retryable).toContain('Blocked; retryable external dependency');
+    expect(human).toContain('Blocked; needs human input');
+  });
 });

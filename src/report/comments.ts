@@ -15,6 +15,7 @@ export interface ResultCommentOptions {
   reason?: string;
   trigger?: string;
   maxAttempts: number;
+  requiresHuman?: boolean;
 }
 
 export function buildResultComment(options: ResultCommentOptions): string {
@@ -115,7 +116,7 @@ function pullRequestNumber(value: string): number | undefined {
 function formatOutcome(options: ResultCommentOptions): string {
   if (options.outcome === 'pr-created') return `PR created${options.prUrl ? ` (${options.prUrl})` : ''}`;
   if (options.outcome === 'direct-commit') return `Direct commit${options.commit ? ` (${options.commit})` : ''}`;
-  if (options.outcome === 'blocked') return 'Blocked; needs human input';
+  if (options.outcome === 'blocked') return options.requiresHuman === false ? 'Blocked; retryable external dependency' : 'Blocked; needs human input';
   if (options.outcome === 'skipped') return 'Skipped';
   return 'Failed';
 }
