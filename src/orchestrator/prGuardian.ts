@@ -180,6 +180,18 @@ export async function runPrGuardianSkill(
   const rawOutputs: string[] = [];
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (attempt > 1) {
+        const preflightReviewThreads = await listUnresolvedReviewThreads(runCommand, req);
+        if (preflightReviewThreads.length === 0) {
+          return {
+            status: 'success',
+            summary: 'PR guardian skill completed; no unresolved review threads remain.',
+            raw: rawOutputs.join('\n'),
+            durationMs: Date.now() - startMs
+          };
+        }
+      }
+
       const result = await runCommand(
         req.config.guardian.command,
         [
@@ -388,7 +400,7 @@ async function listUnresolvedReviewThreads(
     const reviewThreads = response.data?.repository?.pullRequest?.reviewThreads;
     if (!reviewThreads) throw new Error('Could not inspect PR review threads: response did not include reviewThreads.');
     for (const thread of reviewThreads?.nodes ?? []) {
-      if (thread.isResolved || thread.isOutdated) continue;
+      if (thread.isResolved) continue;
       const firstComment = thread.comments?.nodes?.[0];
       unresolved.push({
         path: thread.path ?? '(unknown path)',
@@ -451,7 +463,7 @@ Requirements:
 - Fetch inline review threads and PR comments with resolution state using paginated GraphQL/API reads, iterating until hasNextPage=false, for example via PullRequest.reviewThreads, so unresolved actionable feedback cannot be missed.
 - Address every unresolved actionable review thread, PR comment, and check annotation with focused commits or an explicit disposition, then push any fixes. If you can resolve an addressed review thread, resolve it after replying with the disposition.
 - Reply in the same review thread or comment for each addressed review item with the action taken and validation run. If GitHub does not support a threaded reply for that item, add a PR comment that links to the original comment or review and lists the action taken.
-- Stop only when the PR is non-conflicting, required checks are passing, and no non-outdated unresolved review threads or actionable PR comments remain. A missing approval or reviewDecision other than APPROVED is not a blocker by itself; inspect comments again after every pushed fix.
+- Stop only when the PR is non-conflicting, required checks are passing, and no unresolved review threads or actionable PR comments remain. If branch protection requires conversation resolution, outdated unresolved threads still block merging until they are resolved. A missing approval or reviewDecision other than APPROVED is not a blocker by itself; inspect comments again after every pushed fix.
 - Do not merge the PR.
 - Before finishing, comment on the PR with final mergeability, watched runs, fixes pushed, feedback addressed, unresolved/skipped feedback with reasons, and remaining blockers.`;
 }

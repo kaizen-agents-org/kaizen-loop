@@ -40,7 +40,8 @@ describe('runPrGuardianSkill', () => {
     expect(prompt).toContain('hasNextPage=false');
     expect(prompt).toContain('Reply in the same review thread or comment');
     expect(prompt).toContain('links to the original comment or review');
-    expect(prompt).toContain('no non-outdated unresolved review threads or actionable PR comments remain');
+    expect(prompt).toContain('no unresolved review threads or actionable PR comments remain');
+    expect(prompt).toContain('outdated unresolved threads still block merging');
     expect(prompt).toContain('missing approval or reviewDecision other than APPROVED is not a blocker');
     expect(prompt).toContain('required checks are passing');
     expect(prompt).toContain('unresolved/skipped feedback with reasons');
@@ -77,6 +78,85 @@ describe('runPrGuardianSkill', () => {
     expect(result.summary).toContain('unresolved review feedback');
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(3);
+  });
+
+  it('treats outdated unresolved review threads as blockers', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? reviewThreadsResponse([{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please resolve this.', isOutdated: true }])
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('unresolved review feedback');
+    expect(result.raw).toContain('src/file.ts:12 by reviewer');
+  });
+
+  it('does not rerun the guardian command when retry preflight finds no unresolved threads', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 3, reviewSettleSeconds: 0 }
+    });
+    let reviewFetches = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh') {
+        reviewFetches += 1;
+        return {
+          command,
+          args,
+          cwd: options?.cwd,
+          exitCode: 0,
+          stdout: reviewFetches === 1
+            ? reviewThreadsResponse([{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please resolve this.', isOutdated: true }])
+            : reviewThreadsResponse([]),
+          stderr: '',
+          durationMs: 1
+        };
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: 'guardian pass complete',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(2);
   });
 
@@ -385,7 +465,7 @@ describe('runPrGuardianSkill', () => {
   });
 });
 
-function reviewThreadsResponse(threads: Array<{ path: string; line: number; author: string; body: string }>): string {
+function reviewThreadsResponse(threads: Array<{ path: string; line: number; author: string; body: string; isOutdated?: boolean }>): string {
   return JSON.stringify({
     data: {
       repository: {
@@ -397,7 +477,7 @@ function reviewThreadsResponse(threads: Array<{ path: string; line: number; auth
             },
             nodes: threads.map((thread) => ({
               isResolved: false,
-              isOutdated: false,
+              isOutdated: thread.isOutdated ?? false,
               path: thread.path,
               line: thread.line,
               comments: {

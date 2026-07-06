@@ -53,6 +53,32 @@ describe('evaluateIssueIntake', () => {
     }).status).toBe('proceed');
   });
 
+  it('does not treat slash-separated prose as upstream repositories', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        body: 'Make .github/docs canonical and fix evaluation/playbook drift in the repo copy.'
+      })
+    }).status).toBe('proceed');
+
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        body: 'Add checks for source prompt paths/components so automation docs do not drift from the canonical source.'
+      })
+    }).status).toBe('proceed');
+
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        body: 'Update the playbook checklist/progress log to reflect A-3/A-4 completion.'
+      })
+    }).status).toBe('proceed');
+  });
+
   it('rejects recommended actions that weaken review guardrails', () => {
     const decision = evaluateIssueIntake({
       repo: 'o/r',

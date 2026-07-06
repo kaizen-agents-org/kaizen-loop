@@ -99,19 +99,30 @@ function alreadyResolvedText(normalized: string): boolean {
 }
 
 function referencedUpstreamRepo(text: string, currentRepo: string): string | undefined {
+  const [currentOwner] = currentRepo.split('/');
   const urlRepos = [...text.matchAll(/(?:https?:\/\/)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=$|[/?#\s).,;:'"`\]])/g)]
     .map((match) => match[1]);
   const bareRepos = [...text.matchAll(/(?:^|[\s([`])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)(?=$|[\s).,;:'"`\]])/g)]
     .map((match) => match[1])
-    .filter((repo) => !isPathLikeRepoReference(repo));
+    .filter((repo) => !isPathLikeRepoReference(repo, currentOwner));
   return [...urlRepos, ...bareRepos].find((repo) => repo !== currentRepo);
 }
 
-function isPathLikeRepoReference(repo: string): boolean {
+function isPathLikeRepoReference(repo: string, currentOwner: string | undefined): boolean {
   const [owner, name] = repo.split('/');
   if (!owner || !name) return true;
   if (['docs', 'src', 'test', 'tests', 'scripts', 'dist', 'lib'].includes(owner.toLowerCase())) return true;
+  if (isChecklistItemReference(owner) || isChecklistItemReference(name)) return true;
+  if (!isLikelyBareRepoOwner(owner, currentOwner) && !name.startsWith('.')) return true;
   return !name.startsWith('.') && /\.[A-Za-z0-9]{1,8}$/.test(name);
+}
+
+function isChecklistItemReference(part: string): boolean {
+  return /^[A-Za-z]-\d+$/.test(part);
+}
+
+function isLikelyBareRepoOwner(owner: string, currentOwner: string | undefined): boolean {
+  return owner === currentOwner || owner.includes('-') || owner.includes('.');
 }
 
 function mentionsSourceOfTruthSync(normalized: string): boolean {
