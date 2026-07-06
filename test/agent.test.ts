@@ -214,6 +214,28 @@ describe('buildVerifierPrompt', () => {
     expect(prompt).toContain('NOT approving the change for merge');
   });
 
+  it('requests verifier evidence grade in the output contract', () => {
+    const prompt = buildVerifierPrompt({
+      repo: 'o/r',
+      issue: {
+        number: 7,
+        title: 'Fix bug',
+        body: 'body',
+        labels: [{ name: 'kaizen' }],
+        createdAt: '2026-06-13T00:00:00Z',
+        comments: []
+      },
+      agentResult: { status: 'fixed', summary: '直した', notes: '', raw: '', durationMs: 1 },
+      verifyResults: [{ command: 'npm test', ok: true, output: 'PASS\n' }],
+      diff: { changedFiles: 1, changedLines: 1, files: ['src/file.ts'], forbiddenFiles: [], protectedFiles: [] },
+      diffText: 'diff --git a/src/file.ts b/src/file.ts'
+    });
+
+    expect(prompt).toContain('"evidence_grade": "executed"');
+    expect(prompt).toContain('Set "evidence_grade" to "executed"');
+    expect(prompt).toContain('Set it to "reported"');
+  });
+
   it('includes diff text and verification log evidence', () => {
     const prompt = buildVerifierPrompt({
       repo: 'o/r',
