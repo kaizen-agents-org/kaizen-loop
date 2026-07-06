@@ -354,6 +354,51 @@ describe('goal commands', () => {
     const mechanicalCall = runner.mock.calls.find(([command, args]) => command === 'sh' && args.join(' ') === '-lc npm run goal-check');
     expect(mechanicalCall?.[2]?.cwd).toBe(workspace);
   });
+
+  it('includes previous mechanical evaluation failure output in the next iteration issue body', async () => {
+    const { repo, workspace } = await setupProject({ maxIterations: 2, evaluationCommand: 'npm run goal-check' });
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Improve onboarding',
+      description: 'Make first-run setup reliable.',
+      successCriteria: ['goal-check passes'],
+      constraints: []
+    });
+    const longFailureOutput = `${'setup log line\n'.repeat(700)}goal check failed at final assertion`;
+    const runner = goalRunner({
+      repo,
+      workspace,
+      evaluationStatus: 'succeeded',
+      failMechanicalEvaluation: true,
+      mechanicalEvaluationOutput: longFailureOutput
+    });
+
+    const result = await runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect(result.status).toBe('blocked');
+    expect(result.finalReason).toBe('maxIterations(2) reached');
+    expect(result.iterations).toHaveLength(2);
+
+    const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'create');
+    expect(issueCreates).toHaveLength(2);
+    const firstBody = issueBodyArg(issueCreates[0][1]);
+    const secondBody = issueBodyArg(issueCreates[1][1]);
+    expect(firstBody).not.toContain('## Previous Mechanical Evaluation Failure');
+    expect(secondBody).toContain('## Previous Mechanical Evaluation Failure');
+    expect(secondBody).toContain('### Command');
+    expect(secondBody).toContain('    npm run goal-check');
+    expect(secondBody).toContain('### Output');
+    expect(secondBody).toContain('    [truncated to last 8000 characters]');
+    expect(secondBody).toContain('goal check failed at final assertion');
+  });
 });
 
 async function setupProject(options: { maxIterations?: number; evaluationCommand?: string } = {}) {
@@ -400,6 +445,7 @@ function goalRunner(options: {
   invalidPlanner?: boolean;
   invalidEvaluator?: boolean;
   failMechanicalEvaluation?: boolean;
+  mechanicalEvaluationOutput?: string;
 }) {
   return vi.fn<CommandRunner>(async (command, args, runOptions) => {
     if (command === 'goal-agent') {
@@ -457,8 +503,11 @@ function goalRunner(options: {
     if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, runOptions?.cwd, options.noDiff ? '' : 'src/file.ts\n');
     if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, runOptions?.cwd, options.noDiff ? '' : '1\t0\tsrc/file.ts\n');
     if (command === 'sh' && args.join(' ') === '-lc npm run goal-check') {
+      const output = options.failMechanicalEvaluation
+        ? options.mechanicalEvaluationOutput ?? 'goal check failed'
+        : 'goal check passed';
       return {
-        ...result(command, args, runOptions?.cwd, options.failMechanicalEvaluation ? 'goal check failed' : 'goal check passed'),
+        ...result(command, args, runOptions?.cwd, output),
         exitCode: options.failMechanicalEvaluation ? 1 : 0
       };
     }
@@ -508,6 +557,10 @@ function githubReadinessResult(command: string, args: string[], cwd: string | un
     );
   }
   return result(command, args, cwd, '');
+}
+
+function issueBodyArg(args: string[]) {
+  return String(args[args.indexOf('--body') + 1]);
 }
 
 async function writeJsonResult(filePath: unknown, payload: unknown) {
