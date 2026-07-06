@@ -121,6 +121,7 @@ function formatOutcome(options: ResultCommentOptions): string {
   if (options.outcome === 'pr-created') return `PR created${options.prUrl ? ` (${options.prUrl})` : ''}`;
   if (options.outcome === 'direct-commit') return `Direct commit${options.commit ? ` (${options.commit})` : ''}`;
   if (options.outcome === 'blocked') return options.retryableExternal ? 'Blocked; retryable external dependency' : 'Blocked; needs human input';
+  if (options.outcome === 'failed' && options.retryableExternal) return 'Failed; retryable external dependency';
   if (options.outcome === 'skipped') return 'Skipped';
   return 'Failed';
 }

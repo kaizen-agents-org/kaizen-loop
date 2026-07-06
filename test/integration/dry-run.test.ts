@@ -2185,6 +2185,86 @@ describe('runKaizen PR flow', () => {
     expect(edits.some(([, args]) => args.includes('--add-label') && args.includes('kaizen:in-progress'))).toBe(true);
   });
 
+  it('keeps verifier provider capacity blocks retryable without adding needs-human', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith(
+        { run: { maxVerifyRetries: 0 } },
+        { agent: 'codex', setup: null, verify: ['npm test'] }
+      )
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue()]));
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
+          status: 'block_pr',
+          summary: 'Codex verifier timed out waiting for provider capacity; Claude fallback hit rate limits.',
+          notes: 'Retry after provider capacity recovers.',
+          evidence_grade: 'reported'
+        });
+        return result(command, args, workspace, 'capacity block');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --no-ext-diff origin/main...HEAD') {
+        return result(command, args, workspace, 'diff --git a/src/file.ts b/src/file.ts\n+const fixed = true;\n');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0]).toMatchObject({
+      outcome: 'failed',
+      reason: 'Verifier blocked PR: Codex verifier timed out waiting for provider capacity; Claude fallback hit rate limits.'
+    });
+    const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('Failed; retryable external dependency');
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('"retryableExternal":true');
+    const edits = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue edit'));
+    expect(edits.some(([, args]) => args.includes('--add-label') && args.includes('kaizen:needs-human'))).toBe(false);
+    expect(edits.some(([, args]) => args.includes('--remove-label') && args.includes('kaizen:in-progress'))).toBe(true);
+  });
+
   it('fails an issue immediately when worktree setup fails', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

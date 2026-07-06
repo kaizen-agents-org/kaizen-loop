@@ -1362,7 +1362,8 @@ function isRetryableExternalText(...values: Array<string | undefined>): boolean 
     /temporarily unavailable/,
     /overloaded/,
     /try again later/,
-    /provider[^.\n]*(?:timed out|timeout)/
+    /(?:provider|codex|claude|model|api|upstream|service)[^.\n]*(?:timed out|timeout)/,
+    /(?:timed out|timeout)[^.\n]*(?:provider|codex|claude|model|api|upstream|service)/
   ].some((pattern) => pattern.test(text));
 }
 

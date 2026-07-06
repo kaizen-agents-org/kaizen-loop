@@ -37,6 +37,24 @@ describe('result comments', () => {
     expect(countAttempts([{ body }])).toBe(0);
   });
 
+  it('labels retryable external failed results distinctly', () => {
+    const body = buildResultComment({
+      runId: '2026-06-12T02-00-00Z',
+      issue: 42,
+      attempt: 1,
+      outcome: 'failed',
+      agent: 'verifier',
+      summary: 'Verifier timed out waiting for provider capacity',
+      reason: 'Verifier timed out waiting for provider capacity',
+      maxAttempts: 3,
+      retryableExternal: true
+    });
+
+    expect(body).toContain('Failed; retryable external dependency');
+    expect(body).not.toContain('| Result | Failed |');
+    expect(countAttempts([{ body }])).toBe(0);
+  });
+
   it('surfaces builder notes when present', () => {
     const body = buildResultComment({
       runId: '2026-06-12T02-00-00Z',
