@@ -1021,24 +1021,20 @@ async function finishBlocked(
 }
 
 export function requiresHumanForBlockedAgent(agentResult: AgentResult): boolean {
-  const text = `${agentResult.summary}\n${agentResult.blockedReason ?? ''}\n${agentResult.notes}\n${agentResult.raw}`.toLowerCase();
+  const text = `${agentResult.blockedReason ?? ''}\n${agentResult.notes}\n${agentResult.raw}`;
   if (isProviderCapacityBlock(text)) return false;
   return true;
 }
 
 function isProviderCapacityBlock(text: string): boolean {
   return [
-    'rate_limited',
-    'rate limited',
-    'session limit',
-    'api_error_status":429',
-    'api error status 429',
-    'http 429',
-    'fallbackreason=timeout',
-    'failureclass=timeout',
-    'agent command timed out',
-    'command timed out'
-  ].some((pattern) => text.includes(pattern));
+    /\bfailureclass\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
+    /\bfallbackreason\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
+    /\bapi_error_status["']?\s*[:=]\s*429\b/i,
+    /\b(?:http|status)\s*[:=]\s*429\b/i,
+    /\bagent command timed out after \d+ms\b/i,
+    /["']result["']\s*:\s*["'][^"']*session limit/i
+  ].some((pattern) => pattern.test(text));
 }
 
 async function finishFailed(

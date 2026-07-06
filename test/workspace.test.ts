@@ -321,6 +321,60 @@ describe('workspace branch handling', () => {
     ]);
   });
 
+  it('does not retry verification when dependency repair setup fails', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    let verifyAttempts = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      const shellCommand = args.at(-1);
+      if (shellCommand === 'pnpm test') {
+        verifyAttempts += 1;
+        return {
+          command,
+          args,
+          cwd: options?.cwd,
+          exitCode: 1,
+          stdout: '',
+          stderr: [
+            "Error: Cannot find module '@rollup/rollup-darwin-x64'",
+            'npm has a bug related to optional dependencies'
+          ].join('\n'),
+          durationMs: 1
+        };
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 1,
+        stdout: '',
+        stderr: 'install failed\n',
+        durationMs: 1
+      };
+    });
+    const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        setup: 'pnpm install --frozen-lockfile',
+        verify: ['pnpm test'],
+        verifyTimeoutMinutes: 15
+      }
+    });
+
+    const results = await workspace.runVerify(config);
+
+    expect(results[0].ok).toBe(false);
+    expect(results[0].output).toContain("Cannot find module '@rollup/rollup-darwin-x64'");
+    expect(results[0].output).toContain('install failed');
+    expect(results[0].output).not.toContain('retrying verification command');
+    expect(verifyAttempts).toBe(1);
+    expect(runner.mock.calls.map(([, args]) => args.at(-1))).toEqual([
+      'pnpm test',
+      'pnpm install --frozen-lockfile'
+    ]);
+  });
+
   it('does not run setup for ordinary verification failures', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
     const workspacePath = path.join(root, 'workspace');

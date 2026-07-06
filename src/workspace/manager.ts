@@ -89,8 +89,9 @@ export class WorkspaceManager {
       return result;
     }
 
-    const setup = await this.runShell(config.commands.setup, undefined, config, runDeadlineAt);
-    const retried = setup.exitCode === 0
+    const setup = await this.runSetup(config, runDeadlineAt);
+    if (!setup) return result;
+    const retried = setup.ok
       ? await this.runShell(command, timeoutMs, config, runDeadlineAt)
       : result;
     const retryOutput = retried === result ? '' : `${retried.stdout}${retried.stderr}`;
@@ -100,9 +101,8 @@ export class WorkspaceManager {
         output,
         '',
         `# kaizen-loop dependency repair: ${config.commands.setup}`,
-        setup.stdout,
-        setup.stderr,
-        setup.exitCode === 0 ? '# kaizen-loop dependency repair: retrying verification command' : '',
+        setup.output,
+        setup.ok ? '# kaizen-loop dependency repair: retrying verification command' : '',
         retryOutput
       ].filter(Boolean).join('\n'),
       stderr: ''

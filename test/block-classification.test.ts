@@ -22,6 +22,14 @@ describe('blocked agent classification', () => {
       blockedReason: 'Needs human approval for billing credentials.'
     }))).toBe(true);
   });
+
+  it('does not treat free-form retry wording as provider capacity evidence', () => {
+    expect(requiresHumanForBlockedAgent(agentResult({
+      summary: 'Add a rate limited retry scenario to the fixture corpus.',
+      notes: 'This issue mentions http 429 and session limit behavior in the task description, but credentials are missing.',
+      blockedReason: 'Needs human approval for fixture access.'
+    }))).toBe(true);
+  });
 });
 
 function agentResult(overrides: Partial<AgentResult>): AgentResult {
