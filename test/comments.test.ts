@@ -56,6 +56,9 @@ describe('result comments', () => {
     });
 
     expect(retryable).toContain('Blocked; retryable external dependency');
+    expect(retryable).toContain('"retryableExternal":true');
+    expect(countAttempts([{ body: retryable }])).toBe(0);
     expect(human).toContain('Blocked; needs human input');
+    expect(countAttempts([{ body: human }])).toBe(1);
   });
 });

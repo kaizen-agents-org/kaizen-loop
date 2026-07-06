@@ -29,7 +29,8 @@ export function buildResultComment(options: ResultCommentOptions): string {
     outcome: options.outcome,
     trigger: options.trigger,
     commit: options.commit,
-    pr: options.prUrl
+    pr: options.prUrl,
+    retryableExternal: options.requiresHuman === false || undefined
   };
 
   return `## Kaizen Loop result
@@ -72,7 +73,10 @@ PR created (${options.prUrl}); monitoring CI and review feedback with pr-guardia
 }
 
 export function countAttempts(comments: Array<{ body: string }>): number {
-  return comments.filter((comment) => /<!--\s*kaizen-loop:result\s+{/.test(comment.body)).length;
+  return comments.filter((comment) => {
+    const marker = parseKaizenMarker(comment.body, 'result');
+    return marker !== undefined && !marker.retryableExternal;
+  }).length;
 }
 
 export function hasPendingPullRequest(comments: Array<{ body: string }>, openPullRequests: GitHubPullRequest[] = []): boolean {
@@ -93,11 +97,11 @@ export function agentSummary(result: AgentResult): string {
   return result.summary;
 }
 
-function parseKaizenMarker(body: string, kind: 'result' | 'progress'): { outcome?: string; pr?: string } | undefined {
+function parseKaizenMarker(body: string, kind: 'result' | 'progress'): { outcome?: string; pr?: string; retryableExternal?: boolean } | undefined {
   const match = body.match(new RegExp(`<!--\\s*kaizen-loop:${kind}\\s+({.*?})\\s*-->`, 's'));
   if (!match) return undefined;
   try {
-    return JSON.parse(match[1]) as { outcome?: string; pr?: string };
+    return JSON.parse(match[1]) as { outcome?: string; pr?: string; retryableExternal?: boolean };
   } catch {
     return undefined;
   }
