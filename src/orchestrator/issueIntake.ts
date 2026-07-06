@@ -112,8 +112,13 @@ function isPathLikeRepoReference(repo: string, currentOwner: string | undefined)
   const [owner, name] = repo.split('/');
   if (!owner || !name) return true;
   if (['docs', 'src', 'test', 'tests', 'scripts', 'dist', 'lib'].includes(owner.toLowerCase())) return true;
+  if (isChecklistItemReference(owner) || isChecklistItemReference(name)) return true;
   if (!isLikelyBareRepoOwner(owner, currentOwner) && !name.startsWith('.')) return true;
   return !name.startsWith('.') && /\.[A-Za-z0-9]{1,8}$/.test(name);
+}
+
+function isChecklistItemReference(part: string): boolean {
+  return /^[A-Za-z]-\d+$/.test(part);
 }
 
 function isLikelyBareRepoOwner(owner: string, currentOwner: string | undefined): boolean {

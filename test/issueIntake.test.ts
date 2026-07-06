@@ -69,6 +69,14 @@ describe('evaluateIssueIntake', () => {
         body: 'Add checks for source prompt paths/components so automation docs do not drift from the canonical source.'
       })
     }).status).toBe('proceed');
+
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        body: 'Update the playbook checklist/progress log to reflect A-3/A-4 completion.'
+      })
+    }).status).toBe('proceed');
   });
 
   it('rejects recommended actions that weaken review guardrails', () => {
