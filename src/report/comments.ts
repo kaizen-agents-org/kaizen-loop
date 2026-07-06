@@ -75,7 +75,7 @@ PR created (${options.prUrl}); monitoring CI and review feedback with pr-guardia
 export function countAttempts(comments: Array<{ body: string }>): number {
   return comments.filter((comment) => {
     const marker = parseKaizenMarker(comment.body, 'result');
-    return marker !== undefined && !marker.retryableExternal;
+    return marker !== undefined && !marker.retryableExternal && !hasRetryableExternalEvidence(comment.body);
   }).length;
 }
 
@@ -123,6 +123,17 @@ function formatOutcome(options: ResultCommentOptions): string {
   if (options.outcome === 'blocked') return options.requiresHuman === false ? 'Blocked; retryable external dependency' : 'Blocked; needs human input';
   if (options.outcome === 'skipped') return 'Skipped';
   return 'Failed';
+}
+
+function hasRetryableExternalEvidence(body: string): boolean {
+  return [
+    /\bfailureclass\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
+    /\bfallbackreason\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
+    /\bapi_error_status["']?\s*[:=]\s*429\b/i,
+    /\b(?:http|status)\s*[:=]\s*429\b/i,
+    /\bagent command timed out after \d+ms\b/i,
+    /["']result["']\s*:\s*["'][^"']*(session limit|rate limit exceeded|too many requests)/i
+  ].some((pattern) => pattern.test(body));
 }
 
 function formatNotes(notes: string | undefined): string {

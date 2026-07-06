@@ -61,4 +61,18 @@ describe('result comments', () => {
     expect(human).toContain('Blocked; needs human input');
     expect(countAttempts([{ body: human }])).toBe(1);
   });
+
+  it('does not count legacy retryable provider blocks as attempts', () => {
+    const legacyBody = [
+      '## Kaizen Loop result',
+      '| Result | Blocked; needs human input |',
+      'Provider evidence:',
+      '- codex: exitCode=1, status=fallback, failureClass=timeout, fallbackReason=timeout, payloadSource=none',
+      'Agent command timed out after 600000ms.',
+      '{"api_error_status":429,"result":"You have hit your session limit"}',
+      '<!-- kaizen-loop:result {"run":"2026-07-06T03-15-50Z","issue":81,"attempt":1,"outcome":"blocked","trigger":"instant"} -->'
+    ].join('\n');
+
+    expect(countAttempts([{ body: legacyBody }])).toBe(0);
+  });
 });
