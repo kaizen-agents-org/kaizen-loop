@@ -180,6 +180,18 @@ export async function runPrGuardianSkill(
   const rawOutputs: string[] = [];
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (attempt > 1) {
+        const preflightReviewThreads = await listUnresolvedReviewThreads(runCommand, req);
+        if (preflightReviewThreads.length === 0) {
+          return {
+            status: 'success',
+            summary: 'PR guardian skill completed; no unresolved review threads remain.',
+            raw: rawOutputs.join('\n'),
+            durationMs: Date.now() - startMs
+          };
+        }
+      }
+
       const result = await runCommand(
         req.config.guardian.command,
         [

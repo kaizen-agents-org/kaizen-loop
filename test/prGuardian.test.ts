@@ -78,7 +78,7 @@ describe('runPrGuardianSkill', () => {
     expect(result.summary).toContain('unresolved review feedback');
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
-    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(2);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(3);
   });
 
   it('treats outdated unresolved review threads as blockers', async () => {
@@ -111,6 +111,53 @@ describe('runPrGuardianSkill', () => {
     expect(result.status).toBe('failed');
     expect(result.summary).toContain('unresolved review feedback');
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
+  });
+
+  it('does not rerun the guardian command when retry preflight finds no unresolved threads', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 3, reviewSettleSeconds: 0 }
+    });
+    let reviewFetches = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh') {
+        reviewFetches += 1;
+        return {
+          command,
+          args,
+          cwd: options?.cwd,
+          exitCode: 0,
+          stdout: reviewFetches === 1
+            ? reviewThreadsResponse([{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please resolve this.', isOutdated: true }])
+            : reviewThreadsResponse([]),
+          stderr: '',
+          durationMs: 1
+        };
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: 'guardian pass complete',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(2);
   });
 
   it('waits once for late bot review threads before declaring success', async () => {
