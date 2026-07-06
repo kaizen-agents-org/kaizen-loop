@@ -75,4 +75,18 @@ describe('result comments', () => {
 
     expect(countAttempts([{ body: legacyBody }])).toBe(0);
   });
+
+  it('does not count legacy runner sandbox blocks as attempts', () => {
+    const legacyBody = [
+      '## Kaizen Loop result',
+      '| Result | Blocked; needs human input |',
+      'Raw output tail:',
+      'WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)',
+      'Error: failed to initialize in-process app-server client: Operation not permitted (os error 1)',
+      '{"result":"Not logged in · Please run /login"}',
+      '<!-- kaizen-loop:result {"run":"2026-07-06T06-07-27Z","issue":81,"attempt":2,"outcome":"blocked","trigger":"instant"} -->'
+    ].join('\n');
+
+    expect(countAttempts([{ body: legacyBody }])).toBe(0);
+  });
 });
