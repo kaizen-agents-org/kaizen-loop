@@ -1033,7 +1033,7 @@ function isProviderCapacityBlock(text: string): boolean {
     /\bapi_error_status["']?\s*[:=]\s*429\b/i,
     /\b(?:http|status)\s*[:=]\s*429\b/i,
     /\bagent command timed out after \d+ms\b/i,
-    /["']result["']\s*:\s*["'][^"']*session limit/i
+    /["']result["']\s*:\s*["'][^"']*(session limit|rate limit exceeded|too many requests)/i
   ].some((pattern) => pattern.test(text));
 }
 

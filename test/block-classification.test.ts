@@ -16,6 +16,12 @@ describe('blocked agent classification', () => {
     }))).toBe(false);
   });
 
+  it('does not require human input for structured too-many-requests results', () => {
+    expect(requiresHumanForBlockedAgent(agentResult({
+      raw: '{"result":"429 Too Many Requests: rate limit exceeded"}'
+    }))).toBe(false);
+  });
+
   it('keeps human-input labeling for ordinary blocked builder results', () => {
     expect(requiresHumanForBlockedAgent(agentResult({
       summary: 'Production credentials are required.',
