@@ -140,6 +140,7 @@ Return "open_pr" when opening a PR is acceptable and you have no caveats.
 Return "open_pr_with_warning" when opening a PR is acceptable but a caveat must be surfaced to the human reviewer (put the caveat in "reason").
 Return "block_pr" when the builder must revise the change before a PR is opened (put the required change in "reason").
 Return "needs_context" when you cannot decide because information is missing (put what is needed in "reason").
+Set "evidence_grade" to "executed" only when your decision is backed by the mechanical verification logs or commands shown above. Set it to "reported" when your decision depends on builder or issue text without execution proof.
 
 # Final response
 
@@ -150,7 +151,8 @@ After completing the review, make your final response only this JSON in a json c
   "status": "open_pr",
   "summary": "What you verified, in Japanese, within 3 lines.",
   "notes": "",
-  "reason": ""
+  "reason": "",
+  "evidence_grade": "executed"
 }
 \`\`\``;
 }

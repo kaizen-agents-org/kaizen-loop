@@ -1095,15 +1095,13 @@ function buildPullRequestBody(
     ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
     : '- Verification commands are not configured';
   const notes = agentResult.notes.trim() ? `\n## Builder notes\n${agentResult.notes.trim()}\n` : '';
-  const verifier = verifierResult ? `\n## Verifier\nverifier: ${verifierResult.status}\nsummary: ${verifierResult.summary || '(none)'}${verifierResult.reason ? `\nreason: ${verifierResult.reason}` : ''}${verifierResult.notes.trim() ? `\nnotes: ${verifierResult.notes.trim()}` : ''}\n` : '';
+  const verifier = verifierResult ? `\n## Verifier\n${verifierPrBodyLines(verifierResult).join('\n')}\n` : '';
   const evidence = [
     '- reported: builder summary and builder notes come from the builder-agent self-report.',
     verifyResults.length > 0
       ? '- executed: Kaizen Loop ran the verification commands listed above.'
       : '- unverified: no repository verification commands are configured.',
-    verifierResult
-      ? '- executed: Kaizen Loop ran verifier and recorded the status below.'
-      : '- unverified: verifier was not run for this PR body.',
+    verifierEvidenceStrength(verifierResult),
     '- static: changed file and line counts come from git diff metadata.'
   ].join('\n');
   return `Closes #${issue.number}
@@ -1125,6 +1123,37 @@ ${riskReason}
 Changed files: ${diff.changedFiles}
 Changed lines: ${diff.changedLines}
 `;
+}
+
+function verifierPrBodyLines(verifierResult: VerifierResult): string[] {
+  const lines = [
+    `verifier: ${verifierResult.status}`,
+    `summary: ${verifierResult.summary || '(none)'}`,
+    `evidence: ${formatVerifierEvidenceGrade(verifierResult)}`
+  ];
+  if (verifierResult.reason) lines.push(`reason: ${verifierResult.reason}`);
+  if (verifierResult.notes.trim()) lines.push(`notes: ${verifierResult.notes.trim()}`);
+  if (verifierResult.evidenceGrade === 'reported') {
+    lines.push('warning: この判定は実行証拠ではなくテキスト報告に基づくため、未実行の可能性があります。');
+  }
+  return lines;
+}
+
+function formatVerifierEvidenceGrade(verifierResult: VerifierResult): string {
+  if (verifierResult.evidenceGrade === 'reported') return 'reported (未実行の可能性あり)';
+  if (verifierResult.evidenceGrade === 'executed') return 'executed';
+  return 'unknown';
+}
+
+function verifierEvidenceStrength(verifierResult?: VerifierResult): string {
+  if (!verifierResult) return '- unverified: verifier was not run for this PR body.';
+  if (verifierResult.evidenceGrade === 'executed') {
+    return '- executed: Kaizen Loop ran verifier and verifier reported executed evidence.';
+  }
+  if (verifierResult.evidenceGrade === 'reported') {
+    return '- reported: Kaizen Loop ran verifier, but verifier evidence is based on text reporting rather than execution proof.';
+  }
+  return '- unverified: Kaizen Loop ran verifier, but verifier did not report an evidence grade.';
 }
 
 function buildRunAbortComment(
