@@ -9,7 +9,7 @@ import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.j
 import type { KaizenConfig, Registry } from '../config/schema.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
-import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts } from '../report/comments.js';
+import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts, markedPullRequestNumbers } from '../report/comments.js';
 import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
@@ -109,12 +109,21 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
       : undefined;
     const issues = requestedIssues ?? await github.listIssues(config.issues.label);
+    const reconciled = options.dryRun
+      ? []
+      : await reconcileMergedPullRequestIssues({
+          issues,
+          github
+        });
+    const selectableIssues = reconciled.length > 0
+      ? issues.filter((issue) => !reconciled.includes(issue.number))
+      : issues;
     const automatic = options.scheduled && requestedIssues === undefined;
-    const openPullRequests = automatic || issues.some(hasPullRequestResultMarker)
+    const openPullRequests = automatic || selectableIssues.some(hasPullRequestResultMarker)
       ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
       : [];
     const selection = selectIssues({
-      issues,
+      issues: selectableIssues,
       config,
       maxIssues,
       explicit: requestedIssues !== undefined,
@@ -332,6 +341,29 @@ async function applyIssueIntakeGate(options: {
   }
 
   return { selected, skipped, openPullRequests: options.openPullRequests };
+}
+
+async function reconcileMergedPullRequestIssues(options: {
+  issues: GitHubIssue[];
+  github: GitHubClient;
+}): Promise<number[]> {
+  const closed: number[] = [];
+  for (const issue of options.issues) {
+    const prNumbers = markedPullRequestNumbers(issue.comments ?? []);
+    for (const prNumber of prNumbers) {
+      const pr = await options.github.getPullRequestResolution(prNumber).catch(() => undefined);
+      if (!pr) continue;
+      if (pr.state !== 'MERGED' && !pr.mergedAt) continue;
+      await options.github.closeIssue(
+        issue.number,
+        `Kaizen Loop reconciled this issue after merged PR ${pr.url} did not leave the issue closed automatically.`
+      );
+      await options.github.removeLabels(issue.number, ['kaizen:in-progress', 'kaizen:needs-human']);
+      closed.push(issue.number);
+      break;
+    }
+  }
+  return closed;
 }
 
 async function recordIntakeSkip(options: {

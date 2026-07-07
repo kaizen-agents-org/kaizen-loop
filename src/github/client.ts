@@ -5,6 +5,7 @@ import type {
   GitHubPullRequest,
   GitHubPullRequestDetails,
   GitHubPullRequestLinkage,
+  GitHubPullRequestResolution,
   PullRequestResult
 } from './types.js';
 
@@ -125,6 +126,17 @@ export class GitHubClient {
       'number,url,baseRefName,isDraft,closingIssuesReferences'
     ]);
     return JSON.parse(result.stdout) as GitHubPullRequestLinkage;
+  }
+
+  async getPullRequestResolution(number: number): Promise<GitHubPullRequestResolution> {
+    const result = await this.gh([
+      'pr',
+      'view',
+      String(number),
+      '--json',
+      'number,url,state,mergedAt,baseRefName,closingIssuesReferences'
+    ]);
+    return JSON.parse(result.stdout) as GitHubPullRequestResolution;
   }
 
   async addLabels(issue: number, labels: string[]): Promise<void> {

@@ -737,6 +737,85 @@ describe('runKaizen PR flow', () => {
     expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'comment')).toBe(false);
   });
 
+  it('closes open issues whose Kaizen pull request marker points to a merged PR', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([
+          issue(1, {
+            labels: [{ name: 'kaizen' }, { name: 'kaizen:in-progress' }],
+            comments: [
+              {
+                body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"pr-created","pr":"https://github.com/o/r/pull/4"} -->'
+              }
+            ]
+          })
+        ]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          number: 4,
+          url: 'https://github.com/o/r/pull/4',
+          state: 'MERGED',
+          mergedAt: '2026-06-12T02:00:00Z',
+          baseRefName: 'main',
+          closingIssuesReferences: []
+        }));
+      }
+      return result(command, args, repo, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues).toEqual([]);
+    expect(runner.mock.calls).toContainEqual([
+      'gh',
+      [
+        'issue',
+        'close',
+        '1',
+        '--comment',
+        'Kaizen Loop reconciled this issue after merged PR https://github.com/o/r/pull/4 did not leave the issue closed automatically.'
+      ],
+      expect.any(Object)
+    ]);
+    expect(runner.mock.calls).toContainEqual([
+      'gh',
+      ['issue', 'edit', '1', '--remove-label', 'kaizen:in-progress,kaizen:needs-human'],
+      expect.any(Object)
+    ]);
+    expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
+  });
+
   it('runs scheduler jobs with lateStartGuard disabled after latestStartHour', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-12T12:00:00Z'));
