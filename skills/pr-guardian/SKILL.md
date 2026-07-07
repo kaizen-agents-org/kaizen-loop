@@ -34,8 +34,7 @@ Use this workflow by default after opening a pull request in any repository wher
 
 - Cap retries at 5 unless the user or project configuration gives a different limit.
 - Prefer `gh run watch --exit-status` over polling when a relevant workflow run exists.
-- Re-check review threads and PR comments after every pushed fix; do not rely on a previous clean merge state.
-- When `mergeStateStatus` is `BLOCKED` while required checks pass, inspect branch protection and fetch thread-aware review data with GraphQL. Resolve every unresolved review thread, including outdated threads, before calling the PR mergeable.
+- If `mergeStateStatus` remains `BLOCKED` after checks pass, re-check review threads and PR comments after every pushed fix; treat it as clear only once unresolved feedback is addressed and checks pass.
 - Do not rewrite unrelated user changes or broaden the PR scope.
 - Do not merge the PR.
 
