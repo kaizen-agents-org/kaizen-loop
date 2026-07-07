@@ -98,7 +98,7 @@ export function markedPullRequestNumbers(comments: Array<{ body: string }>): num
       parseKaizenMarker(comment.body, 'result')?.pr,
       parseKaizenMarker(comment.body, 'progress')?.pr
     ])
-    .map((pr) => pr && pullRequestNumber(pr))
+    .map((pr) => (pr ? pullRequestNumber(pr) : undefined))
     .filter((number): number is number => number !== undefined);
   return [...new Set(numbers)];
 }

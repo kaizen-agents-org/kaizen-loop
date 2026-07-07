@@ -109,12 +109,11 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
       : undefined;
     const issues = requestedIssues ?? await github.listIssues(config.issues.label);
-    const reconciled = options.dryRun
-      ? []
-      : await reconcileMergedPullRequestIssues({
-          issues,
-          github
-        });
+    const reconciled = await reconcileMergedPullRequestIssues({
+      issues,
+      github,
+      dryRun: options.dryRun
+    });
     const selectableIssues = reconciled.length > 0
       ? issues.filter((issue) => !reconciled.includes(issue.number))
       : issues;
@@ -346,23 +345,32 @@ async function applyIssueIntakeGate(options: {
 async function reconcileMergedPullRequestIssues(options: {
   issues: GitHubIssue[];
   github: GitHubClient;
+  dryRun: boolean;
 }): Promise<number[]> {
   const closed: number[] = [];
   let defaultBranch: string | undefined;
   for (const issue of options.issues) {
     const prNumbers = markedPullRequestNumbers(issue.comments ?? []);
-    for (const prNumber of prNumbers) {
-      const pr = await options.github.getPullRequestResolution(prNumber).catch(() => undefined);
+    const resolutions = await Promise.all(
+      prNumbers.map((prNumber) => options.github.getPullRequestResolution(prNumber).catch(() => undefined))
+    );
+    for (const pr of resolutions) {
       if (!pr) continue;
       if (pr.state !== 'MERGED' && !pr.mergedAt) continue;
       if (!pr.closingIssuesReferences.some((reference) => reference.number === issue.number)) continue;
       defaultBranch ??= await options.github.getRepositoryDefaultBranch().catch(() => '');
       if (defaultBranch && pr.baseRefName && pr.baseRefName !== defaultBranch) continue;
-      await options.github.closeIssue(
-        issue.number,
-        `Kaizen Loop reconciled this issue after merged PR ${pr.url} did not leave the issue closed automatically.`
-      );
-      await options.github.removeLabels(issue.number, ['kaizen:in-progress', 'kaizen:needs-human']);
+      if (!options.dryRun) {
+        try {
+          await options.github.closeIssue(
+            issue.number,
+            `Kaizen Loop reconciled this issue after merged PR ${pr.url} did not leave the issue closed automatically.`
+          );
+          await options.github.removeLabels(issue.number, ['kaizen:in-progress', 'kaizen:needs-human']);
+        } catch {
+          break;
+        }
+      }
       closed.push(issue.number);
       break;
     }

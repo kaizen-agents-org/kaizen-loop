@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildResultComment, countAttempts } from '../src/report/comments.js';
+import { buildResultComment, countAttempts, markedPullRequestNumbers } from '../src/report/comments.js';
 
 describe('result comments', () => {
   it('includes a machine-readable marker and counts attempts', () => {
@@ -88,5 +88,14 @@ describe('result comments', () => {
     ].join('\n');
 
     expect(countAttempts([{ body: legacyBody }])).toBe(0);
+  });
+
+  it('ignores empty pull request markers', () => {
+    const comments = [
+      { body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"pr-created","pr":""} -->' },
+      { body: '<!-- kaizen-loop:progress {"outcome":"pr-monitoring","pr":"https://github.com/o/r/pull/4"} -->' }
+    ];
+
+    expect(markedPullRequestNumbers(comments)).toEqual([4]);
   });
 });
