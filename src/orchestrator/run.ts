@@ -348,12 +348,16 @@ async function reconcileMergedPullRequestIssues(options: {
   github: GitHubClient;
 }): Promise<number[]> {
   const closed: number[] = [];
+  let defaultBranch: string | undefined;
   for (const issue of options.issues) {
     const prNumbers = markedPullRequestNumbers(issue.comments ?? []);
     for (const prNumber of prNumbers) {
       const pr = await options.github.getPullRequestResolution(prNumber).catch(() => undefined);
       if (!pr) continue;
       if (pr.state !== 'MERGED' && !pr.mergedAt) continue;
+      if (!pr.closingIssuesReferences.some((reference) => reference.number === issue.number)) continue;
+      defaultBranch ??= await options.github.getRepositoryDefaultBranch().catch(() => '');
+      if (defaultBranch && pr.baseRefName && pr.baseRefName !== defaultBranch) continue;
       await options.github.closeIssue(
         issue.number,
         `Kaizen Loop reconciled this issue after merged PR ${pr.url} did not leave the issue closed automatically.`
