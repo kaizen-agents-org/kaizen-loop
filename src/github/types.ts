@@ -50,3 +50,12 @@ export interface GitHubPullRequestLinkage {
   isDraft: boolean;
   closingIssuesReferences: GitHubClosingIssueReference[];
 }
+
+export interface GitHubPullRequestResolution {
+  number: number;
+  url: string;
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  mergedAt?: string | null;
+  baseRefName?: string;
+  closingIssuesReferences: GitHubClosingIssueReference[];
+}

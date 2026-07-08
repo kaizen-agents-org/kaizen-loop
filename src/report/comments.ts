@@ -92,6 +92,17 @@ export function hasPendingPullRequest(comments: Array<{ body: string }>, openPul
   });
 }
 
+export function markedPullRequestNumbers(comments: Array<{ body: string }>): number[] {
+  const numbers = comments
+    .flatMap((comment) => [
+      parseKaizenMarker(comment.body, 'result')?.pr,
+      parseKaizenMarker(comment.body, 'progress')?.pr
+    ])
+    .map((pr) => (pr ? pullRequestNumber(pr) : undefined))
+    .filter((number): number is number => number !== undefined);
+  return [...new Set(numbers)];
+}
+
 export function agentSummary(result: AgentResult): string {
   if (result.status === 'blocked') return result.blockedReason || result.summary;
   return result.summary;
