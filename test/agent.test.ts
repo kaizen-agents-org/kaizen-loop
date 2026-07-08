@@ -4,8 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { BuilderAgentAdapter } from '../src/agents/builder.js';
+import { ClaudeCodeAdapter, parseAgentResult } from '../src/agents/claude.js';
 import { VerifierAgentAdapter } from '../src/agents/verifier.js';
-import { parseAgentResult } from '../src/agents/claude.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../src/agents/prompt.js';
 import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
@@ -36,6 +36,38 @@ describe('parseAgentResult', () => {
       }
     ]);
     expect(parsed.durationMs).toBe(123);
+  });
+});
+
+describe('ClaudeCodeAdapter', () => {
+  it('pre-approves JavaScript build tool commands used by repository verification', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-claude-'));
+    const runner: CommandRunner = async (command, args, options) => {
+      expect(command).toBe('claude');
+      expect(options?.cwd).toBe(workspace);
+      const allowedTools = args[args.indexOf('--allowedTools') + 1];
+      expect(allowedTools).toContain('Bash(npm:*)');
+      expect(allowedTools).toContain('Bash(pnpm:*)');
+      expect(allowedTools).toContain('Bash(node:*)');
+      expect(allowedTools).toContain('Bash(node_modules/.bin/*:*)');
+      expect(allowedTools).toContain('Bash(./node_modules/.bin/*:*)');
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: JSON.stringify({
+          result: '```json\n{"status":"fixed","summary":"done","notes":""}\n```'
+        }),
+        stderr: '',
+        durationMs: 1
+      };
+    };
+
+    const adapter = new ClaudeCodeAdapter(runner);
+    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+
+    expect(result.status).toBe('fixed');
   });
 });
 

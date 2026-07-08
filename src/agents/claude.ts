@@ -27,6 +27,21 @@ const agentPayloadSchema = z
   })
   .passthrough();
 
+const CLAUDE_ALLOWED_TOOLS = [
+  'Bash(git add:*)',
+  'Bash(git commit:*)',
+  'Bash(npm:*)',
+  'Bash(pnpm:*)',
+  'Bash(node:*)',
+  'Bash(node_modules/.bin/*:*)',
+  'Bash(./node_modules/.bin/*:*)',
+  'Read',
+  'Write',
+  'Edit',
+  'Glob',
+  'Grep'
+].join(' ');
+
 export class ClaudeCodeAdapter implements AgentAdapter {
   readonly name = 'claude' as const;
 
@@ -50,7 +65,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       '--permission-mode',
       'acceptEdits',
       '--allowedTools',
-      'Bash(git add:*) Bash(git commit:*) Bash(npm:*) Read Write Edit Glob Grep'
+      CLAUDE_ALLOWED_TOOLS
     ];
     if (req.model) args.push('--model', req.model);
 
