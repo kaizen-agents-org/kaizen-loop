@@ -63,10 +63,10 @@ gh api graphql \
   -f name='<repo>' \
   -F number=<number> \
   -f query='
-query($owner:String!, $name:String!, $number:Int!) {
+query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
-      reviewThreads(first:100) {
+      reviewThreads(first:100, after:$cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
@@ -121,7 +121,7 @@ If `mergeable` is `MERGEABLE` but `mergeStateStatus` remains `BLOCKED`, keep inv
 ## Loop control
 
 - Default to 5 fix-and-push attempts per PR.
-- Cap each CI or review wait window at 30 minutes, or 30 polling checks at 60-second intervals. If checks or review bots are still pending after that, do one fresh PR-state and review-thread fetch, then report `pending external review` instead of waiting indefinitely. Do not claim conversations are resolved when the latest bot review is still pending.
+- Cap each CI or review wait window at 30 minutes, or 30 polling checks at 60-second intervals. If required checks are still pending after that, report `pending required checks` with the check names instead of merge-ready. Only report `pending external review` after required checks are green and a bot or maintainer review is still pending; do one fresh PR-state and review-thread fetch first, and do not claim conversations are resolved when the latest bot review is still pending.
 - If the same CI failure or review comment returns after two fixes, stop broad changes and inspect the underlying assumption before trying again.
 - For cross-repo work, finish and report one PR before moving to the next so context loss still leaves useful progress.
 

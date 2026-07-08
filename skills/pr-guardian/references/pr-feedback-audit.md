@@ -48,13 +48,13 @@ gh api graphql \
   -f name='<repo>' \
   -F number=<number> \
   -f query='
-query($owner:String!, $name:String!, $number:Int!) {
+query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
       url
       reviewDecision
       mergeStateStatus
-      reviewThreads(first:100) {
+      reviewThreads(first:100, after:$cursor) {
         pageInfo {
           hasNextPage
           endCursor
@@ -85,7 +85,7 @@ query($owner:String!, $name:String!, $number:Int!) {
 }'
 ```
 
-If there are more than 100 threads, paginate with `pageInfo { hasNextPage endCursor }` and `after`.
+If there are more than 100 threads, repeat the query with `-f cursor='<endCursor>'` until `pageInfo.hasNextPage` is false.
 
 ## Reply To And Resolve Review Threads
 
