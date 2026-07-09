@@ -83,23 +83,12 @@ const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   let config = await loadConfig(resolved.project.localPath);
-  if (options.job) {
-    const configuredJob = config.scheduler.jobs[options.job];
-    if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${options.job}`);
-    if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${options.job}`);
-  }
+  assertJobEnabled(config, options.job);
   let scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
   let trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
   const startedAt = new Date();
   let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
-  const nowDate = new Date();
-  const cutoff = new Date(nowDate);
-  cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
-  const lateStartGuard = scheduledJob?.config.run.mode === 'maintenance'
-    ? scheduledJob.config.run.lateStartGuard
-    : trigger === 'scheduled';
-  const skipLatestStart = options.scheduled && lateStartGuard && nowDate > cutoff;
   let github = new GitHubClient(runCommand, resolved.project.localPath);
   const selectRunIssues = async () => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
@@ -175,9 +164,32 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     throw error;
   }
 
-  if (skipLatestStart) {
-    const now = nowDate.toISOString();
-    try {
+  try {
+    const latestWorkspaceConfig = await loadLatestConfigFromExistingWorkspace({
+      config,
+      project: resolved.project,
+      runCommand
+    });
+    if (latestWorkspaceConfig) {
+      config = latestWorkspaceConfig;
+      assertJobEnabled(config, options.job);
+      scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
+      trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
+      runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
+      runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
+      github = new GitHubClient(runCommand, resolved.project.workspacePath);
+    }
+
+    const nowDate = new Date();
+    const cutoff = new Date(nowDate);
+    cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
+    const lateStartGuard = scheduledJob?.config.run.mode === 'maintenance'
+      ? scheduledJob.config.run.lateStartGuard
+      : trigger === 'scheduled';
+    const skipLatestStart = options.scheduled && lateStartGuard && nowDate > cutoff;
+
+    if (skipLatestStart) {
+      const now = nowDate.toISOString();
       return await persistRunSummary(resolved.slug, {
         version: 1,
         project: resolved.slug,
@@ -188,144 +200,131 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         issues: [],
         skipped: [{ number: 0, reason: `latestStartHour(${config.run.latestStartHour}) passed` }]
       });
-    } finally {
-      await lock.release();
     }
-  }
 
-  const latestWorkspaceConfig = await loadLatestConfigFromExistingWorkspace({
-    config,
-    project: resolved.project,
-    runCommand
-  });
-  if (latestWorkspaceConfig) {
-    config = latestWorkspaceConfig;
-    if (options.job) {
-      const configuredJob = config.scheduler.jobs[options.job];
-      if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${options.job}`);
-      if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${options.job}`);
-    }
-    scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
-    trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
-    runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
-    runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
-    github = new GitHubClient(runCommand, resolved.project.workspacePath);
-  }
+    const runId = toRunId(startedAt);
+    const runDir = path.join(stateDir, 'runs', runId);
+    await fs.mkdir(runDir, { recursive: true });
 
-  const runId = toRunId(startedAt);
-  const runDir = path.join(stateDir, 'runs', runId);
-  await fs.mkdir(runDir, { recursive: true });
+    const summary: RunSummary = {
+      version: 1,
+      project: resolved.slug,
+      startedAt: startedAt.toISOString(),
+      finishedAt: startedAt.toISOString(),
+      trigger,
+      result: 'success',
+      issues: [],
+      skipped: [],
+    };
 
-  const summary: RunSummary = {
-    version: 1,
-    project: resolved.slug,
-    startedAt: startedAt.toISOString(),
-    finishedAt: startedAt.toISOString(),
-    trigger,
-    result: 'success',
-    issues: [],
-    skipped: [],
-  };
-
-  let runFailed = false;
-  try {
-    let selection = await selectRunIssues();
-    summary.skipped = selection.skipped;
-    if (selection.selected.length > 0) {
-      selection = await applyIssueIntakeGate({
-        selection,
-        repo: resolved.project.repo,
-        runId,
-        github,
-        openPullRequests: selection.openPullRequests
-      });
+    let runFailed = false;
+    try {
+      let selection = await selectRunIssues();
       summary.skipped = selection.skipped;
-    }
-    if (selection.selected.length > 0) {
-      const remoteUrl = await new GitClient(runCommand, resolved.project.localPath).remoteUrl('origin');
-      const baseWorkspace = new WorkspaceManager(runCommand, resolved.project.workspacePath, remoteUrl);
-      const baseline = await prepareBaseWorkspace({
-        workspace: baseWorkspace,
-        config,
-        runId,
-        runDir,
-        firstIssue: selection.selected[0],
-        github,
-        runDeadlineAt
-      });
+      if (selection.selected.length > 0) {
+        selection = await applyIssueIntakeGate({
+          selection,
+          repo: resolved.project.repo,
+          runId,
+          github,
+          openPullRequests: selection.openPullRequests
+        });
+        summary.skipped = selection.skipped;
+      }
+      if (selection.selected.length > 0) {
+        const remoteUrl = await new GitClient(runCommand, resolved.project.localPath).remoteUrl('origin');
+        const baseWorkspace = new WorkspaceManager(runCommand, resolved.project.workspacePath, remoteUrl);
+        const baseline = await prepareBaseWorkspace({
+          workspace: baseWorkspace,
+          config,
+          runId,
+          runDir,
+          firstIssue: selection.selected[0],
+          github,
+          runDeadlineAt
+        });
 
-      if (!baseline.ok) {
-        runFailed = true;
-        summary.skipped.push(
-          ...selection.selected.map((skippedIssue) => ({
-            number: skippedIssue.number,
-            reason: `run aborted: ${baseline.reason}`
-          }))
-        );
-      } else {
-        const forcePullRequest = selection.selected.length > 1;
-        const worktrees: Array<{ issue: GitHubIssue; branch: string; path: string }> = [];
-        try {
-          for (const issue of selection.selected) {
-            assertRunWithinDeadline(runDeadlineAt);
-            const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId);
-            worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
-          }
-          const issueResults = await Promise.allSettled(
-            worktrees.map((worktree) =>
-              processIssueInWorktree({
-                issue: worktree.issue,
-                config,
-                runId,
-                runDir,
-                project: resolved.project,
-                stateDir,
-                worktree,
-                github,
-                requestedAgent: options.agent,
-                trigger,
-                assumeYes: Boolean(options.assumeYes),
-                confirmDirectCommit: options.confirmDirectCommit,
-                runCommand,
-                runDeadlineAt,
-                forcePullRequest
-              })
-            )
+        if (!baseline.ok) {
+          runFailed = true;
+          summary.skipped.push(
+            ...selection.selected.map((skippedIssue) => ({
+              number: skippedIssue.number,
+              reason: `run aborted: ${baseline.reason}`
+            }))
           );
-          for (let index = 0; index < issueResults.length; index += 1) {
-            const result = issueResults[index];
-            if (result.status === 'fulfilled') {
-              summary.issues.push(result.value);
-              continue;
+        } else {
+          const forcePullRequest = selection.selected.length > 1;
+          const worktrees: Array<{ issue: GitHubIssue; branch: string; path: string }> = [];
+          try {
+            for (const issue of selection.selected) {
+              assertRunWithinDeadline(runDeadlineAt);
+              const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId);
+              worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
             }
-            const issue = worktrees[index].issue;
-            summary.issues.push({
-              number: issue.number,
-              title: issue.title,
-              priority: priorityLabel(issue, config),
-              outcome: 'failed',
-              reason: String(result.reason)
-            });
-          }
-        } finally {
-          for (const worktree of worktrees) {
-            await baseWorkspace.removeIssueWorktree(worktree.path);
+            const issueResults = await Promise.allSettled(
+              worktrees.map((worktree) =>
+                processIssueInWorktree({
+                  issue: worktree.issue,
+                  config,
+                  runId,
+                  runDir,
+                  project: resolved.project,
+                  stateDir,
+                  worktree,
+                  github,
+                  requestedAgent: options.agent,
+                  trigger,
+                  assumeYes: Boolean(options.assumeYes),
+                  confirmDirectCommit: options.confirmDirectCommit,
+                  runCommand,
+                  runDeadlineAt,
+                  forcePullRequest
+                })
+              )
+            );
+            for (let index = 0; index < issueResults.length; index += 1) {
+              const result = issueResults[index];
+              if (result.status === 'fulfilled') {
+                summary.issues.push(result.value);
+                continue;
+              }
+              const issue = worktrees[index].issue;
+              summary.issues.push({
+                number: issue.number,
+                title: issue.title,
+                priority: priorityLabel(issue, config),
+                outcome: 'failed',
+                reason: String(result.reason)
+              });
+            }
+          } finally {
+            for (const worktree of worktrees) {
+              await baseWorkspace.removeIssueWorktree(worktree.path);
+            }
           }
         }
       }
+    } catch (error) {
+      runFailed = true;
+      throw error;
+    } finally {
+      summary.finishedAt = new Date().toISOString();
+      summary.result = runFailed ? 'failed' : resultFor(summary.issues);
+      await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+      await updateLastRun(resolved.slug, summary);
     }
-  } catch (error) {
-    runFailed = true;
-    throw error;
+
+    return summary;
   } finally {
-    summary.finishedAt = new Date().toISOString();
-    summary.result = runFailed ? 'failed' : resultFor(summary.issues);
-    await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
-    await updateLastRun(resolved.slug, summary);
     await lock.release();
   }
+}
 
-  return summary;
+function assertJobEnabled(config: KaizenConfig, jobName: string | undefined): void {
+  if (!jobName) return;
+  const configuredJob = config.scheduler.jobs[jobName];
+  if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${jobName}`);
+  if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${jobName}`);
 }
 
 async function applyIssueIntakeGate(options: {
