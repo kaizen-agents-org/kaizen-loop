@@ -142,6 +142,42 @@ describe('runPrGuardianSkill', () => {
     expect(result.summary).toContain('mergeStateStatus is BEHIND');
   });
 
+  it('treats skipped and neutral check conclusions as passing', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          statusCheckRollup: [
+            { __typename: 'CheckRun', name: 'conditional', status: 'COMPLETED', conclusion: 'SKIPPED' },
+            { __typename: 'CheckRun', name: 'advisory', status: 'COMPLETED', conclusion: 'NEUTRAL' },
+            { __typename: 'StatusContext', context: 'CodeRabbit', state: 'SUCCESS' }
+          ]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+  });
+
   it('does not rerun the guardian command when retry preflight finds no unresolved threads', async () => {
     const config = configSchema.parse({
       version: 1,
@@ -525,6 +561,7 @@ function ghResponse(
     mergeStateStatus: string;
     mergeable: string;
     reviewDecision: string;
+    statusCheckRollup: Array<Record<string, unknown>>;
   }> = {}
 ): string {
   return isPrView(args) ? mergeablePrResponse(pr) : reviewThreadsResponse(threads);
@@ -540,6 +577,7 @@ function mergeablePrResponse(pr: Partial<{
   mergeStateStatus: string;
   mergeable: string;
   reviewDecision: string;
+  statusCheckRollup: Array<Record<string, unknown>>;
 }> = {}): string {
   return JSON.stringify({
     state: pr.state ?? 'OPEN',
@@ -547,7 +585,7 @@ function mergeablePrResponse(pr: Partial<{
     mergeStateStatus: pr.mergeStateStatus ?? 'CLEAN',
     mergeable: pr.mergeable ?? 'MERGEABLE',
     reviewDecision: pr.reviewDecision ?? '',
-    statusCheckRollup: [
+    statusCheckRollup: pr.statusCheckRollup ?? [
       {
         __typename: 'CheckRun',
         name: 'test',

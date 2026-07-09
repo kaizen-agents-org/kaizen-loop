@@ -521,8 +521,10 @@ function isCleanMergeState(value: string | undefined): boolean {
   return value === 'CLEAN' || value === 'HAS_HOOKS';
 }
 
+const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'SKIPPED', 'NEUTRAL']);
+
 function isPassingCheck(check: PrCheckSummary): boolean {
-  if (check.conclusion !== undefined) return check.status === 'COMPLETED' && check.conclusion === 'SUCCESS';
+  if (check.conclusion !== undefined) return check.status === 'COMPLETED' && PASSING_CHECK_CONCLUSIONS.has(check.conclusion);
   return check.status === 'SUCCESS';
 }
 
