@@ -130,6 +130,35 @@ describe('BuilderAgentAdapter', () => {
     await expect(fs.access(path.join(workspace, '.kaizen', 'builder', 'build-result.json'))).rejects.toThrow();
   });
 
+  it('passes the configured provider fallback order to builder-agent', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
+    const runner: CommandRunner = async (command, args, options) => {
+      expect(command).toBe('builder-agent');
+      expect(args).toEqual([]);
+      expect(options?.env?.KAIZEN_PREFERRED_AGENT).toBe('codex,claude');
+      if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
+      await fs.writeFile(
+        options.env.KAIZEN_BUILD_RESULT_PATH,
+        JSON.stringify({ status: 'fixed', summary: 'done', notes: '', discoveredIssues: [] })
+      );
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 1 };
+    };
+
+    const adapter = new BuilderAgentAdapter(runner, {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
+    });
+    const result = await adapter.run({
+      workspaceDir: workspace,
+      prompt: 'fix it',
+      timeoutMs: 1000,
+      preferredBackends: ['codex', 'claude']
+    });
+
+    expect(result.status).toBe('fixed');
+  });
+
   it.each([
     ['summary', { status: 'fixed', notes: '' }],
     ['notes', { status: 'fixed', summary: '直した' }]

@@ -634,7 +634,8 @@ async function processIssue(options: {
   await fs.mkdir(issueDir, { recursive: true });
   const attempts = countAttempts(options.issue.comments ?? []) + 1;
   const discoveredFollowups: RunDiscoveredFollowupSummary[] = [];
-  const preferredBackend = selectPreferredBackend(options.config, options.issue, options.requestedAgent);
+  const preferredBackends = selectPreferredBackends(options.config, options.issue, options.requestedAgent);
+  const primaryBackend = preferredBackends[0];
   let agent = setupPendingAgent();
   const verifier = options.config.verifier.enabled
     ? new VerifierAgentAdapter(options.runCommand, {
@@ -675,8 +676,8 @@ async function processIssue(options: {
         workspaceDir: options.project.workspacePath,
         prompt,
         timeoutMs: boundedTimeoutMs(options.config.run.issueTimeoutMinutes * 60_000, options.runDeadlineAt),
-        model: modelFor(options.config, preferredBackend),
-        preferredBackend
+        model: modelFor(options.config, primaryBackend),
+        preferredBackends
       });
       await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
       discoveredFollowups.push(
@@ -1052,13 +1053,20 @@ function setupPendingAgent(): AgentAdapter {
   };
 }
 
-function selectPreferredBackend(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined): 'claude' | 'codex' {
+export function selectPreferredBackends(
+  config: KaizenConfig,
+  issue: GitHubIssue,
+  requested: 'claude' | 'codex' | undefined
+): Array<'claude' | 'codex'> {
   const labels = labelNames(issue);
-  return labels.includes('kaizen:agent:codex')
+  const primary = labels.includes('kaizen:agent:codex')
     ? 'codex'
     : labels.includes('kaizen:agent:claude')
       ? 'claude'
       : requested ?? config.agent.default;
+  if (!config.agent.fallback) return [primary];
+  const fallback = primary === 'codex' ? 'claude' : 'codex';
+  return [primary, fallback];
 }
 
 async function commitLeftovers(workspace: WorkspaceManager, issue: GitHubIssue, agentResult: AgentResult): Promise<void> {
