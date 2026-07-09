@@ -82,17 +82,17 @@ const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
-  const config = await loadConfig(resolved.project.localPath);
+  let config = await loadConfig(resolved.project.localPath);
   if (options.job) {
     const configuredJob = config.scheduler.jobs[options.job];
     if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${options.job}`);
     if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${options.job}`);
   }
-  const scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
-  const trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
+  let scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
+  let trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
   const startedAt = new Date();
-  const runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
-  const runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
+  let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
+  let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   const nowDate = new Date();
   const cutoff = new Date(nowDate);
   cutoff.setHours(config.run.latestStartHour, 0, 0, 0);
@@ -100,7 +100,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     ? scheduledJob.config.run.lateStartGuard
     : trigger === 'scheduled';
   const skipLatestStart = options.scheduled && lateStartGuard && nowDate > cutoff;
-  const github = new GitHubClient(runCommand, resolved.project.localPath);
+  let github = new GitHubClient(runCommand, resolved.project.localPath);
   const selectRunIssues = async () => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
     const jobMaxIssues = scheduledJob?.config.run.maxIssues;
@@ -191,6 +191,25 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     } finally {
       await lock.release();
     }
+  }
+
+  const latestWorkspaceConfig = await loadLatestConfigFromExistingWorkspace({
+    config,
+    project: resolved.project,
+    runCommand
+  });
+  if (latestWorkspaceConfig) {
+    config = latestWorkspaceConfig;
+    if (options.job) {
+      const configuredJob = config.scheduler.jobs[options.job];
+      if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${options.job}`);
+      if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${options.job}`);
+    }
+    scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
+    trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
+    runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
+    runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
+    github = new GitHubClient(runCommand, resolved.project.workspacePath);
   }
 
   const runId = toRunId(startedAt);
@@ -340,6 +359,38 @@ async function applyIssueIntakeGate(options: {
   }
 
   return { selected, skipped, openPullRequests: options.openPullRequests };
+}
+
+async function loadLatestConfigFromExistingWorkspace(options: {
+  config: KaizenConfig;
+  project: { workspacePath: string };
+  runCommand: CommandRunner;
+}): Promise<KaizenConfig | undefined> {
+  try {
+    await fs.access(path.join(options.project.workspacePath, '.git'));
+  } catch {
+    return undefined;
+  }
+
+  const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
+  await workspace.sync(options.config.git.defaultBranch);
+  let config = await loadConfigIfPresent(workspace.path);
+  if (!config) return undefined;
+  if (config.git.defaultBranch !== options.config.git.defaultBranch) {
+    await workspace.sync(config.git.defaultBranch);
+    config = await loadConfigIfPresent(workspace.path);
+    if (!config) return undefined;
+  }
+  return config;
+}
+
+async function loadConfigIfPresent(repoDir: string): Promise<KaizenConfig | undefined> {
+  try {
+    return await loadConfig(repoDir);
+  } catch (error) {
+    if (error instanceof ConfigError && error.message.includes('Missing Kaizen config:')) return undefined;
+    throw error;
+  }
 }
 
 async function reconcileMergedPullRequestIssues(options: {
