@@ -3,7 +3,7 @@ export interface AgentRequest {
   prompt: string;
   timeoutMs: number;
   model?: string | null;
-  preferredBackend?: 'claude' | 'codex';
+  preferredBackends?: Array<'claude' | 'codex'>;
 }
 
 export interface AgentResult {

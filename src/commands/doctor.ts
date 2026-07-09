@@ -44,6 +44,10 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!loaded) throw new Error('config unavailable');
     await fs.access(resolved.project.workspacePath);
     const preferredBackend = loaded.agent.default;
+    const fallbackBackend: 'claude' | 'codex' = preferredBackend === 'codex' ? 'claude' : 'codex';
+    const preferredBackends: Array<'claude' | 'codex'> = loaded.agent.fallback
+      ? [preferredBackend, fallbackBackend]
+      : [preferredBackend];
     const result = await new BuilderAgentAdapter(options.runCommand, builderOptions(loaded)).run({
       workspaceDir: resolved.project.workspacePath,
       prompt: [
@@ -53,7 +57,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
         '{"status":"fixed","summary":"doctor smoke ok","notes":"","discoveredIssues":[]}'
       ].join('\n'),
       timeoutMs: 60_000,
-      preferredBackend,
+      preferredBackends,
       model: loaded.agent.model[preferredBackend]
     });
     if (result.status !== 'fixed') {

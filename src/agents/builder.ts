@@ -66,7 +66,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
         buildAllowlistedEnv(process.env, this.options.envAllowlist, {
           KAIZEN_BUILD_RESULT_PATH: resultPath,
           KAIZEN_WORKSPACE_DIR: req.workspaceDir,
-          ...(req.preferredBackend ? { KAIZEN_PREFERRED_AGENT: req.preferredBackend } : {}),
+          ...(req.preferredBackends?.length ? { KAIZEN_PREFERRED_AGENT: req.preferredBackends.join(',') } : {}),
           ...(req.model ? { KAIZEN_AGENT_MODEL: req.model } : {})
         }),
         req.workspaceDir
