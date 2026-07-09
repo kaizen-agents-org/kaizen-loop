@@ -181,15 +181,16 @@ export async function runPrGuardianSkill(
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (attempt > 1) {
-        const preflightReviewThreads = await listUnresolvedReviewThreads(runCommand, req);
-        if (preflightReviewThreads.length === 0) {
+        const preflight = await inspectPrGate(runCommand, req);
+        if (preflight.isReady) {
           return {
             status: 'success',
-            summary: 'PR guardian skill completed; no unresolved review threads remain.',
+            summary: successSummary(preflight),
             raw: rawOutputs.join('\n'),
             durationMs: Date.now() - startMs
           };
         }
+        rawOutputs.push(`PR still not merge-ready before guardian pass ${attempt}:\n${summarizeGate(preflight)}`);
       }
 
       const result = await runCommand(
@@ -218,26 +219,27 @@ export async function runPrGuardianSkill(
         };
       }
 
-      const unresolvedReviewThreads = await listUnresolvedReviewThreads(runCommand, req);
-      if (unresolvedReviewThreads.length === 0) {
-        const lateReviewThreads = await waitForLateReviewThreads(runCommand, req);
-        if (lateReviewThreads.length > 0) {
-          rawOutputs.push(`Unresolved review feedback after bot review settle wait on pass ${attempt}:\n${summarizeReviewThreads(lateReviewThreads)}`);
+      const gate = await inspectPrGate(runCommand, req);
+      if (gate.isReady) {
+        const lateGate = await waitForLatePrGate(runCommand, req);
+        if (!lateGate.isReady) {
+          rawOutputs.push(`PR became not merge-ready after bot review settle wait on pass ${attempt}:\n${summarizeGate(lateGate)}`);
           continue;
         }
         return {
           status: 'success',
-          summary: 'PR guardian skill completed; no unresolved review threads remain.',
+          summary: successSummary(lateGate),
           raw: rawOutputs.join('\n'),
           durationMs: Date.now() - startMs
         };
       }
-      rawOutputs.push(`Unresolved review feedback after guardian pass ${attempt}:\n${summarizeReviewThreads(unresolvedReviewThreads)}`);
+      rawOutputs.push(`PR still not merge-ready after guardian pass ${attempt}:\n${summarizeGate(gate)}`);
     }
 
+    const finalGate = await inspectPrGate(runCommand, req);
     return {
       status: 'failed',
-      summary: `PR guardian stopped with unresolved review feedback after ${maxAttempts} attempt(s).`,
+      summary: `PR guardian stopped before PR became merge-ready after ${maxAttempts} attempt(s): ${finalGate.blockers.join('; ') || 'unknown blocker'}.`,
       raw: rawOutputs.join('\n'),
       durationMs: Date.now() - startMs
     };
@@ -303,6 +305,23 @@ interface ReviewThreadSummary {
   body?: string;
 }
 
+interface PrCheckSummary {
+  name: string;
+  status: string;
+  conclusion?: string;
+}
+
+interface PrGateSummary {
+  isReady: boolean;
+  blockers: string[];
+  state?: string;
+  isDraft?: boolean;
+  mergeStateStatus?: string;
+  mergeable?: string;
+  reviewDecision?: string;
+  checks: PrCheckSummary[];
+}
+
 interface ReviewThreadsResponse {
   errors?: Array<{ message?: string }>;
   data?: {
@@ -331,6 +350,15 @@ interface ReviewThreadsResponse {
       };
     };
   };
+}
+
+interface PullRequestViewResponse {
+  state?: string;
+  isDraft?: boolean;
+  mergeStateStatus?: string;
+  mergeable?: string;
+  reviewDecision?: string;
+  statusCheckRollup?: Array<Record<string, unknown>>;
 }
 
 const REVIEW_THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -415,14 +443,99 @@ async function listUnresolvedReviewThreads(
   return unresolved;
 }
 
-async function waitForLateReviewThreads(
+async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequest): Promise<PrGateSummary> {
+  const [pullRequest, unresolvedThreads] = await Promise.all([
+    inspectPullRequest(runCommand, req),
+    listUnresolvedReviewThreads(runCommand, req)
+  ]);
+  const blockers = [
+    ...mergeabilityBlockers(pullRequest),
+    ...unresolvedThreads.map((thread) => {
+      const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
+      const author = thread.author ? ` by ${thread.author}` : '';
+      return `unresolved review thread at ${location}${author}`;
+    })
+  ];
+
+  return {
+    ...pullRequest,
+    blockers,
+    isReady: blockers.length === 0
+  };
+}
+
+async function inspectPullRequest(
   runCommand: CommandRunner,
   req: PrGuardianSkillRequest
-): Promise<ReviewThreadSummary[]> {
+): Promise<Omit<PrGateSummary, 'isReady' | 'blockers'>> {
+  const result = await runCommand('gh', [
+    'pr',
+    'view',
+    String(req.prNumber),
+    '--repo',
+    req.repo,
+    '--json',
+    'state,isDraft,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup'
+  ], {
+    cwd: req.workspaceDir,
+    env: githubCliEnv(),
+    timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+    rejectOnNonZero: false
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not inspect PR mergeability: ${result.stderr || result.stdout}`);
+  }
+  const parsed = JSON.parse(result.stdout || '{}') as PullRequestViewResponse;
+  return {
+    state: parsed.state,
+    isDraft: parsed.isDraft,
+    mergeStateStatus: parsed.mergeStateStatus,
+    mergeable: parsed.mergeable,
+    reviewDecision: parsed.reviewDecision,
+    checks: normalizeStatusChecks(parsed.statusCheckRollup)
+  };
+}
+
+function normalizeStatusChecks(statusCheckRollup: Array<Record<string, unknown>> | undefined): PrCheckSummary[] {
+  return (statusCheckRollup ?? []).map((check) => ({
+    name: String(check.name ?? check.context ?? '(unknown check)'),
+    status: String(check.status ?? check.state ?? ''),
+    ...(typeof check.conclusion === 'string' ? { conclusion: check.conclusion } : {})
+  }));
+}
+
+function mergeabilityBlockers(state: Omit<PrGateSummary, 'isReady' | 'blockers'>): string[] {
+  const blockers: string[] = [];
+  if (state.state && state.state !== 'OPEN') blockers.push(`PR state is ${state.state}`);
+  if (state.isDraft) blockers.push('PR is draft');
+  if (state.mergeable && state.mergeable !== 'MERGEABLE') blockers.push(`mergeable is ${state.mergeable}`);
+  if (!isCleanMergeState(state.mergeStateStatus)) blockers.push(`mergeStateStatus is ${state.mergeStateStatus ?? 'unknown'}`);
+  if (state.reviewDecision === 'CHANGES_REQUESTED') blockers.push('reviewDecision is CHANGES_REQUESTED');
+  for (const check of state.checks.filter((item) => !isPassingCheck(item))) {
+    blockers.push(`check ${check.name} is ${check.status}${check.conclusion ? `/${check.conclusion}` : ''}`);
+  }
+  return blockers;
+}
+
+function isCleanMergeState(value: string | undefined): boolean {
+  return value === 'CLEAN' || value === 'HAS_HOOKS';
+}
+
+const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'SKIPPED', 'NEUTRAL']);
+
+function isPassingCheck(check: PrCheckSummary): boolean {
+  if (check.conclusion !== undefined) return check.status === 'COMPLETED' && PASSING_CHECK_CONCLUSIONS.has(check.conclusion);
+  return check.status === 'SUCCESS';
+}
+
+async function waitForLatePrGate(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest
+): Promise<PrGateSummary> {
   const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
-  if (settleMs <= 0) return [];
+  if (settleMs <= 0) return inspectPrGate(runCommand, req);
   await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
-  return listUnresolvedReviewThreads(runCommand, req);
+  return inspectPrGate(runCommand, req);
 }
 
 function boundedTimeoutMs(configuredTimeoutMs: number, runDeadlineAt: number | undefined): number {
@@ -441,6 +554,26 @@ function summarizeReviewThreads(threads: ReviewThreadSummary[]): string {
       return `- ${location}${author}${body ? ` - ${body}` : ''}`;
     })
     .join('\n');
+}
+
+function summarizeGate(gate: PrGateSummary): string {
+  const blockers = gate.blockers.length ? gate.blockers.map((blocker) => `- ${blocker}`).join('\n') : '- none';
+  const checks = gate.checks.length
+    ? gate.checks.map((check) => `- ${check.name}: ${check.status}${check.conclusion ? `/${check.conclusion}` : ''}`).join('\n')
+    : '- none reported';
+  return [
+    `mergeable=${gate.mergeable ?? 'unknown'}`,
+    `mergeStateStatus=${gate.mergeStateStatus ?? 'unknown'}`,
+    `reviewDecision=${gate.reviewDecision ?? 'unknown'}`,
+    'Blockers:',
+    blockers,
+    'Checks:',
+    checks
+  ].join('\n');
+}
+
+function successSummary(gate: PrGateSummary): string {
+  return `PR guardian completed; PR is merge-ready (${gate.mergeStateStatus ?? 'unknown'}) with passing checks and no unresolved review threads.`;
 }
 
 function buildPrompt(req: PrGuardianSkillRequest, attempt: number): string {
@@ -462,8 +595,8 @@ Requirements:
 - Always inspect PR review feedback before declaring the PR ready to merge. Do not require reviewDecision=APPROVED or human approval unless GitHub branch protection explicitly requires it.
 - Fetch inline review threads and PR comments with resolution state using paginated GraphQL/API reads, iterating until hasNextPage=false, for example via PullRequest.reviewThreads, so unresolved actionable feedback cannot be missed.
 - Address every unresolved actionable review thread, PR comment, and check annotation with focused commits or an explicit disposition, then push any fixes. If you can resolve an addressed review thread, resolve it after replying with the disposition.
-- Reply in the same review thread or comment for each addressed review item with the action taken and validation run. If GitHub does not support a threaded reply for that item, add a PR comment that links to the original comment or review and lists the action taken.
-- Stop only when the PR is non-conflicting, required checks are passing, and no unresolved review threads or actionable PR comments remain. If branch protection requires conversation resolution, outdated unresolved threads still block merging until they are resolved. A missing approval or reviewDecision other than APPROVED is not a blocker by itself; inspect comments again after every pushed fix.
+- Reply in the same review thread or comment for each addressed review item with the action taken and validation run before resolving it. If GitHub does not support a threaded reply for that item, add a PR comment that links to the original comment or review and lists the action taken.
+- Stop only when GitHub reports the PR as fully mergeable: mergeable=MERGEABLE, mergeStateStatus=CLEAN or HAS_HOOKS, required checks are passing, and no unresolved review threads or actionable PR comments remain. If branch protection requires conversation resolution, outdated unresolved threads still block merging until they are replied to and resolved. A missing approval or reviewDecision other than APPROVED is not a blocker by itself; inspect comments again after every pushed fix.
 - Do not merge the PR.
 - Before finishing, comment on the PR with final mergeability, watched runs, fixes pushed, feedback addressed, unresolved/skipped feedback with reasons, and remaining blockers.`;
 }

@@ -2673,11 +2673,45 @@ function githubReadinessResult(command: string, args: string[], cwd: string | un
       args,
       cwd,
       JSON.stringify({
+        state: 'OPEN',
         number: Number(args[2]),
         url: `https://github.com/o/r/pull/${args[2]}`,
         baseRefName: 'main',
         isDraft: false,
-        closingIssuesReferences: [{ number: 1 }, { number: 2 }]
+        mergeStateStatus: 'CLEAN',
+        mergeable: 'MERGEABLE',
+        reviewDecision: '',
+        closingIssuesReferences: [{ number: 1 }, { number: 2 }],
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'test',
+            status: 'COMPLETED',
+            conclusion: 'SUCCESS'
+          }
+        ]
+      })
+    );
+  }
+  if (args[0] === 'api' && args[1] === 'graphql') {
+    return result(
+      command,
+      args,
+      cwd,
+      JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: {
+                  hasNextPage: false,
+                  endCursor: null
+                },
+                nodes: []
+              }
+            }
+          }
+        }
       })
     );
   }

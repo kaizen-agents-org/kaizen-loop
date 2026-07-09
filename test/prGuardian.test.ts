@@ -17,7 +17,7 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -58,7 +58,7 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: 0,
       stdout: command === 'gh'
-        ? reviewThreadsResponse([{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please fix this.' }])
+        ? ghResponse(args, [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please fix this.' }])
         : 'guardian pass complete',
       stderr: '',
       durationMs: 1
@@ -75,10 +75,10 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('failed');
-    expect(result.summary).toContain('unresolved review feedback');
+    expect(result.summary).toContain('unresolved review thread');
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
-    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(3);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(4);
   });
 
   it('treats outdated unresolved review threads as blockers', async () => {
@@ -92,7 +92,7 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: 0,
       stdout: command === 'gh'
-        ? reviewThreadsResponse([{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please resolve this.', isOutdated: true }])
+        ? ghResponse(args, [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please resolve this.', isOutdated: true }])
         : 'guardian pass complete',
       stderr: '',
       durationMs: 1
@@ -109,8 +109,73 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('failed');
-    expect(result.summary).toContain('unresolved review feedback');
+    expect(result.summary).toContain('unresolved review thread');
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
+  });
+
+  it('does not declare success while the PR is behind the protected base branch', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? ghResponse(args, [], { mergeStateStatus: 'BEHIND' }) : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('mergeStateStatus is BEHIND');
+  });
+
+  it('treats skipped and neutral check conclusions as passing', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          statusCheckRollup: [
+            { __typename: 'CheckRun', name: 'conditional', status: 'COMPLETED', conclusion: 'SKIPPED' },
+            { __typename: 'CheckRun', name: 'advisory', status: 'COMPLETED', conclusion: 'NEUTRAL' },
+            { __typename: 'StatusContext', context: 'CodeRabbit', state: 'SUCCESS' }
+          ]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
   });
 
   it('does not rerun the guardian command when retry preflight finds no unresolved threads', async () => {
@@ -121,6 +186,17 @@ describe('runPrGuardianSkill', () => {
     let reviewFetches = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh') {
+        if (isPrView(args)) {
+          return {
+            command,
+            args,
+            cwd: options?.cwd,
+            exitCode: 0,
+            stdout: mergeablePrResponse(),
+            stderr: '',
+            durationMs: 1
+          };
+        }
         reviewFetches += 1;
         return {
           command,
@@ -168,6 +244,17 @@ describe('runPrGuardianSkill', () => {
     let reviewFetches = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh') {
+        if (isPrView(args)) {
+          return {
+            command,
+            args,
+            cwd: options?.cwd,
+            exitCode: 0,
+            stdout: mergeablePrResponse(),
+            stderr: '',
+            durationMs: 1
+          };
+        }
         reviewFetches += 1;
         return {
           command,
@@ -300,7 +387,7 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -349,7 +436,7 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -397,7 +484,7 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -448,7 +535,7 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? reviewThreadsResponse([]) : 'done',
+      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -464,6 +551,55 @@ describe('runPrGuardianSkill', () => {
     expect(runner).not.toHaveBeenCalled();
   });
 });
+
+function ghResponse(
+  args: string[],
+  threads: Array<{ path: string; line: number; author: string; body: string; isOutdated?: boolean }>,
+  pr: Partial<{
+    state: string;
+    isDraft: boolean;
+    mergeStateStatus: string;
+    mergeable: string;
+    reviewDecision: string;
+    statusCheckRollup: Array<Record<string, unknown>>;
+  }> = {}
+): string {
+  return isPrView(args) ? mergeablePrResponse(pr) : reviewThreadsResponse(threads);
+}
+
+function isPrView(args: string[]): boolean {
+  return args[0] === 'pr' && args[1] === 'view';
+}
+
+function mergeablePrResponse(pr: Partial<{
+  state: string;
+  isDraft: boolean;
+  mergeStateStatus: string;
+  mergeable: string;
+  reviewDecision: string;
+  statusCheckRollup: Array<Record<string, unknown>>;
+}> = {}): string {
+  return JSON.stringify({
+    state: pr.state ?? 'OPEN',
+    isDraft: pr.isDraft ?? false,
+    mergeStateStatus: pr.mergeStateStatus ?? 'CLEAN',
+    mergeable: pr.mergeable ?? 'MERGEABLE',
+    reviewDecision: pr.reviewDecision ?? '',
+    statusCheckRollup: pr.statusCheckRollup ?? [
+      {
+        __typename: 'CheckRun',
+        name: 'test',
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS'
+      },
+      {
+        __typename: 'StatusContext',
+        context: 'CodeRabbit',
+        state: 'SUCCESS'
+      }
+    ]
+  });
+}
 
 function reviewThreadsResponse(threads: Array<{ path: string; line: number; author: string; body: string; isOutdated?: boolean }>): string {
   return JSON.stringify({
