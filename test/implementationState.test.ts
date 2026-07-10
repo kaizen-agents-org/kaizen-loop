@@ -92,6 +92,7 @@ describe('implementation state', () => {
     expect(isResumableImplementationState({ ...base, phase: 'guardian' })).toBe(false);
     expect(isResumableImplementationState({ ...base, phase: 'discarded' })).toBe(false);
     expect(isResumableImplementationState({ ...base, phase: 'recovery-needed' })).toBe(true);
+    expect(isResumableImplementationState({ ...base, phase: 'handoff' })).toBe(false);
     expect(isResumableImplementationState({ ...base, phase: 'complete' })).toBe(false);
     expect(isResumableImplementationState(undefined)).toBe(false);
   });

@@ -11,6 +11,7 @@ export type ImplementationPhase =
   | 'failed'
   | 'discarded'
   | 'recovery-needed'
+  | 'handoff'
   | 'complete';
 
 export interface ImplementationState {

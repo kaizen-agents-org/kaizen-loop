@@ -320,6 +320,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
                   prUrl: checkpoint.prUrl
                 }));
                 await github.addLabels(issue.number, ['kaizen:needs-human']);
+                await github.removeLabels(issue.number, ['kaizen:in-progress']);
                 summary.issues.push({
                   number: issue.number,
                   title: issue.title,
@@ -1131,7 +1132,7 @@ async function finishPr(
   await saveImplementationState(options.stateDir, {
     issue: options.issue.number,
     branch: pr.branch,
-    phase: guardian.status === 'success' ? 'complete' : 'guardian',
+    phase: guardian.status === 'success' ? 'complete' : guardian.status === 'skipped' ? 'handoff' : 'guardian',
     attempt: attempts,
     pr: pr.number,
     prUrl: pr.url,
@@ -1221,7 +1222,7 @@ async function handOffReadyCheckpointPullRequest(
   await saveImplementationState(options.stateDir, {
     issue: options.issue.number,
     branch: options.branch,
-    phase: guardian.status === 'success' ? 'complete' : 'guardian',
+    phase: guardian.status === 'success' ? 'complete' : guardian.status === 'skipped' ? 'handoff' : 'guardian',
     attempt,
     pr: pullRequest.number,
     prUrl: pullRequest.url,

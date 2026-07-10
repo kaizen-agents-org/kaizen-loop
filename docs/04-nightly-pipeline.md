@@ -122,7 +122,7 @@ git worktree add -B kaizen/issue-<N>-<title-slug> \
 
 - Issue に `kaizen:in-progress` ラベルを付与してから Issue 用 worktree 上で実装を開始する
 - active checkpoint state があり、対応 branch が local または origin に存在する場合だけ、その branch を新しい worktree に再接続する。origin が進んでいれば local を fast-forward し、両方が diverge している場合や branch が消失している場合は、`recovery-needed` と `kaizen:needs-human` で handoff する。operator が branch を復旧してラベルを外した後は、`recovery-needed` の同じ branch から再開する
-- 実装フェーズは `~/.kaizen/projects/<slug>/implementations/issue-<N>.json` に保存する。状態は `implementing` / `verifying` / `publishing` / `guardian` / `blocked` / `failed` / `discarded` / `recovery-needed` / `complete` で、branch、attempt、直近の失敗理由、作成済み PR を記録する
+- 実装フェーズは `~/.kaizen/projects/<slug>/implementations/issue-<N>.json` に保存する。状態は `implementing` / `verifying` / `publishing` / `guardian` / `blocked` / `failed` / `discarded` / `recovery-needed` / `handoff` / `complete` で、branch、attempt、直近の失敗理由、作成済み PR を記録する。guardian が無効などで `skipped` の場合は terminal な `handoff` とする
 - builder / verifier / publish が失敗した時点で未コミットの変更があれば checkpoint commit を作る。`forbiddenPaths` を含む変更だけは commit せず、直前の remote checkpoint または default branch まで破棄する
 - 意味のある diff が残っている失敗・blocked では checkpoint branch を push し、draft PR を作成または更新する。diff が 0 の環境障害では draft PR を作らない
 - draft PR の description には停止理由、attempt、変更規模、検証結果、残作業を記録する。検証と verifier が通ったら同じ PR を Ready for review に昇格し、guardian へ渡す
