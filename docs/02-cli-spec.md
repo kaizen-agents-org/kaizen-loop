@@ -229,6 +229,7 @@ kaizen status [--project <slug>] [--metrics] [--json]
 - 現在オープンな Kaizen Issue 数(優先度別)、`kaizen:needs-human` の件数(**人間の対応待ち**として強調)
 - オープン中の kaizen PR 一覧(レビュー待ち)
 - PR guardian job 数。open PR に対応しない非終端 job は `guardian.stale` として表示する
+- Issue 実装 checkpoint の phase、branch、attempt、最終更新、停止理由、draft/ready PR。24 時間以上更新されていない非終端 checkpoint は `implementations.stale` として表示する
 - `origin/main` に未取り込みのコミットがあり、対応するオープン PR がない remote branch
 - `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)と最古の生成 PR の滞留日数を表示する。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
 

@@ -34,6 +34,25 @@ describe('result comments', () => {
     expect(body).toContain('Protected path changed');
   });
 
+  it('tells users where a failed implementation will resume', () => {
+    const body = buildResultComment({
+      runId: '2026-06-12T02-00-00Z',
+      issue: 42,
+      attempt: 1,
+      outcome: 'failed',
+      agent: 'codex',
+      summary: 'verification failed',
+      resumeBranch: 'kaizen/issue-42-resume-me',
+      prUrl: 'https://github.com/o/r/pull/7',
+      maxAttempts: 3
+    });
+
+    expect(body).toContain('Checkpoint saved on `kaizen/issue-42-resume-me`');
+    expect(body).toContain('the next eligible run resumes from this branch');
+    expect(body).toContain('| Draft PR | https://github.com/o/r/pull/7 |');
+    expect(body).toContain('"checkpointBranch":"kaizen/issue-42-resume-me"');
+  });
+
   it('distinguishes retryable external blocks from human-input blocks', () => {
     const retryable = buildResultComment({
       runId: '2026-06-12T02-00-00Z',

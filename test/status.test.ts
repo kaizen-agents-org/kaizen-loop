@@ -17,6 +17,13 @@ describe('statusProject', () => {
     await writeGuardianJob(home, 4, 'pending');
     await writeGuardianJob(home, 98, 'success');
     await writeGuardianJob(home, 99, 'pending');
+    await writeImplementationState(home, {
+      issue: 7,
+      branch: 'kaizen/issue-7-resume',
+      phase: 'failed',
+      attempt: 2,
+      lastFailure: 'Verification failed: npm test'
+    });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, '[]');
@@ -80,6 +87,18 @@ describe('statusProject', () => {
 
     expect(output.pullRequests.open).toBe(2);
     expect(output.guardian.stale).toBe(1);
+    expect(output.implementations).toMatchObject({
+      jobs: 1,
+      active: 0,
+      needsAttention: 1,
+      stale: 0,
+      latest: {
+        issue: 7,
+        branch: 'kaizen/issue-7-resume',
+        phase: 'failed',
+        lastFailure: 'Verification failed: npm test'
+      }
+    });
     expect(output.branchHygiene).toEqual({
       checked: true,
       unreviewedRemoteBranches: [
@@ -301,6 +320,19 @@ async function writeSummary(home: string, run: string, summary: unknown) {
   const runDir = path.join(home, 'projects', 'o-r', 'runs', run);
   await fs.mkdir(runDir, { recursive: true });
   await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+}
+
+async function writeImplementationState(
+  home: string,
+  state: { issue: number; branch: string; phase: string; attempt: number; lastFailure?: string }
+) {
+  const dir = path.join(home, 'projects', 'o-r', 'implementations');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, `issue-${state.issue}.json`), `${JSON.stringify({
+    version: 1,
+    ...state,
+    updatedAt: new Date().toISOString()
+  }, null, 2)}\n`);
 }
 
 async function writeGuardianJob(home: string, prNumber: number, status: string) {

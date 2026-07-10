@@ -36,6 +36,8 @@ export interface GitHubPullRequest {
 export interface GitHubPullRequestDetails extends GitHubPullRequest {
   baseRefName: string;
   headRefOid: string;
+  isDraft?: boolean;
+  state?: 'OPEN' | 'CLOSED' | 'MERGED';
 }
 
 export interface GitHubClosingIssueReference {

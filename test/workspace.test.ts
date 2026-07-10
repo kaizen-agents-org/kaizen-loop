@@ -71,7 +71,7 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls[0][1]).toEqual(['checkout', '--ignore-other-worktrees', 'main']);
   });
 
-  it('removes stale worktrees that still hold the issue branch before retrying', async () => {
+  it('removes stale worktrees and resumes the existing issue branch', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
     const workspacePath = path.join(root, 'workspace');
     const oldWorktreePath = path.join(root, 'workspace-worktrees', 'old-run', 'issue-12');
@@ -103,12 +103,84 @@ describe('workspace branch handling', () => {
 
     expect(worktree).toEqual({
       branch: 'kaizen/issue-12-retry-branch',
-      path: path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')
+      path: path.join(root, 'workspace-worktrees', 'new-run', 'issue-12'),
+      resumed: true
     });
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands).toContain(`worktree remove --force ${oldWorktreePath}`);
     expect(gitCommands).toContain(
-      `worktree add -B kaizen/issue-12-retry-branch ${path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')} origin/main`
+      `worktree add ${path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')} kaizen/issue-12-retry-branch`
+    );
+  });
+
+  it('creates a fresh issue branch from the default branch when no checkpoint branch exists', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: args[0] === 'show-ref' ? 1 : 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+    const config = configSchema.parse({ version: 1 });
+
+    const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Fresh branch' }, 'new-run');
+
+    expect(worktree.resumed).toBe(false);
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).toContain(
+      `worktree add -B kaizen/issue-12-fresh-branch ${path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')} origin/main`
+    );
+  });
+
+  it('resumes the checkpoint branch even when the issue title changed', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Edited title' }, 'new-run', {
+      branch: 'kaizen/issue-12-original-title'
+    });
+
+    expect(worktree.branch).toBe('kaizen/issue-12-original-title');
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).toContain(
+      `worktree add ${path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')} kaizen/issue-12-original-title`
+    );
+  });
+
+  it('recreates a missing local checkpoint branch from the pushed remote branch', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: args.includes('refs/heads/kaizen/issue-12-resume') ? 1 : 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Resume' }, 'new-run');
+
+    expect(worktree.resumed).toBe(true);
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).toContain(
+      `worktree add -B kaizen/issue-12-resume ${path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')} origin/kaizen/issue-12-resume`
     );
   });
 

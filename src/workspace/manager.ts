@@ -120,9 +120,10 @@ export class WorkspaceManager {
   async createIssueWorktree(
     config: KaizenConfig,
     issue: { number: number; title: string },
-    runId: string
-  ): Promise<{ branch: string; path: string }> {
-    const branch = issueBranchName(config, issue);
+    runId: string,
+    options: { branch?: string } = {}
+  ): Promise<{ branch: string; path: string; resumed: boolean }> {
+    const branch = options.branch ?? issueBranchName(config, issue);
     const worktreePath = issueWorktreePath(this.workspacePath, runId, issue.number);
     const git = this.git();
     await git.worktreePrune();
@@ -130,9 +131,14 @@ export class WorkspaceManager {
     await fs.rm(worktreePath, { recursive: true, force: true });
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
     await this.removeWorktreesForBranch(branch);
-    await git.deleteLocalBranch(branch);
-    await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
-    return { branch, path: worktreePath };
+    const localBranchExists = await git.localBranchExists(branch);
+    const remoteBranchExists = !localBranchExists && await git.remoteBranchExists(branch);
+    if (localBranchExists) {
+      await git.worktreeAddExisting(worktreePath, branch);
+    } else {
+      await git.worktreeAdd(worktreePath, branch, remoteBranchExists ? `origin/${branch}` : `origin/${config.git.defaultBranch}`);
+    }
+    return { branch, path: worktreePath, resumed: localBranchExists || remoteBranchExists };
   }
 
   async removeIssueWorktree(worktreePath: string): Promise<void> {

@@ -106,7 +106,7 @@ export class GitHubClient {
       'view',
       String(number),
       '--json',
-      'number,headRefName,headRepositoryOwner,url,baseRefName,headRefOid'
+      'number,headRefName,headRepositoryOwner,url,baseRefName,headRefOid,isDraft,state'
     ]);
     return JSON.parse(result.stdout) as GitHubPullRequestDetails;
   }
@@ -228,8 +228,9 @@ export class GitHubClient {
     title: string;
     body: string;
     expectedClosingIssueNumber: number;
+    draft?: boolean;
   }): Promise<PullRequestResult> {
-    const result = await this.gh([
+    const args = [
       'pr',
       'create',
       '--base',
@@ -240,7 +241,9 @@ export class GitHubClient {
       options.title,
       '--body',
       options.body
-    ]);
+    ];
+    if (options.draft) args.push('--draft');
+    const result = await this.gh(args);
     const url = result.stdout.trim().split(/\s+/).find((part) => part.startsWith('http')) ?? result.stdout.trim();
     const number = url.match(/\/pull\/(\d+)/)?.[1];
     if (!number) throw new Error(`Could not parse created pull request URL: ${result.stdout.trim()}`);
@@ -255,12 +258,25 @@ export class GitHubClient {
       validateCreatedPullRequest({
         linkage,
         defaultBranch,
-        expectedClosingIssueNumber: options.expectedClosingIssueNumber
+        expectedClosingIssueNumber: options.expectedClosingIssueNumber,
+        allowDraft: Boolean(options.draft)
       });
       return { url: linkage.url || url, number: prNumber };
     } catch (error) {
       throw new CreatedPullRequestValidationError(created, error);
     }
+  }
+
+  async editPullRequest(number: number, options: { title: string; body: string }): Promise<void> {
+    await this.gh(['pr', 'edit', String(number), '--title', options.title, '--body', options.body]);
+  }
+
+  async markPullRequestReady(number: number): Promise<void> {
+    await this.gh(['pr', 'ready', String(number)]);
+  }
+
+  async markPullRequestDraft(number: number): Promise<void> {
+    await this.gh(['pr', 'ready', String(number), '--undo']);
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
@@ -485,13 +501,15 @@ function validateCreatedPullRequest(options: {
   linkage: GitHubPullRequestLinkage;
   defaultBranch: string;
   expectedClosingIssueNumber: number;
+  allowDraft?: boolean;
 }): void {
   const { linkage, defaultBranch, expectedClosingIssueNumber } = options;
   const errors: string[] = [];
   if (linkage.baseRefName !== defaultBranch) {
     errors.push(`base branch is ${linkage.baseRefName || '<unknown>'}, expected repository default branch ${defaultBranch}`);
   }
-  if (linkage.isDraft) errors.push('pull request is a draft');
+  if (options.allowDraft && !linkage.isDraft) errors.push('pull request was expected to be a draft');
+  if (linkage.isDraft && !options.allowDraft) errors.push('pull request is a draft');
   if (!linkage.closingIssuesReferences.some((issue) => issue.number === expectedClosingIssueNumber)) {
     errors.push(`closing issue reference #${expectedClosingIssueNumber} was not recognized by GitHub`);
   }

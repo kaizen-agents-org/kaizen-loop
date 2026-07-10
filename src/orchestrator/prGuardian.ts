@@ -4,6 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { KaizenConfig } from '../config/schema.js';
 import { buildAllowlistedEnv, githubCliEnv, type CommandRunner } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
+import { loadImplementationState, saveImplementationState } from './implementationState.js';
 
 export interface PrGuardianSkillRequest {
   config: KaizenConfig;
@@ -24,6 +25,7 @@ export interface PrGuardianJob {
   repo: string;
   prUrl: string;
   prNumber: number;
+  issueNumber?: number;
   branch: string;
   baseBranch: string;
   headSha: string;
@@ -54,6 +56,7 @@ export async function enqueuePrGuardianJob(options: {
   repo: string;
   prUrl: string;
   prNumber: number;
+  issueNumber?: number;
   branch: string;
   baseBranch: string;
   headSha: string;
@@ -65,6 +68,7 @@ export async function enqueuePrGuardianJob(options: {
     repo: options.repo,
     prUrl: options.prUrl,
     prNumber: options.prNumber,
+    issueNumber: options.issueNumber,
     branch: options.branch,
     baseBranch: options.baseBranch,
     headSha: options.headSha,
@@ -76,7 +80,14 @@ export async function enqueuePrGuardianJob(options: {
     lastBlocker: options.config.guardian.enabled ? undefined : 'PR guardian is disabled.'
   };
   const existing = await readGuardianJob(options.stateDir, job.id);
-  if (existing) return existing;
+  if (existing) {
+    if (options.issueNumber && !existing.issueNumber) {
+      const linked = { ...existing, issueNumber: options.issueNumber, updatedAt: now };
+      await writeGuardianJob(options.stateDir, linked);
+      return linked;
+    }
+    return existing;
+  }
   await writeGuardianJob(options.stateDir, job);
   return job;
 }
@@ -132,7 +143,22 @@ export async function runPrGuardianJob(options: {
     lastBlocker: result.status === 'success' ? undefined : result.summary
   };
   await writeGuardianJob(options.stateDir, finished);
+  await syncImplementationState(options.stateDir, finished);
   return finished;
+}
+
+async function syncImplementationState(stateDir: string, job: PrGuardianJob): Promise<void> {
+  if (!job.issueNumber) return;
+  const current = await loadImplementationState(stateDir, job.issueNumber);
+  await saveImplementationState(stateDir, {
+    issue: job.issueNumber,
+    branch: job.branch,
+    phase: job.status === 'success' ? 'complete' : 'guardian',
+    attempt: current?.attempt ?? job.attemptCount,
+    pr: job.prNumber,
+    prUrl: job.prUrl,
+    lastFailure: job.status === 'blocked' ? job.lastBlocker : undefined
+  });
 }
 
 export async function runPendingPrGuardianJobs(options: {
@@ -145,13 +171,15 @@ export async function runPendingPrGuardianJobs(options: {
   for (const job of jobs) {
     if (isStaleRunningJob(job, options.config.guardian.timeoutMinutes) && job.attemptCount >= job.retryBudget) {
       const now = new Date().toISOString();
-      await writeGuardianJob(options.stateDir, {
+      const blocked: PrGuardianJob = {
         ...job,
         status: 'blocked',
         updatedAt: now,
         lastCheckedAt: now,
         lastBlocker: `PR guardian retry budget exhausted after ${job.attemptCount} attempts.`
-      });
+      };
+      await writeGuardianJob(options.stateDir, blocked);
+      await syncImplementationState(options.stateDir, blocked);
     }
   }
   const runnable = jobs.filter(

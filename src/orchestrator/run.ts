@@ -8,7 +8,7 @@ import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
 import type { KaizenConfig, Registry } from '../config/schema.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
-import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
+import type { GitHubIssue, GitHubPullRequest, PullRequestResult } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts, markedPullRequestNumbers } from '../report/comments.js';
 import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
@@ -36,6 +36,7 @@ import {
   summarizeGeneratedPullRequestBacklog
 } from './wipLimit.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
+import { listImplementationStates, loadImplementationState, saveImplementationState } from './implementationState.js';
 
 export interface RunOptions {
   cwd: string;
@@ -90,6 +91,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   let github = new GitHubClient(runCommand, resolved.project.localPath);
+  const stateDir = projectStateDir(resolved.slug);
   const selectRunIssues = async () => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
     const jobMaxIssues = scheduledJob?.config.run.maxIssues;
@@ -117,18 +119,28 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       explicit: requestedIssues !== undefined,
       openPullRequests
     });
+    const implementationStates = await listImplementationStates(stateDir);
+    const resumableIssueNumbers = new Set(
+      implementationStates.filter((state) => state.phase !== 'complete').map((state) => state.issue)
+    );
+    const resumeBranches = new Set(
+      implementationStates.filter((state) => state.phase !== 'complete').map((state) => state.branch)
+    );
     const limited = await applyOpenPullRequestLimit({
       config,
       selection,
       automatic,
-      openPullRequests
+      openPullRequests,
+      resumableIssueNumbers,
+      resumeBranches
     });
     const wipLimited = await applyGeneratedPullRequestWipLimit({
       config,
       selection: limited,
       automatic,
       repo: resolved.project.repo,
-      github
+      github,
+      resumableIssueNumbers
     });
     return { ...wipLimited, openPullRequests };
   };
@@ -138,7 +150,6 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     return selection;
   }
 
-  const stateDir = projectStateDir(resolved.slug);
   await fs.mkdir(stateDir, { recursive: true });
   await ensureNotPaused(stateDir);
   let lock: RunLock;
@@ -258,7 +269,10 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
           try {
             for (const issue of selection.selected) {
               assertRunWithinDeadline(runDeadlineAt);
-              const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId);
+              const checkpoint = await loadImplementationState(stateDir, issue.number);
+              const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId, {
+                branch: checkpoint?.branch
+              });
               worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
             }
             const issueResults = await Promise.allSettled(
@@ -476,25 +490,31 @@ async function applyOpenPullRequestLimit(options: {
   selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> };
   automatic: boolean;
   openPullRequests: GitHubPullRequest[];
+  resumableIssueNumbers?: Set<number>;
+  resumeBranches?: Set<string>;
 }): Promise<{ selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   if (!options.automatic || options.selection.selected.length === 0) return options.selection;
   const limit = options.config.run.maxOpenPullRequests;
   if (limit === 0) {
-    return skipSelectedForOpenPrLimit(options.selection, 'open pull request limit reached (0/0)');
+    return skipNewIssuesForLimit(options.selection, options.resumableIssueNumbers, 'open pull request limit reached (0/0)');
   }
 
-  const countedOpenPullRequests = options.openPullRequests.filter((pullRequest) => !isSyncPullRequest(pullRequest));
+  const countedOpenPullRequests = options.openPullRequests.filter(
+    (pullRequest) => !isSyncPullRequest(pullRequest) && !options.resumeBranches?.has(pullRequest.headRefName ?? '')
+  );
   const openCount = countedOpenPullRequests.length;
   const remaining = limit - openCount;
   if (remaining <= 0) {
-    return skipSelectedForOpenPrLimit(options.selection, `open pull request limit reached (${openCount}/${limit})`);
+    return skipNewIssuesForLimit(options.selection, options.resumableIssueNumbers, `open pull request limit reached (${openCount}/${limit})`);
   }
   if (options.selection.selected.length <= remaining) return options.selection;
+  const newIssues = options.selection.selected.filter((issue) => !options.resumableIssueNumbers?.has(issue.number));
+  const allowedNewIssues = new Set(newIssues.slice(0, remaining).map((issue) => issue.number));
   return {
-    selected: options.selection.selected.slice(0, remaining),
+    selected: options.selection.selected.filter((issue) => options.resumableIssueNumbers?.has(issue.number) || allowedNewIssues.has(issue.number)),
     skipped: [
       ...options.selection.skipped,
-      ...options.selection.selected.slice(remaining).map((issue) => ({
+      ...newIssues.slice(remaining).map((issue) => ({
         number: issue.number,
         reason: `open pull request limit would be exceeded (${openCount}/${limit})`
       }))
@@ -508,6 +528,7 @@ async function applyGeneratedPullRequestWipLimit(options: {
   automatic: boolean;
   repo: string;
   github: GitHubClient;
+  resumableIssueNumbers?: Set<number>;
 }): Promise<{ selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   if (!options.automatic || options.selection.selected.length === 0) return options.selection;
   const owner = options.repo.split('/')[0];
@@ -518,19 +539,19 @@ async function applyGeneratedPullRequestWipLimit(options: {
     wipLimit: options.config.safety.wipLimit
   });
   if (!backlog.exceeded) return options.selection;
-  return skipSelectedForOpenPrLimit(options.selection, generatedPullRequestWipLimitReason(backlog));
+  return skipNewIssuesForLimit(options.selection, options.resumableIssueNumbers, generatedPullRequestWipLimitReason(backlog));
 }
 
-function skipSelectedForOpenPrLimit(
+function skipNewIssuesForLimit(
   selection: { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> },
+  resumableIssueNumbers: Set<number> | undefined,
   reason: string
-): { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> } {
+) {
+  const resumable = selection.selected.filter((issue) => resumableIssueNumbers?.has(issue.number));
+  const skipped = selection.selected.filter((issue) => !resumableIssueNumbers?.has(issue.number));
   return {
-    selected: [],
-    skipped: [
-      ...selection.skipped,
-      ...selection.selected.map((issue) => ({ number: issue.number, reason }))
-    ]
+    selected: resumable,
+    skipped: [...selection.skipped, ...skipped.map((issue) => ({ number: issue.number, reason }))]
   };
 }
 
@@ -649,6 +670,16 @@ async function processIssue(options: {
     assertRunWithinDeadline(options.runDeadlineAt);
     await assertMinFreeDisk(options.project.workspacePath, options.config.safety.minFreeDiskMb);
     await options.github.addLabels(options.issue.number, ['kaizen:in-progress']);
+    const previousState = await loadImplementationState(options.stateDir, options.issue.number);
+    await saveImplementationState(options.stateDir, {
+      issue: options.issue.number,
+      branch: options.branch,
+      phase: 'implementing',
+      attempt: attempts,
+      lastFailure: previousState?.lastFailure,
+      pr: previousState?.pr,
+      prUrl: previousState?.prUrl
+    });
     const setupResult = await workspace.runSetup(options.config, options.runDeadlineAt);
     if (setupResult && !setupResult.ok) {
       const reason = `Setup failed: ${setupResult.command}`;
@@ -661,7 +692,7 @@ async function processIssue(options: {
     let agentResult: AgentResult | undefined;
     let verifierResult: VerifierResult | undefined;
     let verifyResults: Array<{ command: string; ok: boolean; output: string }> = [];
-    let previousFailure: string | undefined;
+    let previousFailure = previousState?.lastFailure;
     const filedDiscoveredIssues = new Set<string>();
 
     for (let retry = 0; retry <= options.config.run.maxVerifyRetries; retry += 1) {
@@ -711,6 +742,15 @@ async function processIssue(options: {
         );
       }
 
+      await saveImplementationState(options.stateDir, {
+        issue: options.issue.number,
+        branch,
+        phase: 'verifying',
+        attempt: attempts,
+        lastFailure: previousFailure,
+        pr: previousState?.pr,
+        prUrl: previousState?.prUrl
+      });
       verifyResults = await workspace.runVerify(options.config, options.runDeadlineAt);
       await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
       const failedVerify = verifyResults.find((item) => !item.ok);
@@ -782,6 +822,14 @@ async function processIssue(options: {
         discoveredFollowups
       );
     }
+    await saveImplementationState(options.stateDir, {
+      issue: options.issue.number,
+      branch,
+      phase: 'publishing',
+      attempt: attempts,
+      pr: previousState?.pr,
+      prUrl: previousState?.prUrl
+    });
 
     if (verifierResult?.status === 'open_pr' || verifierResult?.status === 'open_pr_with_warning') {
       const pr = await reflectPullRequest({
@@ -793,6 +841,7 @@ async function processIssue(options: {
         verifyResults,
         diff: finalDiff,
         github: options.github,
+        stateDir: options.stateDir,
         runId: options.runId,
         trigger: options.trigger,
         attempt: attempts,
@@ -808,6 +857,24 @@ async function processIssue(options: {
       diff: finalDiff,
       verifyConfigured: options.config.commands.verify.length > 0
     });
+    if (previousState?.pr) {
+      const pr = await reflectPullRequest({
+        workspace,
+        branch,
+        issue: options.issue,
+        config: options.config,
+        agentResult,
+        verifyResults,
+        diff: finalDiff,
+        github: options.github,
+        stateDir: options.stateDir,
+        runId: options.runId,
+        trigger: options.trigger,
+        attempt: attempts,
+        reason: `Resumed checkpoint draft PR after verification passed: ${decision.reason}`
+      });
+      return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started), discoveredFollowups);
+    }
     if (decision.action === 'direct' && options.forcePullRequest) {
       const pr = await reflectPullRequest({
         workspace,
@@ -818,6 +885,7 @@ async function processIssue(options: {
         verifyResults,
         diff: finalDiff,
         github: options.github,
+        stateDir: options.stateDir,
         runId: options.runId,
         trigger: options.trigger,
         attempt: attempts,
@@ -853,6 +921,7 @@ async function processIssue(options: {
           verifyResults,
           diff: finalDiff,
           github: options.github,
+          stateDir: options.stateDir,
           runId: options.runId,
           trigger: options.trigger,
           attempt: attempts,
@@ -880,6 +949,7 @@ async function processIssue(options: {
           verifyResults,
           diff: finalDiff,
           github: options.github,
+          stateDir: options.stateDir,
           runId: options.runId,
           trigger: options.trigger,
           attempt: attempts,
@@ -906,6 +976,12 @@ async function processIssue(options: {
         );
         await options.github.closeIssue(options.issue.number);
         await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+        await saveImplementationState(options.stateDir, {
+          issue: options.issue.number,
+          branch,
+          phase: 'complete',
+          attempt: attempts
+        });
         return withDiscoveredFollowups({
           number: options.issue.number,
           title: options.issue.title,
@@ -934,6 +1010,7 @@ async function processIssue(options: {
       verifyResults,
       diff: finalDiff,
       github: options.github,
+      stateDir: options.stateDir,
       runId: options.runId,
       trigger: options.trigger,
       attempt: attempts,
@@ -984,6 +1061,15 @@ async function finishPr(
     runCommand: options.runCommand,
     runDeadlineAt: options.runDeadlineAt,
     pr
+  });
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: pr.branch,
+    phase: guardian.status === 'success' ? 'complete' : 'guardian',
+    attempt: attempts,
+    pr: pr.number,
+    prUrl: pr.url,
+    lastFailure: guardian.status === 'failed' ? guardian.summary : undefined
   });
   const guardianFailed = guardian.status === 'failed';
   const reason = guardianFailed ? `${pr.reason}\n\nPR guardian failed: ${guardian.summary}` : `${pr.reason}\n\nPR guardian: ${guardian.summary}`;
@@ -1084,6 +1170,10 @@ async function finishBlocked(
     runId: string;
     github: GitHubClient;
     trigger: RunSummary['trigger'];
+    stateDir: string;
+    project: { workspacePath: string };
+    runCommand: CommandRunner;
+    branch: string;
   },
   agent: AgentAdapter,
   attempt: number,
@@ -1091,6 +1181,22 @@ async function finishBlocked(
   started: number
 ): Promise<RunIssueSummary> {
   const requiresHuman = requiresHumanForBlockedAgent(agentResult);
+  const reason = agentResult.blockedReason ?? agentResult.summary;
+  const checkpointError = await checkpointPartialChanges(options, options.issue);
+  const checkpointReason = checkpointError ? `${reason}\n\nCheckpoint commit failed: ${checkpointError}` : reason;
+  const draft = await publishDraftCheckpoint(options, attempt, checkpointReason);
+  const recordedReason = draft.error
+    ? `${checkpointReason}\n\nDraft PR publication failed: ${draft.error}`
+    : checkpointReason;
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: options.branch,
+    phase: 'blocked',
+    attempt,
+    lastFailure: recordedReason,
+    pr: draft.pr?.number,
+    prUrl: draft.pr?.url
+  });
   await options.github.comment(
     options.issue.number,
     buildResultComment({
@@ -1101,10 +1207,12 @@ async function finishBlocked(
       agent: agent.name,
       summary: agentSummary(agentResult),
       notes: agentResult.notes,
-      reason: agentResult.blockedReason ?? agentResult.summary,
+      reason: recordedReason,
       trigger: options.trigger,
       maxAttempts: options.config.run.maxAttemptsPerIssue,
-      requiresHuman
+      requiresHuman,
+      resumeBranch: options.branch,
+      prUrl: draft.pr?.url
     })
   );
   if (requiresHuman) {
@@ -1117,7 +1225,7 @@ async function finishBlocked(
     agent: agent.name,
     attempt,
     outcome: 'blocked',
-    reason: agentResult.blockedReason ?? agentResult.summary,
+    reason: recordedReason,
     durationMs: Date.now() - started
   };
 }
@@ -1148,6 +1256,10 @@ async function finishFailed(
     runId: string;
     github: GitHubClient;
     trigger: RunSummary['trigger'];
+    stateDir: string;
+    project: { workspacePath: string };
+    runCommand: CommandRunner;
+    branch: string;
   },
   agent: AgentAdapter,
   attempt: number,
@@ -1155,6 +1267,19 @@ async function finishFailed(
   started: number,
   verifyResults?: Array<{ command: string; ok: boolean; output: string }>
 ): Promise<RunIssueSummary> {
+  const checkpointError = await checkpointPartialChanges(options, options.issue);
+  const checkpointReason = checkpointError ? `${reason}\n\nCheckpoint commit failed: ${checkpointError}` : reason;
+  const draft = await publishDraftCheckpoint(options, attempt, checkpointReason, verifyResults);
+  const recordedReason = draft.error ? `${checkpointReason}\n\nDraft PR publication failed: ${draft.error}` : checkpointReason;
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: options.branch,
+    phase: 'failed',
+    attempt,
+    lastFailure: recordedReason,
+    pr: draft.pr?.number,
+    prUrl: draft.pr?.url
+  });
   await options.github.comment(
     options.issue.number,
     buildResultComment({
@@ -1163,11 +1288,13 @@ async function finishFailed(
       attempt,
       outcome: 'failed',
       agent: agent.name,
-      summary: reason,
+      summary: recordedReason,
       verifyResults,
-      reason,
+      reason: recordedReason,
       trigger: options.trigger,
-      maxAttempts: options.config.run.maxAttemptsPerIssue
+      maxAttempts: options.config.run.maxAttemptsPerIssue,
+      resumeBranch: options.branch,
+      prUrl: draft.pr?.url
     })
   );
   if (attempt >= options.config.run.maxAttemptsPerIssue) {
@@ -1180,9 +1307,111 @@ async function finishFailed(
     agent: agent.name,
     attempt,
     outcome: 'failed',
-    reason,
+    reason: recordedReason,
     durationMs: Date.now() - started
   };
+}
+
+async function publishDraftCheckpoint(
+  options: {
+    issue: GitHubIssue;
+    config: KaizenConfig;
+    stateDir: string;
+    project: { repo?: string; workspacePath: string };
+    github: GitHubClient;
+    runCommand: CommandRunner;
+    branch: string;
+  },
+  attempt: number,
+  reason: string,
+  verifyResults: Array<{ command: string; ok: boolean; output: string }> = []
+): Promise<{ pr?: PullRequestResult; error?: string }> {
+  try {
+    const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
+    const current = await loadImplementationState(options.stateDir, options.issue.number);
+    const diff = await workspace.collectDiffStats(options.config);
+    if (diff.changedFiles === 0 && !current?.pr) return {};
+    await workspace.git().push(options.branch, { forceWithLease: true });
+    const title = `[WIP] kaizen: ${shortSummary(options.issue.title)} (#${options.issue.number})`;
+    const body = buildDraftCheckpointBody(options.issue, options.branch, attempt, reason, verifyResults, diff);
+    if (current?.pr) {
+      const existing = await options.github.getPullRequest(current.pr);
+      if (existing.state === 'OPEN' || existing.state === undefined) {
+        if (!existing.isDraft) await options.github.markPullRequestDraft(current.pr);
+        await options.github.editPullRequest(current.pr, { title, body });
+        return { pr: { number: current.pr, url: current.prUrl ?? existing.url } };
+      }
+    }
+    const pr = await options.github.createPullRequest({
+      base: options.config.git.defaultBranch,
+      head: options.branch,
+      title,
+      body,
+      expectedClosingIssueNumber: options.issue.number,
+      draft: true
+    });
+    return { pr };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function buildDraftCheckpointBody(
+  issue: GitHubIssue,
+  branch: string,
+  attempt: number,
+  reason: string,
+  verifyResults: Array<{ command: string; ok: boolean }>,
+  diff: DiffStats
+): string {
+  const checks = verifyResults.length
+    ? verifyResults.map((result) => `- [${result.ok ? 'x' : ' '}] \`${result.command}\``).join('\n')
+    : '- [ ] Verification has not completed';
+  return `## Work in progress
+
+Kaizen Loop preserved a partial implementation after the run stopped. The next eligible run resumes from this branch and updates this draft PR.
+
+Closes #${issue.number}
+
+| | |
+|---|---|
+| Checkpoint branch | \`${branch}\` |
+| Attempt | ${attempt} |
+| Changed files | ${diff.changedFiles} |
+| Changed lines | ${diff.changedLines} |
+
+## Why the run stopped
+
+${reason}
+
+## Verification
+
+${checks}
+
+## Remaining work
+
+- [ ] Resume implementation from the checkpoint
+- [ ] Pass configured verification
+- [ ] Pass verifier review
+- [ ] Mark this PR ready for review
+- [ ] Run PR guardian until merge-ready
+
+<!-- kaizen-loop:draft-checkpoint issue=${issue.number} attempt=${attempt} -->`;
+}
+
+async function checkpointPartialChanges(
+  options: { project: { workspacePath: string }; runCommand: CommandRunner },
+  issue: GitHubIssue
+): Promise<string | undefined> {
+  try {
+    const git = new WorkspaceManager(options.runCommand, options.project.workspacePath).git();
+    if (!(await git.statusPorcelain()).trim()) return undefined;
+    await git.addAll();
+    await git.commit(`kaizen: checkpoint partial implementation (#${issue.number})`);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 async function resolveDirectCommitChoice(options: {
@@ -1345,6 +1574,7 @@ async function reflectPullRequest(options: {
   verifyResults: Array<{ command: string; ok: boolean; output: string }>;
   diff: DiffStats;
   github: GitHubClient;
+  stateDir: string;
   runId: string;
   trigger: RunSummary['trigger'];
   attempt: number;
@@ -1353,12 +1583,30 @@ async function reflectPullRequest(options: {
 }): Promise<PullRequestReflection> {
   await options.workspace.git().push(options.branch, { forceWithLease: true });
   const headSha = await options.workspace.git().revParse('HEAD');
+  const title = `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`;
+  const body = buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason, options.verifierResult);
+  const checkpoint = await loadImplementationState(options.stateDir, options.issue.number);
+  if (checkpoint?.pr) {
+    const current = await options.github.getPullRequest(checkpoint.pr);
+    if (current.state === 'OPEN' || current.state === undefined) {
+      await options.github.editPullRequest(checkpoint.pr, { title, body });
+      if (current.isDraft) await options.github.markPullRequestReady(checkpoint.pr);
+      return {
+        url: checkpoint.prUrl ?? current.url,
+        number: checkpoint.pr,
+        reason: options.reason,
+        branch: options.branch,
+        baseBranch: options.config.git.defaultBranch,
+        headSha
+      };
+    }
+  }
   try {
     const pr = await options.github.createPullRequest({
       base: options.config.git.defaultBranch,
       head: options.branch,
-      title: `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`,
-      body: buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason, options.verifierResult),
+      title,
+      body,
       expectedClosingIssueNumber: options.issue.number
     });
     return { ...pr, reason: options.reason, branch: options.branch, baseBranch: options.config.git.defaultBranch, headSha };
@@ -1405,6 +1653,7 @@ async function runPrGuardianAfterPullRequest(options: {
       repo: options.project.repo,
       prUrl: options.pr.url,
       prNumber: options.pr.number,
+      issueNumber: options.issue.number,
       branch: options.pr.branch,
       baseBranch: options.pr.baseBranch,
       headSha: options.pr.headSha

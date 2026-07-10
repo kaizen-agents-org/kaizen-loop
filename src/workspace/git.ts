@@ -66,6 +66,20 @@ export class GitClient {
     await this.git(['worktree', 'add', '-B', branch, target, ref]);
   }
 
+  async worktreeAddExisting(target: string, branch: string): Promise<void> {
+    await this.git(['worktree', 'add', target, branch]);
+  }
+
+  async localBranchExists(branch: string): Promise<boolean> {
+    const result = await this.git(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { rejectOnNonZero: false });
+    return result.exitCode === 0;
+  }
+
+  async remoteBranchExists(branch: string, remote = 'origin'): Promise<boolean> {
+    const result = await this.git(['show-ref', '--verify', '--quiet', `refs/remotes/${remote}/${branch}`], { rejectOnNonZero: false });
+    return result.exitCode === 0;
+  }
+
   async worktreeList(): Promise<Array<{ path: string; branch?: string }>> {
     const result = await this.git(['worktree', 'list', '--porcelain'], { rejectOnNonZero: false });
     return parseWorktreeList(result.stdout);

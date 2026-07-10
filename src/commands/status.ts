@@ -7,6 +7,7 @@ import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
 import { GitClient } from '../workspace/git.js';
 import { listPrGuardianJobs } from '../orchestrator/prGuardian.js';
+import { listImplementationStates, type ImplementationState } from '../orchestrator/implementationState.js';
 import type { RunIssueSummary, RunSummary } from '../orchestrator/summary.js';
 import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
@@ -46,6 +47,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
   const stateDir = projectStateDir(resolved.slug);
   const lastSummary = await readLatestSummary(stateDir);
   const guardianJobs = await listPrGuardianJobs(stateDir);
+  const implementationStates = await listImplementationStates(stateDir);
   const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
   return {
     slug: resolved.slug,
@@ -75,6 +77,14 @@ export async function statusProject(options: { cwd: string; project?: string; me
       stale: guardianJobs.filter((job) => isStaleGuardianJob(job, openPullRequestNumbers)).length,
       latest: guardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
     },
+    implementations: {
+      jobs: implementationStates.length,
+      active: implementationStates.filter((state) => ['implementing', 'verifying', 'publishing', 'guardian'].includes(state.phase)).length,
+      needsAttention: implementationStates.filter(isImplementationNeedsAttention).length,
+      stale: implementationStates.filter(isStaleImplementationState).length,
+      latest: [...implementationStates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0),
+      items: implementationStates.sort((a, b) => a.issue - b.issue)
+    },
     branchHygiene: await collectBranchHygiene({
       runCommand: options.runCommand,
       workspacePath: resolved.project.workspacePath,
@@ -89,6 +99,16 @@ export async function statusProject(options: { cwd: string; project?: string; me
     }),
     metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestBacklog) : undefined
   };
+}
+
+function isStaleImplementationState(state: ImplementationState): boolean {
+  if (state.phase === 'complete') return false;
+  const updatedAt = Date.parse(state.updatedAt);
+  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > 24 * 60 * 60 * 1000;
+}
+
+function isImplementationNeedsAttention(state: ImplementationState): boolean {
+  return state.phase === 'failed' || state.phase === 'blocked' || Boolean(state.lastFailure);
 }
 
 export async function listProjects() {

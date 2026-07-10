@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configSchema } from '../src/config/schema.js';
 import { enqueuePrGuardianJob, listPrGuardianJobs, runPendingPrGuardianJobs, runPrGuardianSkill } from '../src/orchestrator/prGuardian.js';
+import { loadImplementationState, saveImplementationState } from '../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('runPrGuardianSkill', () => {
@@ -372,12 +373,21 @@ describe('runPrGuardianSkill', () => {
       version: 1,
       guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
+    await saveImplementationState(stateDir, {
+      issue: 1,
+      branch: 'kaizen/issue-1-fix',
+      phase: 'guardian',
+      attempt: 2,
+      pr: 4,
+      prUrl: 'https://github.com/o/r/pull/4'
+    });
     await enqueuePrGuardianJob({
       stateDir,
       config,
       repo: 'o/r',
       prUrl: 'https://github.com/o/r/pull/4',
       prNumber: 4,
+      issueNumber: 1,
       branch: 'kaizen/issue-1-fix',
       baseBranch: 'main',
       headSha: 'abc123456789'
@@ -403,6 +413,11 @@ describe('runPrGuardianSkill', () => {
     expect(jobs[0].status).toBe('success');
     expect(jobs[0].attemptCount).toBe(1);
     expect((await listPrGuardianJobs(stateDir))[0].status).toBe('success');
+    await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
+      phase: 'complete',
+      attempt: 2,
+      pr: 4
+    });
   });
 
   it('resumes stale running guardian jobs', async () => {

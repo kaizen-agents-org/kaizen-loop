@@ -16,6 +16,7 @@ export interface ResultCommentOptions {
   trigger?: string;
   maxAttempts: number;
   requiresHuman?: boolean;
+  resumeBranch?: string;
 }
 
 export function buildResultComment(options: ResultCommentOptions): string {
@@ -30,7 +31,8 @@ export function buildResultComment(options: ResultCommentOptions): string {
     trigger: options.trigger,
     commit: options.commit,
     pr: options.prUrl,
-    retryableExternal: options.requiresHuman === false || undefined
+    retryableExternal: options.requiresHuman === false || undefined,
+    checkpointBranch: options.resumeBranch
   };
 
   return `## Kaizen Loop result
@@ -41,6 +43,8 @@ export function buildResultComment(options: ResultCommentOptions): string {
 | Reason | ${options.reason ?? '-'} |
 | Agent | ${options.agent} (attempt ${options.attempt}/${options.maxAttempts}) |
 | Verification | ${verify} |
+${options.resumeBranch ? `| Resume | Checkpoint saved on \`${options.resumeBranch}\`; the next eligible run resumes from this branch. |` : ''}
+${options.resumeBranch && options.prUrl ? `| Draft PR | ${options.prUrl} |` : ''}
 
 ### Summary
 ${options.summary || '(no summary)'}
