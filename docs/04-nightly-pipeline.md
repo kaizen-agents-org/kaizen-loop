@@ -121,11 +121,12 @@ git worktree add -B kaizen/issue-<N>-<title-slug> \
 ```
 
 - Issue に `kaizen:in-progress` ラベルを付与してから Issue 用 worktree 上で実装を開始する
-- active checkpoint state があり、対応 branch が local または origin に存在する場合だけ、その branch を新しい worktree に再接続する。branch が消失していれば default branch から作り直さず、`recovery-needed` と `kaizen:needs-human` で handoff する
+- active checkpoint state があり、対応 branch が local または origin に存在する場合だけ、その branch を新しい worktree に再接続する。origin が進んでいれば local を fast-forward し、両方が diverge している場合や branch が消失している場合は、`recovery-needed` と `kaizen:needs-human` で handoff する
 - 実装フェーズは `~/.kaizen/projects/<slug>/implementations/issue-<N>.json` に保存する。状態は `implementing` / `verifying` / `publishing` / `guardian` / `blocked` / `failed` / `discarded` / `recovery-needed` / `complete` で、branch、attempt、直近の失敗理由、作成済み PR を記録する
 - builder / verifier / publish が失敗した時点で未コミットの変更があれば checkpoint commit を作る。`forbiddenPaths` を含む変更だけは commit せず、直前の remote checkpoint または default branch まで破棄する
 - 意味のある diff が残っている失敗・blocked では checkpoint branch を push し、draft PR を作成または更新する。diff が 0 の環境障害では draft PR を作らない
 - draft PR の description には停止理由、attempt、変更規模、検証結果、残作業を記録する。検証と verifier が通ったら同じ PR を Ready for review に昇格し、guardian へ渡す
+- 人間が checkpoint PR を先に Ready for review へ昇格した場合は、branch を変更・force-pushせず、そのまま guardian へ handoff する
 - `commands.setup` が失敗した場合は**この夜の実行全体を中断**(環境問題であり、Issue 個別の問題ではないため)
 - ベースライン検証が失敗した場合、エージェントは起動しない。これは Issue 固有ではなく clean な default branch の問題なので、`kaizen:in-progress` を剥がし、機械可読 result marker なしの中断コメントを残して**この夜の実行全体を中断**する
 - ベースライン検証後に base workspace を再度 reset する。ベースライン検証の副作用を Issue 用 worktree へ持ち込まないため

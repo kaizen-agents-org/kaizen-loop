@@ -6,7 +6,7 @@ import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 import { GitClient } from '../src/workspace/git.js';
-import { CheckpointBranchMissingError, WorkspaceManager } from '../src/workspace/manager.js';
+import { CheckpointBranchDivergedError, CheckpointBranchMissingError, WorkspaceManager } from '../src/workspace/manager.js';
 
 describe('workspace branch handling', () => {
   it('replaces an existing deterministic issue branch before retrying', async () => {
@@ -207,6 +207,48 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls.map(([, args]) => args.join(' '))).not.toContain(
       `worktree add -B kaizen/issue-12-missing-checkpoint ${path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')} origin/main`
     );
+  });
+
+  it('fast-forwards a stale local checkpoint branch to origin before resuming', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: 0,
+      stdout: args[0] === 'rev-list' ? '1\t0\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    await workspace.createIssueWorktree(config, { number: 12, title: 'Resume' }, 'new-run', { resume: true });
+
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).toContain(
+      'branch -f kaizen/issue-12-resume origin/kaizen/issue-12-resume'
+    );
+  });
+
+  it('stops recovery when local and remote checkpoint branches diverged', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: 0,
+      stdout: args[0] === 'rev-list' ? '1\t1\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    await expect(
+      workspace.createIssueWorktree(config, { number: 12, title: 'Resume' }, 'new-run', { resume: true })
+    ).rejects.toBeInstanceOf(CheckpointBranchDivergedError);
   });
 
   it('discards forbidden changes back to a remote checkpoint when available', async () => {

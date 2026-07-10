@@ -28,6 +28,13 @@ export class CheckpointBranchMissingError extends Error {
   }
 }
 
+export class CheckpointBranchDivergedError extends Error {
+  constructor(readonly branch: string) {
+    super(`Checkpoint branch diverged from origin and requires reconciliation: ${branch}`);
+    this.name = 'CheckpointBranchDivergedError';
+  }
+}
+
 const DEFAULT_DIFF_TEXT_MAX_CHARS = 30_000;
 
 export class WorkspaceManager {
@@ -147,6 +154,11 @@ export class WorkspaceManager {
     const remoteBranchExists = !localBranchExists && await git.remoteBranchExists(branch);
     if (!localBranchExists && !remoteBranchExists) throw new CheckpointBranchMissingError(branch);
     if (localBranchExists) {
+      if (await git.remoteBranchExists(branch)) {
+        const divergence = await git.divergence(`origin/${branch}`, branch);
+        if (divergence.behind > 0 && divergence.ahead > 0) throw new CheckpointBranchDivergedError(branch);
+        if (divergence.behind > 0) await git.forceBranch(branch, `origin/${branch}`);
+      }
       await git.worktreeAddExisting(worktreePath, branch);
     } else {
       await git.worktreeAdd(worktreePath, branch, `origin/${branch}`);

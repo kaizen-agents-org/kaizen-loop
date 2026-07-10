@@ -8,7 +8,7 @@ import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
 import type { KaizenConfig, Registry } from '../config/schema.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
-import type { GitHubIssue, GitHubPullRequest, PullRequestResult } from '../github/types.js';
+import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestDetails, PullRequestResult } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts, markedPullRequestNumbers } from '../report/comments.js';
 import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
@@ -16,7 +16,12 @@ import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
 import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
-import { CheckpointBranchMissingError, WorkspaceManager, type DiffStats } from '../workspace/manager.js';
+import {
+  CheckpointBranchDivergedError,
+  CheckpointBranchMissingError,
+  WorkspaceManager,
+  type DiffStats
+} from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
 import { RunLock } from './lock.js';
@@ -42,7 +47,8 @@ import {
   listImplementationStates,
   loadImplementationState,
   openCheckpointStates,
-  saveImplementationState
+  saveImplementationState,
+  type ImplementationState
 } from './implementationState.js';
 
 export interface RunOptions {
@@ -285,7 +291,11 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
                 });
                 worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
               } catch (error) {
-                if (!(error instanceof CheckpointBranchMissingError) || !checkpoint) throw error;
+                if (
+                  !(error instanceof CheckpointBranchMissingError) &&
+                  !(error instanceof CheckpointBranchDivergedError)
+                ) throw error;
+                if (!checkpoint) throw error;
                 const attempt = countAttempts(issue.comments ?? []) + 1;
                 const reason = `${error.message}. Automatic resume stopped to avoid replacing the saved implementation with the default branch.`;
                 await saveImplementationState(stateDir, {
@@ -714,7 +724,19 @@ async function processIssue(options: {
     assertRunWithinDeadline(options.runDeadlineAt);
     await assertMinFreeDisk(options.project.workspacePath, options.config.safety.minFreeDiskMb);
     await options.github.addLabels(options.issue.number, ['kaizen:in-progress']);
-    const previousState = await loadImplementationState(options.stateDir, options.issue.number);
+    const savedState = await loadImplementationState(options.stateDir, options.issue.number);
+    const previousState = isResumableImplementationState(savedState) ? savedState : undefined;
+    if (previousState?.pr) {
+      const currentPullRequest = await options.github.getPullRequest(previousState.pr).catch(() => undefined);
+      if (currentPullRequest && (currentPullRequest.state === 'OPEN' || currentPullRequest.state === undefined)) {
+        if (currentPullRequest.headRefName !== options.branch) {
+          return await finishCheckpointPullRequestMismatch(options, attempts, previousState, currentPullRequest, started);
+        }
+        if (currentPullRequest.isDraft === false) {
+          return await handOffReadyCheckpointPullRequest(options, attempts, currentPullRequest, started);
+        }
+      }
+    }
     await saveImplementationState(options.stateDir, {
       issue: options.issue.number,
       branch: options.branch,
@@ -1162,6 +1184,137 @@ async function finishPr(
   };
 }
 
+async function handOffReadyCheckpointPullRequest(
+  options: {
+    issue: GitHubIssue;
+    config: KaizenConfig;
+    stateDir: string;
+    project: { repo: string; workspacePath: string };
+    github: GitHubClient;
+    runCommand: CommandRunner;
+    runDeadlineAt: number;
+    branch: string;
+    runId: string;
+    trigger: RunSummary['trigger'];
+  },
+  attempt: number,
+  pullRequest: GitHubPullRequestDetails,
+  started: number
+): Promise<RunIssueSummary> {
+  const guardian = await runPrGuardianAfterPullRequest({
+    issue: options.issue,
+    config: options.config,
+    project: options.project,
+    stateDir: options.stateDir,
+    github: options.github,
+    runCommand: options.runCommand,
+    pr: {
+      url: pullRequest.url,
+      number: pullRequest.number,
+      branch: options.branch,
+      baseBranch: pullRequest.baseRefName,
+      headSha: pullRequest.headRefOid
+    },
+    runDeadlineAt: options.runDeadlineAt
+  });
+  const reason = `Checkpoint PR was already ready for review; skipped implementation and handed it to PR guardian. ${guardian.summary}`;
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: options.branch,
+    phase: guardian.status === 'success' ? 'complete' : 'guardian',
+    attempt,
+    pr: pullRequest.number,
+    prUrl: pullRequest.url,
+    lastFailure: guardian.status === 'failed' ? guardian.summary : undefined
+  });
+  await options.github.comment(options.issue.number, buildResultComment({
+    runId: options.runId,
+    issue: options.issue.number,
+    attempt,
+    outcome: 'pr-created',
+    agent: 'orchestrator',
+    summary: reason,
+    reason,
+    trigger: options.trigger,
+    maxAttempts: options.config.run.maxAttemptsPerIssue,
+    prUrl: pullRequest.url
+  }));
+  if (guardian.status === 'failed') await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+  return {
+    number: options.issue.number,
+    title: options.issue.title,
+    priority: priorityLabel(options.issue, options.config),
+    agent: 'orchestrator',
+    attempt,
+    outcome: 'pr-created',
+    branch: options.branch,
+    pr: pullRequest.number,
+    prUrl: pullRequest.url,
+    guardian: {
+      status: guardian.status,
+      summary: guardian.summary,
+      jobId: guardian.jobId
+    },
+    reason,
+    durationMs: Date.now() - started
+  };
+}
+
+async function finishCheckpointPullRequestMismatch(
+  options: {
+    issue: GitHubIssue;
+    config: KaizenConfig;
+    stateDir: string;
+    github: GitHubClient;
+    branch: string;
+    runId: string;
+    trigger: RunSummary['trigger'];
+  },
+  attempt: number,
+  checkpoint: ImplementationState,
+  pullRequest: GitHubPullRequestDetails,
+  started: number
+): Promise<RunIssueSummary> {
+  const reason = `Checkpoint PR #${pullRequest.number} uses head branch ${pullRequest.headRefName ?? '<unknown>'}, expected ${options.branch}. Automatic update stopped.`;
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: options.branch,
+    phase: 'recovery-needed',
+    attempt,
+    lastFailure: reason,
+    pr: checkpoint.pr,
+    prUrl: checkpoint.prUrl ?? pullRequest.url
+  });
+  await options.github.comment(options.issue.number, buildResultComment({
+    runId: options.runId,
+    issue: options.issue.number,
+    attempt,
+    outcome: 'blocked',
+    agent: 'orchestrator',
+    summary: reason,
+    reason,
+    trigger: options.trigger,
+    maxAttempts: options.config.run.maxAttemptsPerIssue,
+    prUrl: checkpoint.prUrl ?? pullRequest.url
+  }));
+  await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+  return {
+    number: options.issue.number,
+    title: options.issue.title,
+    priority: priorityLabel(options.issue, options.config),
+    agent: 'orchestrator',
+    attempt,
+    outcome: 'blocked',
+    branch: options.branch,
+    pr: pullRequest.number,
+    prUrl: checkpoint.prUrl ?? pullRequest.url,
+    reason,
+    durationMs: Date.now() - started
+  };
+}
+
 async function selectAgent(config: KaizenConfig, runCommand: CommandRunner): Promise<AgentAdapter> {
   const agent = new BuilderAgentAdapter(runCommand, {
     ...config.builder,
@@ -1389,6 +1542,11 @@ async function publishDraftCheckpoint(
   try {
     const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
     const current = await loadImplementationState(options.stateDir, options.issue.number);
+    const existing = current?.pr ? await options.github.getPullRequest(current.pr) : undefined;
+    if (existing && (existing.state === 'OPEN' || existing.state === undefined)) {
+      const updateError = checkpointPullRequestUpdateError(existing, options.branch);
+      if (updateError) return { pr: { number: existing.number, url: existing.url }, error: updateError };
+    }
     const diff = await workspace.collectCheckpointDiffStats(options.config);
     const publicationBlocker = forbiddenCheckpointPublicationReason(diff.forbiddenFiles);
     if (publicationBlocker) return { skipped: publicationBlocker };
@@ -1396,13 +1554,9 @@ async function publishDraftCheckpoint(
     await workspace.git().push(options.branch, { forceWithLease: true });
     const title = `[WIP] kaizen: ${shortSummary(options.issue.title)} (#${options.issue.number})`;
     const body = buildDraftCheckpointBody(options.issue, options.branch, attempt, reason, verifyResults, diff);
-    if (current?.pr) {
-      const existing = await options.github.getPullRequest(current.pr);
-      if (existing.state === 'OPEN' || existing.state === undefined) {
-        if (!existing.isDraft) await options.github.markPullRequestDraft(current.pr);
-        await options.github.editPullRequest(current.pr, { title, body });
-        return { pr: { number: current.pr, url: current.prUrl ?? existing.url } };
-      }
+    if (current?.pr && existing && (existing.state === 'OPEN' || existing.state === undefined)) {
+      await options.github.editPullRequest(current.pr, { title, body });
+      return { pr: { number: current.pr, url: current.prUrl ?? existing.url } };
     }
     const pr = await options.github.createPullRequest({
       base: options.config.git.defaultBranch,
@@ -1419,6 +1573,16 @@ async function publishDraftCheckpoint(
     }
     return { error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function checkpointPullRequestUpdateError(pullRequest: GitHubPullRequestDetails, branch: string): string | undefined {
+  if (pullRequest.headRefName !== branch) {
+    return `Checkpoint PR #${pullRequest.number} head is ${pullRequest.headRefName ?? '<unknown>'}, expected ${branch}.`;
+  }
+  if (pullRequest.isDraft !== true) {
+    return `Checkpoint PR #${pullRequest.number} is already ready for review; automatic checkpoint updates are disabled.`;
+  }
+  return undefined;
 }
 
 function buildDraftCheckpointBody(
@@ -1657,16 +1821,20 @@ async function reflectPullRequest(options: {
   reason: string;
   verifierResult?: VerifierResult;
 }): Promise<PullRequestReflection> {
-  await options.workspace.git().push(options.branch, { forceWithLease: true });
-  const headSha = await options.workspace.git().revParse('HEAD');
   const title = `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`;
   const body = buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason, options.verifierResult);
   const checkpoint = await loadImplementationState(options.stateDir, options.issue.number);
+  const current = checkpoint?.pr ? await options.github.getPullRequest(checkpoint.pr) : undefined;
+  if (current && (current.state === 'OPEN' || current.state === undefined)) {
+    const updateError = checkpointPullRequestUpdateError(current, options.branch);
+    if (updateError) throw new Error(updateError);
+  }
+  await options.workspace.git().push(options.branch, { forceWithLease: true });
+  const headSha = await options.workspace.git().revParse('HEAD');
   if (checkpoint?.pr) {
-    const current = await options.github.getPullRequest(checkpoint.pr);
-    if (current.state === 'OPEN' || current.state === undefined) {
+    if (current && (current.state === 'OPEN' || current.state === undefined)) {
       await options.github.editPullRequest(checkpoint.pr, { title, body });
-      if (current.isDraft) await options.github.markPullRequestReady(checkpoint.pr);
+      await options.github.markPullRequestReady(checkpoint.pr);
       return {
         url: checkpoint.prUrl ?? current.url,
         number: checkpoint.pr,

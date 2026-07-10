@@ -101,6 +101,10 @@ export class GitClient {
     await this.git(['branch', '-D', branch], { rejectOnNonZero: false });
   }
 
+  async forceBranch(branch: string, ref: string): Promise<void> {
+    await this.git(['branch', '-f', branch, ref]);
+  }
+
   async addAll(): Promise<void> {
     await this.git(['add', '-A']);
   }

@@ -2185,6 +2185,7 @@ describe('runKaizen PR flow', () => {
           state: 'OPEN',
           number: 7,
           url: 'https://github.com/o/r/pull/7',
+          headRefName: 'kaizen/issue-1-fix-bug',
           baseRefName: 'main',
           headRefOid: 'abc123',
           isDraft: !promoted,
@@ -2301,6 +2302,30 @@ describe('runKaizen PR flow', () => {
       pr: 7,
       prUrl: 'https://github.com/o/r/pull/7'
     });
+
+    await saveImplementationState(path.join(home, 'projects', 'o-r'), {
+      issue: 1,
+      branch: 'kaizen/issue-1-fix-bug',
+      phase: 'failed',
+      attempt: 3,
+      pr: 7,
+      prUrl: 'https://github.com/o/r/pull/7',
+      lastFailure: 'stale failure state after manual ready promotion'
+    });
+    const buildersBeforeReadyHandoff = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const readyHandoff = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in readyHandoff && readyHandoff.issues[0].outcome).toBe('pr-created');
+    expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(buildersBeforeReadyHandoff);
   });
 
   it('preserves direct commits for single-issue manual runs from an issue worktree', async () => {
