@@ -16,7 +16,7 @@ import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
 import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
-import { WorkspaceManager, type DiffStats } from '../workspace/manager.js';
+import { CheckpointBranchMissingError, WorkspaceManager, type DiffStats } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues } from './issues.js';
 import { RunLock } from './lock.js';
@@ -128,9 +128,11 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     });
     const implementationStates = await listImplementationStates(stateDir);
     const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
-    const openCheckpoints = openCheckpointStates(implementationStates, openPullRequests)
-      .filter((state) => selectedIssueNumbers.has(state.issue));
-    const resumableIssueNumbers = new Set(openCheckpoints.map((state) => state.issue));
+    const selectedResumableStates = implementationStates.filter(
+      (state) => selectedIssueNumbers.has(state.issue) && isResumableImplementationState(state)
+    );
+    const openCheckpoints = openCheckpointStates(selectedResumableStates, openPullRequests);
+    const resumableIssueNumbers = new Set(selectedResumableStates.map((state) => state.issue));
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
     const limited = await applyOpenPullRequestLimit({
       config,
@@ -276,11 +278,46 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
             for (const issue of selection.selected) {
               assertRunWithinDeadline(runDeadlineAt);
               const checkpoint = await loadImplementationState(stateDir, issue.number);
-              const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId, {
-                branch: checkpoint?.branch,
-                resume: isResumableImplementationState(checkpoint)
-              });
-              worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
+              try {
+                const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId, {
+                  branch: checkpoint?.branch,
+                  resume: isResumableImplementationState(checkpoint)
+                });
+                worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
+              } catch (error) {
+                if (!(error instanceof CheckpointBranchMissingError) || !checkpoint) throw error;
+                const attempt = countAttempts(issue.comments ?? []) + 1;
+                const reason = `${error.message}. Automatic resume stopped to avoid replacing the saved implementation with the default branch.`;
+                await saveImplementationState(stateDir, {
+                  issue: issue.number,
+                  branch: checkpoint.branch,
+                  phase: 'recovery-needed',
+                  attempt,
+                  lastFailure: reason,
+                  pr: checkpoint.pr,
+                  prUrl: checkpoint.prUrl
+                });
+                await github.comment(issue.number, buildResultComment({
+                  runId,
+                  issue: issue.number,
+                  attempt,
+                  outcome: 'blocked',
+                  agent: 'orchestrator',
+                  summary: reason,
+                  reason,
+                  trigger,
+                  maxAttempts: config.run.maxAttemptsPerIssue,
+                  prUrl: checkpoint.prUrl
+                }));
+                await github.addLabels(issue.number, ['kaizen:needs-human']);
+                summary.issues.push({
+                  number: issue.number,
+                  title: issue.title,
+                  priority: priorityLabel(issue, config),
+                  outcome: 'blocked',
+                  reason
+                });
+              }
             }
             const issueResults = await Promise.allSettled(
               worktrees.map((worktree) =>
@@ -1190,9 +1227,14 @@ async function finishBlocked(
   const requiresHuman = requiresHumanForBlockedAgent(agentResult);
   const reason = agentResult.blockedReason ?? agentResult.summary;
   const previousState = await loadImplementationState(options.stateDir, options.issue.number);
-  const checkpointError = await checkpointPartialChanges(options, options.issue);
-  const checkpointReason = checkpointError ? `${reason}\n\nCheckpoint commit failed: ${checkpointError}` : reason;
-  const draft = await publishDraftCheckpoint(options, attempt, checkpointReason);
+  const checkpoint = await checkpointPartialChanges(options, options.issue);
+  const checkpointErrorReason = checkpoint.error ? `${reason}\n\nCheckpoint commit failed: ${checkpoint.error}` : reason;
+  const checkpointReason = checkpoint.forbiddenFiles?.length
+    ? `${checkpointErrorReason}\n\nForbidden changes discarded: ${checkpoint.forbiddenFiles.join(', ')}`
+    : checkpointErrorReason;
+  const draft = checkpoint.forbiddenFiles?.length
+    ? { skipped: 'forbidden changes were discarded before checkpoint publication' }
+    : await publishDraftCheckpoint(options, attempt, checkpointReason);
   const publicationReason = draft.skipped ? `${checkpointReason}\n\nDraft PR publication skipped: ${draft.skipped}` : checkpointReason;
   const recordedReason = draft.error
     ? `${publicationReason}\n\nDraft PR publication failed: ${draft.error}`
@@ -1200,7 +1242,7 @@ async function finishBlocked(
   await saveImplementationState(options.stateDir, {
     issue: options.issue.number,
     branch: options.branch,
-    phase: 'blocked',
+    phase: checkpoint.forbiddenFiles?.length && !checkpoint.restoredCheckpoint ? 'discarded' : 'blocked',
     attempt,
     lastFailure: recordedReason,
     pr: draft.pr?.number ?? previousState?.pr,
@@ -1221,7 +1263,8 @@ async function finishBlocked(
       maxAttempts: options.config.run.maxAttemptsPerIssue,
       requiresHuman,
       resumeBranch: options.branch,
-      prUrl: draft.pr?.url ?? previousState?.prUrl
+      prUrl: draft.pr?.url ?? previousState?.prUrl,
+      checkpointPublished: Boolean(draft.pr?.url ?? previousState?.prUrl) && (!checkpoint.forbiddenFiles?.length || checkpoint.restoredCheckpoint)
     })
   );
   if (requiresHuman) {
@@ -1277,15 +1320,20 @@ async function finishFailed(
   verifyResults?: Array<{ command: string; ok: boolean; output: string }>
 ): Promise<RunIssueSummary> {
   const previousState = await loadImplementationState(options.stateDir, options.issue.number);
-  const checkpointError = await checkpointPartialChanges(options, options.issue);
-  const checkpointReason = checkpointError ? `${reason}\n\nCheckpoint commit failed: ${checkpointError}` : reason;
-  const draft = await publishDraftCheckpoint(options, attempt, checkpointReason, verifyResults);
+  const checkpoint = await checkpointPartialChanges(options, options.issue);
+  const checkpointErrorReason = checkpoint.error ? `${reason}\n\nCheckpoint commit failed: ${checkpoint.error}` : reason;
+  const checkpointReason = checkpoint.forbiddenFiles?.length
+    ? `${checkpointErrorReason}\n\nForbidden changes discarded: ${checkpoint.forbiddenFiles.join(', ')}`
+    : checkpointErrorReason;
+  const draft = checkpoint.forbiddenFiles?.length
+    ? { skipped: 'forbidden changes were discarded before checkpoint publication' }
+    : await publishDraftCheckpoint(options, attempt, checkpointReason, verifyResults);
   const publicationReason = draft.skipped ? `${checkpointReason}\n\nDraft PR publication skipped: ${draft.skipped}` : checkpointReason;
   const recordedReason = draft.error ? `${publicationReason}\n\nDraft PR publication failed: ${draft.error}` : publicationReason;
   await saveImplementationState(options.stateDir, {
     issue: options.issue.number,
     branch: options.branch,
-    phase: 'failed',
+    phase: checkpoint.forbiddenFiles?.length && !checkpoint.restoredCheckpoint ? 'discarded' : 'failed',
     attempt,
     lastFailure: recordedReason,
     pr: draft.pr?.number ?? previousState?.pr,
@@ -1305,7 +1353,8 @@ async function finishFailed(
       trigger: options.trigger,
       maxAttempts: options.config.run.maxAttemptsPerIssue,
       resumeBranch: options.branch,
-      prUrl: draft.pr?.url ?? previousState?.prUrl
+      prUrl: draft.pr?.url ?? previousState?.prUrl,
+      checkpointPublished: Boolean(draft.pr?.url ?? previousState?.prUrl) && (!checkpoint.forbiddenFiles?.length || checkpoint.restoredCheckpoint)
     })
   );
   if (attempt >= options.config.run.maxAttemptsPerIssue) {
@@ -1340,7 +1389,7 @@ async function publishDraftCheckpoint(
   try {
     const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
     const current = await loadImplementationState(options.stateDir, options.issue.number);
-    const diff = await workspace.collectDiffStats(options.config);
+    const diff = await workspace.collectCheckpointDiffStats(options.config);
     const publicationBlocker = forbiddenCheckpointPublicationReason(diff.forbiddenFiles);
     if (publicationBlocker) return { skipped: publicationBlocker };
     if (diff.changedFiles === 0 && !current?.pr) return {};
@@ -1365,6 +1414,9 @@ async function publishDraftCheckpoint(
     });
     return { pr };
   } catch (error) {
+    if (error instanceof CreatedPullRequestValidationError) {
+      return { pr: error.pr, error: error.message };
+    }
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -1413,17 +1465,28 @@ ${checks}
 }
 
 async function checkpointPartialChanges(
-  options: { project: { workspacePath: string }; runCommand: CommandRunner },
+  options: {
+    project: { workspacePath: string };
+    runCommand: CommandRunner;
+    config: KaizenConfig;
+    branch: string;
+  },
   issue: GitHubIssue
-): Promise<string | undefined> {
+): Promise<{ error?: string; forbiddenFiles?: string[]; restoredCheckpoint?: boolean }> {
   try {
-    const git = new WorkspaceManager(options.runCommand, options.project.workspacePath).git();
-    if (!(await git.statusPorcelain()).trim()) return undefined;
+    const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
+    const diff = await workspace.collectCheckpointDiffStats(options.config);
+    if (diff.forbiddenFiles.length > 0) {
+      const discarded = await workspace.discardIssueChanges(options.branch, options.config.git.defaultBranch);
+      return { forbiddenFiles: diff.forbiddenFiles, ...discarded };
+    }
+    const git = workspace.git();
+    if (!(await git.statusPorcelain()).trim()) return {};
     await git.addAll();
     await git.commit(`kaizen: checkpoint partial implementation (#${issue.number})`);
-    return undefined;
+    return {};
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 

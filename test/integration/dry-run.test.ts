@@ -7,7 +7,7 @@ import { defaultConfigYaml as buildDefaultConfigYaml } from '../../src/config/co
 import { saveRegistry } from '../../src/config/registry.js';
 import type { GitHubIssue } from '../../src/github/types.js';
 import { runKaizen } from '../../src/orchestrator/run.js';
-import { loadImplementationState } from '../../src/orchestrator/implementationState.js';
+import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
@@ -1568,6 +1568,11 @@ describe('runKaizen PR flow', () => {
     expect(String(comments[0][1].at(-1))).toContain('"outcome":"pr-monitoring"');
     expect(String(comments[1][1].at(-1))).toContain('closing issue reference #1 was not recognized by GitHub');
     expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
+    await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
+      phase: 'failed',
+      pr: 4,
+      prUrl: 'https://github.com/o/r/pull/4'
+    });
   });
 
   it('enqueues PR Guardian instead of blocking when async mode is enabled', async () => {
@@ -2167,6 +2172,7 @@ describe('runKaizen PR flow', () => {
 
     let promoted = false;
     let failPushes = false;
+    let missingCheckpointRefs = false;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/7\n');
@@ -2196,6 +2202,9 @@ describe('runKaizen PR flow', () => {
         return result(command, args, workspace, 'built');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args[0] === 'show-ref' && missingCheckpointRefs) {
+        return { ...result(command, args, options?.cwd, ''), exitCode: 1 };
+      }
       if (command === 'git' && args[0] === 'push' && failPushes) throw new Error('push unavailable');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
@@ -2223,6 +2232,34 @@ describe('runKaizen PR flow', () => {
     expect(String(draftCreate?.[1].at(draftCreate[1].indexOf('--body') + 1))).toContain('Direct commit rejected');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('push'))).toBe(true);
+
+    missingCheckpointRefs = true;
+    const buildersBeforeRecovery = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const recoveryNeeded = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in recoveryNeeded && recoveryNeeded.issues[0].outcome).toBe('blocked');
+    expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(buildersBeforeRecovery);
+    const recoveryState = await loadImplementationState(path.join(home, 'projects', 'o-r'), 1);
+    expect(recoveryState).toMatchObject({ phase: 'recovery-needed', pr: 7 });
+    await saveImplementationState(path.join(home, 'projects', 'o-r'), {
+      issue: 1,
+      branch: recoveryState?.branch ?? 'kaizen/issue-1-fix-bug',
+      phase: 'failed',
+      attempt: recoveryState?.attempt ?? 1,
+      pr: 7,
+      prUrl: 'https://github.com/o/r/pull/7',
+      lastFailure: 'operator restored the checkpoint branch'
+    });
+    missingCheckpointRefs = false;
 
     failPushes = true;
     const interruptedResume = await runKaizen({

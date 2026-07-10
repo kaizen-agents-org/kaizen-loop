@@ -2,7 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { GitHubPullRequest } from '../github/types.js';
 
-export type ImplementationPhase = 'implementing' | 'verifying' | 'publishing' | 'guardian' | 'blocked' | 'failed' | 'complete';
+export type ImplementationPhase =
+  | 'implementing'
+  | 'verifying'
+  | 'publishing'
+  | 'guardian'
+  | 'blocked'
+  | 'failed'
+  | 'discarded'
+  | 'recovery-needed'
+  | 'complete';
 
 export interface ImplementationState {
   version: 1;

@@ -6,7 +6,7 @@ import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 import { GitClient } from '../src/workspace/git.js';
-import { WorkspaceManager } from '../src/workspace/manager.js';
+import { CheckpointBranchMissingError, WorkspaceManager } from '../src/workspace/manager.js';
 
 describe('workspace branch handling', () => {
   it('replaces an existing deterministic issue branch before retrying', async () => {
@@ -185,6 +185,50 @@ describe('workspace branch handling', () => {
     );
   });
 
+  it('fails recovery when an active checkpoint branch is missing locally and remotely', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: args[0] === 'show-ref' ? 1 : 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    await expect(
+      workspace.createIssueWorktree(config, { number: 12, title: 'Missing checkpoint' }, 'new-run', { resume: true })
+    ).rejects.toBeInstanceOf(CheckpointBranchMissingError);
+
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).not.toContain(
+      `worktree add -B kaizen/issue-12-missing-checkpoint ${path.join(root, 'workspace-worktrees', 'new-run', 'issue-12')} origin/main`
+    );
+  });
+
+  it('discards forbidden changes back to a remote checkpoint when available', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, '/workspace');
+
+    await expect(workspace.discardIssueChanges('kaizen/issue-12-resume', 'main')).resolves.toEqual({ restoredCheckpoint: true });
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).toEqual([
+      'show-ref --verify --quiet refs/remotes/origin/kaizen/issue-12-resume',
+      'reset --hard origin/kaizen/issue-12-resume',
+      'clean -fdx'
+    ]);
+  });
+
   it('can abort a failed rebase before falling back to PR creation', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
@@ -220,6 +264,25 @@ describe('workspace branch handling', () => {
 
     expect(diff).toBe('abc\n\n[truncated after 3 characters]');
     expect(runner.mock.calls[0][1]).toEqual(['diff', '--no-ext-diff', 'origin/main...HEAD']);
+  });
+
+  it('detects uncommitted and untracked forbidden files before checkpointing', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'status --porcelain' ? ' M src/file.ts\n?? .env\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, '/workspace');
+    const config = configSchema.parse({ version: 1, policy: { forbiddenPaths: ['.env'] } });
+
+    const diff = await workspace.collectCheckpointDiffStats(config);
+
+    expect(diff.files).toEqual(['src/file.ts', '.env']);
+    expect(diff.forbiddenFiles).toEqual(['.env']);
   });
 
   it('runs verification commands with a short temporary directory for tsx IPC sockets', async () => {

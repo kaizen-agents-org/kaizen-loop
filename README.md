@@ -17,7 +17,7 @@ The current CLI supports the issue-to-PR loop used by Kaizen Agents:
 ```mermaid
 flowchart LR
     Issue["GitHub Issue<br/>kaizen label"] --> Select["select issue<br/>priority + queue rules"]
-    Select --> Workspace["isolated worktree<br/>fresh branch"]
+    Select --> Workspace["isolated worktree<br/>fresh or resumed branch"]
     Workspace --> Builder["builder-agent<br/>implementation"]
     Builder --> Verify["commands.verify<br/>tests / typecheck / build"]
     Verify --> Gate["verifier<br/>gate verdict"]
