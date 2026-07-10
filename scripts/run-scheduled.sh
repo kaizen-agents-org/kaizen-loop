@@ -73,6 +73,8 @@ if [ "$commit" != "$built_commit" ] || [ ! -f "$runtime_dir/dist/cli.js" ]; then
   printf '%s\n' "$commit" > "$runtime_dir/.kaizen-built-commit"
 fi
 
+cleanup
+trap - EXIT
 exec "$node_bin" "$runtime_dir/dist/cli.js" run \
   --project "$project" \
   --scheduled \

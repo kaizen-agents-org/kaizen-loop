@@ -120,7 +120,9 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain("'owner-repo' 'issue-watch'");
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) maintenance');
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) issue-watch');
-    await expect(fs.access(path.join(home, 'bin', 'run-scheduled.sh'))).resolves.toBeUndefined();
+    const launcher = await fs.readFile(path.join(home, 'bin', 'run-scheduled.sh'), 'utf8');
+    expect(launcher.indexOf('cleanup\ntrap - EXIT')).toBeGreaterThan(-1);
+    expect(launcher.indexOf('cleanup\ntrap - EXIT')).toBeLessThan(launcher.indexOf('exec "$node_bin"'));
   });
 
   it('installs scheduler jobs with anchored hourly cron schedules', async () => {
