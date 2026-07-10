@@ -2643,6 +2643,7 @@ describe('runKaizen PR flow', () => {
     // 3. 変更ファイル一覧
     expect(prBody).toContain('## 変更ファイル');
     expect(prBody).toContain('src/auth/session.ts');
+    expect(prBody).toContain('`src/auth/session.ts` — Refreshed the session cookie before it expires so users stay logged in.');
     // 4. 実行された検証コマンドと結果
     expect(prBody).toContain('## Verification');
     expect(prBody).toContain('`npm test` — 成功');

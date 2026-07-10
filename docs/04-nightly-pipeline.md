@@ -241,7 +241,7 @@ codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 - PR 本文は「5 分でマージ判断できる証拠パッケージ」として、以下 6 セクションを必須で含める(`buildPullRequestBody`、`test/integration/dry-run.test.ts` の `includes all six evidence-package sections in generated PR bodies` で欠落を検出する):
   1. `## 元Issue` — 対象 Issue 番号・タイトルと本文の要約(`Closes #N` はタイトル直上に別途出力)
   2. `## Builder task understanding`(+ 存在すれば `## Builder notes`) — builder-agent の自己申告 summary / notes をそのまま転記する。builder-agent が構造化された task-understanding フィールドを別途契約化した場合はそれに差し替える
-  3. `## 変更ファイル` — `git diff --name-only` 由来の変更ファイル一覧と changed files/lines 件数(ファイル単位の変更理由までは追跡していない)
+  3. `## 変更ファイル` — `git diff --name-only` 由来の変更ファイル一覧、各ファイルに builder が報告した変更理由、changed files/lines 件数
   4. `## Verification` — 設定済み検証コマンドの成功/失敗チェックリスト。`commands.verify` が未設定の場合は「スキップ: リポジトリに検証コマンドが設定されていません」と明示する
   5. `## Verifier verdict` — verifier 有効時の `verifier: open_pr` / `verifier: open_pr_with_warning` とその根拠、`evidence: executed` / `evidence: reported (未実行の可能性あり)`。verifier 無効時は `verifier: not run` と明示する
   6. `## 残存リスク / レビュー観点` — リスク判定または並列実行で PR になった理由をレビュアー向けの着眼点として表示する

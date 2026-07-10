@@ -1706,7 +1706,7 @@ function buildPullRequestBody(
     '- static: changed file and line counts come from git diff metadata.'
   ].join('\n');
   const changedFiles = diff.files.length
-    ? diff.files.map((file) => `- \`${file}\``).join('\n')
+    ? diff.files.map((file) => `- \`${file}\` — ${agentResult.summary}`).join('\n')
     : '- (no files changed)';
 
   return `Closes #${issue.number}
