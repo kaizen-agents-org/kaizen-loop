@@ -126,7 +126,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       openPullRequests
     });
     const implementationStates = await listImplementationStates(stateDir);
-    const openCheckpoints = openCheckpointStates(implementationStates, openPullRequests);
+    const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
+    const openCheckpoints = openCheckpointStates(implementationStates, openPullRequests)
+      .filter((state) => selectedIssueNumbers.has(state.issue));
     const resumableIssueNumbers = new Set(openCheckpoints.map((state) => state.issue));
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
     const limited = await applyOpenPullRequestLimit({

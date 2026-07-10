@@ -67,7 +67,8 @@ export function openCheckpointStates(
   const pullRequestsByNumber = new Map(openPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]));
   return states.filter((state) => {
     if (state.phase === 'complete' || !state.pr) return false;
-    return pullRequestsByNumber.get(state.pr)?.headRefName === state.branch;
+    const pullRequest = pullRequestsByNumber.get(state.pr);
+    return pullRequest?.isDraft === true && pullRequest.headRefName === state.branch;
   });
 }
 

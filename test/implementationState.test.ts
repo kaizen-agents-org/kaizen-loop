@@ -48,10 +48,27 @@ describe('implementation state', () => {
     ];
 
     expect(openCheckpointStates(states, [
-      { number: 12, headRefName: 'kaizen/issue-2', url: 'https://github.com/o/r/pull/12' },
-      { number: 13, headRefName: 'different-branch', url: 'https://github.com/o/r/pull/13' },
-      { number: 14, headRefName: 'kaizen/issue-4', url: 'https://github.com/o/r/pull/14' }
+      { number: 12, headRefName: 'kaizen/issue-2', isDraft: true, url: 'https://github.com/o/r/pull/12' },
+      { number: 13, headRefName: 'different-branch', isDraft: true, url: 'https://github.com/o/r/pull/13' },
+      { number: 14, headRefName: 'kaizen/issue-4', isDraft: true, url: 'https://github.com/o/r/pull/14' }
     ]).map((state) => state.issue)).toEqual([2]);
+  });
+
+  it('does not treat a ready guardian PR as a checkpoint draft', () => {
+    const updatedAt = new Date().toISOString();
+    const states = [{
+      version: 1 as const,
+      issue: 5,
+      branch: 'kaizen/issue-5',
+      phase: 'guardian' as const,
+      attempt: 1,
+      updatedAt,
+      pr: 15
+    }];
+
+    expect(openCheckpointStates(states, [
+      { number: 15, headRefName: 'kaizen/issue-5', isDraft: false, url: 'https://github.com/o/r/pull/15' }
+    ])).toEqual([]);
   });
 
   it('blocks remote checkpoint publication when forbidden paths changed', () => {
