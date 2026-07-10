@@ -2558,6 +2558,162 @@ describe('runKaizen PR flow', () => {
     expect(prBody).toContain('reported: Kaizen Loop ran verifier, but verifier evidence is based on text reporting rather than execution proof');
   });
 
+  it('includes all six evidence-package sections in generated PR bodies', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test', 'npm run typecheck'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let prBody = '';
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1, { body: 'Users cannot log in when the session cookie expires.' })]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        prBody = String(args[args.indexOf('--body') + 1]);
+        return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: 'Refreshed the session cookie before it expires so users stay logged in.',
+          notes: 'Also added a regression test for the refresh timing edge case.'
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
+          status: 'open_pr',
+          summary: '確認した',
+          notes: '',
+          evidence_grade: 'executed'
+        });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/auth/session.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '4\t1\tsrc/auth/session.ts\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      if (command === 'sh' && args.join(' ') === '-lc npm run typecheck') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    expect(prBody).toContain('Closes #1');
+    // 1. 元issueとその要約
+    expect(prBody).toContain('## 元Issue');
+    expect(prBody).toContain('Users cannot log in when the session cookie expires.');
+    // 2. builder の task understanding
+    expect(prBody).toContain('## Builder task understanding');
+    expect(prBody).toContain('Refreshed the session cookie before it expires so users stay logged in.');
+    expect(prBody).toContain('## Builder notes');
+    expect(prBody).toContain('Also added a regression test for the refresh timing edge case.');
+    // 3. 変更ファイル一覧
+    expect(prBody).toContain('## 変更ファイル');
+    expect(prBody).toContain('src/auth/session.ts');
+    // 4. 実行された検証コマンドと結果
+    expect(prBody).toContain('## Verification');
+    expect(prBody).toContain('`npm test` — 成功');
+    expect(prBody).toContain('`npm run typecheck` — 成功');
+    // 5. verifier verdict と根拠(evidence_grade 含む)
+    expect(prBody).toContain('## Verifier verdict');
+    expect(prBody).toContain('verifier: open_pr');
+    expect(prBody).toContain('evidence: executed');
+    // 6. 残存リスク / レビュアーに特に見てほしい箇所
+    expect(prBody).toContain('## 残存リスク / レビュー観点');
+  });
+
+  it('marks unconfigured verification as skipped in the PR body', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ verifier: { enabled: false } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let prBody = '';
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, JSON.stringify([issue()]));
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        prBody = String(args[args.indexOf('--body') + 1]);
+        return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    expect(prBody).toContain('スキップ: リポジトリに検証コマンドが設定されていません');
+    expect(prBody).toContain('verifier: not run (verifier.enabled is false for this project)');
+  });
+
   it('accepts legacy approved verifier payloads as open_pr', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
