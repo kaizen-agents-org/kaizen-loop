@@ -7,6 +7,7 @@ import { defaultConfigYaml as buildDefaultConfigYaml } from '../../src/config/co
 import { saveRegistry } from '../../src/config/registry.js';
 import type { GitHubIssue } from '../../src/github/types.js';
 import { runKaizen } from '../../src/orchestrator/run.js';
+import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
@@ -1567,6 +1568,11 @@ describe('runKaizen PR flow', () => {
     expect(String(comments[0][1].at(-1))).toContain('"outcome":"pr-monitoring"');
     expect(String(comments[1][1].at(-1))).toContain('closing issue reference #1 was not recognized by GitHub');
     expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
+    await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
+      phase: 'failed',
+      pr: 4,
+      prUrl: 'https://github.com/o/r/pull/4'
+    });
   });
 
   it('enqueues PR Guardian instead of blocking when async mode is enabled', async () => {
@@ -1692,6 +1698,7 @@ describe('runKaizen PR flow', () => {
         return result(command, args, options?.cwd, 'built');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args[0] === 'show-ref') return { ...result(command, args, options?.cwd, ''), exitCode: 1 };
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, options?.cwd, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, options?.cwd, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, options?.cwd, '1\t0\tsrc/file.ts\n');
@@ -2135,7 +2142,7 @@ describe('runKaizen PR flow', () => {
     expect(targetRepos).toEqual(['kaizen-agents-org/coderabbit', 'kaizen-agents-org/renovate-config']);
   });
 
-  it('rejects instant direct commits when unattended mode is reject', async () => {
+  it('publishes a failed implementation as a draft and promotes the same PR after a successful resume', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -2163,8 +2170,32 @@ describe('runKaizen PR flow', () => {
       }
     });
 
+    let promoted = false;
+    let failPushes = false;
+    let missingCheckpointRefs = false;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/7\n');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'ready') {
+        promoted = true;
+        return result(command, args, repo, '');
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          state: 'OPEN',
+          number: 7,
+          url: 'https://github.com/o/r/pull/7',
+          headRefName: 'kaizen/issue-1-fix-bug',
+          baseRefName: 'main',
+          headRefOid: 'abc123',
+          isDraft: !promoted,
+          mergeStateStatus: 'CLEAN',
+          mergeable: 'MERGEABLE',
+          reviewDecision: '',
+          closingIssuesReferences: [{ number: 1 }],
+          statusCheckRollup: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' }]
+        }));
+      }
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
@@ -2172,6 +2203,10 @@ describe('runKaizen PR flow', () => {
         return result(command, args, workspace, 'built');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args[0] === 'show-ref' && missingCheckpointRefs) {
+        return { ...result(command, args, options?.cwd, ''), exitCode: 1 };
+      }
+      if (command === 'git' && args[0] === 'push' && failPushes) throw new Error('push unavailable');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -2193,9 +2228,95 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].outcome).toBe('failed');
     expect('issues' in summary && summary.issues[0].reason).toContain('Direct commit rejected');
     const ghCommands = runner.mock.calls.filter(([command]) => command === 'gh').map(([, args]) => args.join(' '));
-    expect(ghCommands.some((command) => command.startsWith('pr create'))).toBe(false);
+    expect(ghCommands.some((command) => command.startsWith('pr create') && command.includes('--draft'))).toBe(true);
+    const draftCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
+    expect(String(draftCreate?.[1].at(draftCreate[1].indexOf('--body') + 1))).toContain('Direct commit rejected');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
-    expect(gitCommands.some((command) => command.startsWith('push'))).toBe(false);
+    expect(gitCommands.some((command) => command.startsWith('push'))).toBe(true);
+
+    missingCheckpointRefs = true;
+    const buildersBeforeRecovery = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const recoveryNeeded = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in recoveryNeeded && recoveryNeeded.issues[0].outcome).toBe('blocked');
+    expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(buildersBeforeRecovery);
+    const recoveryState = await loadImplementationState(path.join(home, 'projects', 'o-r'), 1);
+    expect(recoveryState).toMatchObject({ phase: 'recovery-needed', pr: 7 });
+    missingCheckpointRefs = false;
+
+    failPushes = true;
+    const interruptedResume = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in interruptedResume && interruptedResume.issues[0].outcome).toBe('failed');
+    await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
+      phase: 'failed',
+      pr: 7,
+      prUrl: 'https://github.com/o/r/pull/7'
+    });
+
+    failPushes = false;
+    const resumed = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in resumed && resumed.issues[0].outcome).toBe('pr-created');
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create')).toHaveLength(1);
+    expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr edit 7'))).toBe(true);
+    expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args.join(' ') === 'pr ready 7')).toBe(true);
+    await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
+      phase: 'complete',
+      pr: 7,
+      prUrl: 'https://github.com/o/r/pull/7'
+    });
+
+    await saveImplementationState(path.join(home, 'projects', 'o-r'), {
+      issue: 1,
+      branch: 'kaizen/issue-1-fix-bug',
+      phase: 'failed',
+      attempt: 3,
+      pr: 7,
+      prUrl: 'https://github.com/o/r/pull/7',
+      lastFailure: 'stale failure state after manual ready promotion'
+    });
+    const buildersBeforeReadyHandoff = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const readyHandoff = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in readyHandoff && readyHandoff.issues[0].outcome).toBe('pr-created');
+    expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(buildersBeforeReadyHandoff);
   });
 
   it('preserves direct commits for single-issue manual runs from an issue worktree', async () => {

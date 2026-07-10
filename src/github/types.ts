@@ -25,6 +25,7 @@ export interface PullRequestResult {
 
 export interface GitHubPullRequest {
   number: number;
+  isDraft?: boolean;
   headRefName?: string;
   headRepositoryOwner?: { login?: string };
   author?: { login?: string; type?: string; is_bot?: boolean };
@@ -36,6 +37,8 @@ export interface GitHubPullRequest {
 export interface GitHubPullRequestDetails extends GitHubPullRequest {
   baseRefName: string;
   headRefOid: string;
+  isDraft?: boolean;
+  state?: 'OPEN' | 'CLOSED' | 'MERGED';
 }
 
 export interface GitHubClosingIssueReference {

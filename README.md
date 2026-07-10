@@ -6,7 +6,7 @@ It owns orchestration, not implementation quality by itself: it selects issues, 
 
 ## What It Does
 
-The Phase 2 implementation supports builder-agent-based fixes, verifier review, isolated per-issue git worktrees, parallel issue processing, PR-first reflection followed by the vendored `pr-guardian` skill, explicit hybrid/direct reflection opt-ins when verifier is disabled, verification retries, YAML-configured scheduler jobs, opt-in issue queueing, user-triggered backlog improvement runs, and basic operational commands. `kaizen watch` remains a later-phase feature.
+The Phase 2 implementation supports builder-agent-based fixes, verifier review, resumable per-issue git worktrees and checkpoint draft PRs, parallel issue processing, PR-first reflection followed by the vendored `pr-guardian` skill, explicit hybrid/direct reflection opt-ins when verifier is disabled, verification retries, YAML-configured scheduler jobs, opt-in issue queueing, user-triggered backlog improvement runs, and operational status commands. `kaizen watch` remains a later-phase feature.
 
 ## Canonical repositories
 
@@ -17,7 +17,7 @@ The current CLI supports the issue-to-PR loop used by Kaizen Agents:
 ```mermaid
 flowchart LR
     Issue["GitHub Issue<br/>kaizen label"] --> Select["select issue<br/>priority + queue rules"]
-    Select --> Workspace["isolated worktree<br/>fresh branch"]
+    Select --> Workspace["isolated worktree<br/>fresh or resumed branch"]
     Workspace --> Builder["builder-agent<br/>implementation"]
     Builder --> Verify["commands.verify<br/>tests / typecheck / build"]
     Verify --> Gate["verifier<br/>gate verdict"]

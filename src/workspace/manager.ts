@@ -21,6 +21,20 @@ export interface WorkspaceCommandResult {
   output: string;
 }
 
+export class CheckpointBranchMissingError extends Error {
+  constructor(readonly branch: string) {
+    super(`Checkpoint branch is missing locally and on origin: ${branch}`);
+    this.name = 'CheckpointBranchMissingError';
+  }
+}
+
+export class CheckpointBranchDivergedError extends Error {
+  constructor(readonly branch: string) {
+    super(`Checkpoint branch diverged from origin and requires reconciliation: ${branch}`);
+    this.name = 'CheckpointBranchDivergedError';
+  }
+}
+
 const DEFAULT_DIFF_TEXT_MAX_CHARS = 30_000;
 
 export class WorkspaceManager {
@@ -120,9 +134,10 @@ export class WorkspaceManager {
   async createIssueWorktree(
     config: KaizenConfig,
     issue: { number: number; title: string },
-    runId: string
-  ): Promise<{ branch: string; path: string }> {
-    const branch = issueBranchName(config, issue);
+    runId: string,
+    options: { branch?: string; resume?: boolean } = {}
+  ): Promise<{ branch: string; path: string; resumed: boolean }> {
+    const branch = options.branch ?? issueBranchName(config, issue);
     const worktreePath = issueWorktreePath(this.workspacePath, runId, issue.number);
     const git = this.git();
     await git.worktreePrune();
@@ -130,9 +145,33 @@ export class WorkspaceManager {
     await fs.rm(worktreePath, { recursive: true, force: true });
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
     await this.removeWorktreesForBranch(branch);
-    await git.deleteLocalBranch(branch);
-    await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
-    return { branch, path: worktreePath };
+    if (!options.resume) {
+      await git.deleteLocalBranch(branch);
+      await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
+      return { branch, path: worktreePath, resumed: false };
+    }
+    const localBranchExists = await git.localBranchExists(branch);
+    const remoteBranchExists = !localBranchExists && await git.remoteBranchExists(branch);
+    if (!localBranchExists && !remoteBranchExists) throw new CheckpointBranchMissingError(branch);
+    if (localBranchExists) {
+      if (await git.remoteBranchExists(branch)) {
+        const divergence = await git.divergence(`origin/${branch}`, branch);
+        if (divergence.behind > 0 && divergence.ahead > 0) throw new CheckpointBranchDivergedError(branch);
+        if (divergence.behind > 0) await git.forceBranch(branch, `origin/${branch}`);
+      }
+      await git.worktreeAddExisting(worktreePath, branch);
+    } else {
+      await git.worktreeAdd(worktreePath, branch, `origin/${branch}`);
+    }
+    return { branch, path: worktreePath, resumed: true };
+  }
+
+  async discardIssueChanges(branch: string, defaultBranch: string): Promise<{ restoredCheckpoint: boolean }> {
+    const git = this.git();
+    const restoredCheckpoint = await git.remoteBranchExists(branch);
+    await git.resetHard(restoredCheckpoint ? `origin/${branch}` : `origin/${defaultBranch}`);
+    await git.clean();
+    return { restoredCheckpoint };
   }
 
   async removeIssueWorktree(worktreePath: string): Promise<void> {
@@ -152,6 +191,18 @@ export class WorkspaceManager {
       files,
       changedFiles: files.length,
       changedLines,
+      forbiddenFiles: files.filter((file) => matchesAny(file, config.policy.forbiddenPaths)),
+      protectedFiles: files.filter((file) => matchesAny(file, config.policy.protectedPaths))
+    };
+  }
+
+  async collectCheckpointDiffStats(config: KaizenConfig): Promise<DiffStats> {
+    const committed = await this.collectDiffStats(config);
+    const files = [...new Set([...committed.files, ...parseStatusFiles(await this.git().statusPorcelain())])];
+    return {
+      ...committed,
+      files,
+      changedFiles: files.length,
       forbiddenFiles: files.filter((file) => matchesAny(file, config.policy.forbiddenPaths)),
       protectedFiles: files.filter((file) => matchesAny(file, config.policy.protectedPaths))
     };
@@ -212,4 +263,14 @@ function isTransientDependencyFailure(output: string): boolean {
     /Cannot find module ['"]?@rollup\/rollup-/i.test(output) ||
     /npm has a bug related to optional dependencies/i.test(output)
   );
+}
+
+function parseStatusFiles(status: string): string[] {
+  return status
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => line.slice(3))
+    .flatMap((file) => file.includes(' -> ') ? file.split(' -> ') : [file])
+    .map((file) => file.replace(/^"|"$/g, ''));
 }

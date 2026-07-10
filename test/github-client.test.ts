@@ -111,6 +111,38 @@ describe('GitHubClient', () => {
     ).rejects.toThrow('pull request is a draft');
   });
 
+  it('creates an explicitly requested draft pull request and can promote it', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'repo') return ghResult(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return ghResult(command, args, JSON.stringify({
+          number: 7,
+          url: 'https://github.com/o/r/pull/7',
+          baseRefName: 'main',
+          isDraft: true,
+          closingIssuesReferences: [{ number: 1 }]
+        }));
+      }
+      return ghResult(command, args, args[1] === 'create' ? 'https://github.com/o/r/pull/7\n' : '');
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    await client.createPullRequest({
+      base: 'main',
+      head: 'kaizen/issue-1-x',
+      title: '[WIP] title',
+      body: 'Closes #1',
+      expectedClosingIssueNumber: 1,
+      draft: true
+    });
+    await client.editPullRequest(7, { title: 'ready title', body: 'Closes #1\n\nReady.' });
+    await client.markPullRequestReady(7);
+
+    expect(runner.mock.calls[0][1]).toContain('--draft');
+    expect(runner.mock.calls.at(-2)?.[1]).toEqual(['pr', 'edit', '7', '--title', 'ready title', '--body', 'Closes #1\n\nReady.']);
+    expect(runner.mock.calls.at(-1)?.[1]).toEqual(['pr', 'ready', '7']);
+  });
+
   it('rejects a created pull request without recognized closing issue linkage', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'repo') {
@@ -188,7 +220,7 @@ describe('GitHubClient', () => {
         '--state',
         'open',
         '--json',
-        'number,headRefName,headRepositoryOwner,createdAt,url',
+        'number,headRefName,headRepositoryOwner,createdAt,url,isDraft',
         '--limit',
         '3'
       ]);
