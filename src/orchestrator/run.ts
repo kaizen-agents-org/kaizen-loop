@@ -1712,7 +1712,7 @@ function buildPullRequestBody(
   return `Closes #${issue.number}
 
 ## 元Issue
-**#${issue.number}: ${issue.title}**
+**#${issue.number}: ${escapeClosingReferences(issue.title)}**
 ${summarizeIssueBody(issue.body)}
 
 ## Builder task understanding
@@ -1742,9 +1742,14 @@ function summarizeIssueBody(body: string): string {
   const trimmed = body.trim();
   if (!trimmed) return '(issue has no body)';
   const firstLines = trimmed.split('\n').slice(0, 10).join('\n');
-  return trimmed.length > firstLines.length || trimmed.split('\n').length > 10
+  const summary = trimmed.length > firstLines.length || trimmed.split('\n').length > 10
     ? `${firstLines}\n…`
     : firstLines;
+  return escapeClosingReferences(summary);
+}
+
+function escapeClosingReferences(text: string): string {
+  return text.replace(/\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi, '$1 \\#$2');
 }
 
 function verifierPrBodyLines(verifierResult: VerifierResult): string[] {
