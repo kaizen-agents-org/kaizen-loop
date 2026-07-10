@@ -114,10 +114,15 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('30 1 * * * ');
     expect(crontabInput).toContain('30 14 * * * ');
     expect(crontabInput).toContain('*/5 * * * * ');
-    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'maintenance'");
-    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'issue-watch'");
+    expect(crontabInput).toContain("/bin/sh '");
+    expect(crontabInput).toContain("bin/run-scheduled.sh'");
+    expect(crontabInput).toContain("'owner-repo' 'maintenance'");
+    expect(crontabInput).toContain("'owner-repo' 'issue-watch'");
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) maintenance');
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) issue-watch');
+    const launcher = await fs.readFile(path.join(home, 'bin', 'run-scheduled.sh'), 'utf8');
+    expect(launcher.indexOf('cleanup\ntrap - EXIT')).toBeGreaterThan(-1);
+    expect(launcher.indexOf('cleanup\ntrap - EXIT')).toBeLessThan(launcher.indexOf('exec "$node_bin"'));
   });
 
   it('installs scheduler jobs with anchored hourly cron schedules', async () => {
@@ -162,7 +167,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain("45 2 * * * ");
     expect(crontabInput).toContain("45 10 * * * ");
     expect(crontabInput).toContain("45 18 * * * ");
-    expect(crontabInput).toContain("run --project 'owner-repo' --scheduled --job 'maintenance'");
+    expect(crontabInput).toContain("'owner-repo' 'maintenance'");
   });
 
   it('rejects hourly cron schedules that cannot be represented exactly', async () => {
@@ -248,7 +253,9 @@ describe('enableScheduler', () => {
     expect(bootoutCalls).toHaveLength(4);
     const plist = await fs.readFile(scheduler.paths![0], 'utf8');
     expect(plist).toContain('<key>StartInterval</key><integer>300</integer>');
-    expect(plist).toContain('<string>--job</string><string>issue-watch</string>');
+    expect(plist).toContain('<string>/bin/sh</string>');
+    expect(plist).toContain('<string>issue-watch</string>');
+    expect(plist).toContain('bin/run-scheduled.sh</string>');
   });
 
   it('installs configured maintenance launchd job with StartCalendarInterval', async () => {
@@ -294,7 +301,7 @@ describe('enableScheduler', () => {
     const plist = await fs.readFile(scheduler.paths![0], 'utf8');
     expect(plist).toContain('<key>Label</key><string>com.kaizen-loop.owner-repo.maintenance</string>');
     expect(plist).toContain('<dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>');
-    expect(plist).toContain('<string>--job</string><string>maintenance</string>');
+    expect(plist).toContain('<string>maintenance</string>');
   });
 
   it('installs configured weekly launchd jobs with weekdays', async () => {

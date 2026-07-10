@@ -73,6 +73,15 @@ flowchart TB
 
 Most commands accept `--project <slug>` and `--json`. `run`, `fix`, and `improve` accept `--agent claude|codex` to override the repository default for the current run.
 
+Scheduled launchd and cron jobs run through a launcher installed at
+`$KAIZEN_HOME/bin/run-scheduled.sh`. Before each
+job, the launcher refreshes a dedicated runtime clone under
+`$KAIZEN_HOME/runtime/kaizen-loop` from `origin/main`. It installs dependencies and
+rebuilds only when the main commit changes, then runs the requested job with that
+verified build. The dedicated clone keeps automatic updates from switching or
+resetting a developer checkout. An update or build failure stops the scheduled run
+instead of silently using stale code.
+
 ## Quickstart
 
 ```sh
