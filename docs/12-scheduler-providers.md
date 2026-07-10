@@ -208,6 +208,7 @@ interface SchedulerProvider {
 現行の macOS 実装を adapter 化する。
 
 - job ごとに `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job-id>.plist` を管理する
+- 各 job は `$KAIZEN_HOME/bin/run-scheduled.sh` にインストールされた launcher を経由し、専用 runtime clone を `origin/main` に更新・ビルドしてから実行する。通常の開発 checkout は変更しない
 - `schedule.type: daily` / `times` / `weekly` は `StartCalendarInterval`
 - `schedule.type: interval` は `StartInterval`
 - `schedule.type: rrule` は launchd で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする
@@ -218,6 +219,7 @@ interface SchedulerProvider {
 現行の Linux 実装を adapter 化する。
 
 - crontab に Kaizen 管理マーカー付きの行を追加する
+- 各行は launchd と同じ scheduled launcher を経由し、最新の `origin/main` build を実行する
 - `schedule.type: daily` / `times` / `weekly` は cron の時刻指定へ展開する
 - `schedule.type: interval` は cron で表現できる範囲へ変換する
 - `schedule.type: rrule` は cron で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする

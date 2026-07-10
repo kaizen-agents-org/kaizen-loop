@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { KaizenConfig, RegistryProject, SchedulerJobConfig, SchedulerSchedule } from '../config/schema.js';
 import type { CommandRunner } from '../utils/command.js';
-import { projectStateDir } from '../utils/paths.js';
+import { getKaizenHome, projectStateDir } from '../utils/paths.js';
 
 export async function enableScheduler(options: {
   slug: string;
@@ -13,6 +14,7 @@ export async function enableScheduler(options: {
   platform?: NodeJS.Platform;
 }): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[] }> {
   const jobs = schedulerJobs(options.config);
+  await installScheduledLauncher();
   if ((options.platform ?? process.platform) === 'darwin') {
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
@@ -94,12 +96,11 @@ function launchdPlist(slug: string, job: SchedulerJob): string {
   <key>Label</key><string>com.kaizen-loop.${slug}.${job.name}</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/bin/sh</string>
+    <string>${escapeXml(scheduledLauncherPath())}</string>
     <string>${escapeXml(process.execPath)}</string>
-    <string>${escapeXml(cliPath())}</string>
-    <string>run</string>
-    <string>--project</string><string>${escapeXml(slug)}</string>
-    <string>--scheduled</string>
-    <string>--job</string><string>${escapeXml(job.name)}</string>
+    <string>${escapeXml(slug)}</string>
+    <string>${escapeXml(job.name)}</string>
   </array>
 ${schedule}
   <key>EnvironmentVariables</key>
@@ -116,7 +117,7 @@ function cronMarker(slug: string): string {
 }
 
 function commandLine(slug: string, job: SchedulerJob): string {
-  return `${shQuote(process.execPath)} ${shQuote(cliPath())} run --project ${shQuote(slug)} --scheduled --job ${shQuote(job.name)}`;
+  return `/bin/sh ${shQuote(scheduledLauncherPath())} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
 }
 
 async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Promise<string[]> {
@@ -275,6 +276,18 @@ function launchdDay(day: 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU'): string
 
 function cliPath(): string {
   return process.argv[1] ?? 'kaizen';
+}
+
+function scheduledLauncherPath(): string {
+  return path.join(getKaizenHome(), 'bin', 'run-scheduled.sh');
+}
+
+async function installScheduledLauncher(): Promise<void> {
+  const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'run-scheduled.sh');
+  const destination = scheduledLauncherPath();
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.copyFile(source, destination);
+  await fs.chmod(destination, 0o755);
 }
 
 function escapeXml(value: string): string {
