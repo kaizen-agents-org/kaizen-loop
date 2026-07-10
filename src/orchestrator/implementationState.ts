@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { GitHubPullRequest } from '../github/types.js';
 
 export type ImplementationPhase = 'implementing' | 'verifying' | 'publishing' | 'guardian' | 'blocked' | 'failed' | 'complete';
 
@@ -57,4 +58,19 @@ export async function saveImplementationState(
 
 export function implementationStatePath(stateDir: string, issue: number): string {
   return path.join(stateDir, 'implementations', `issue-${issue}.json`);
+}
+
+export function openCheckpointStates(
+  states: ImplementationState[],
+  openPullRequests: GitHubPullRequest[]
+): ImplementationState[] {
+  const pullRequestsByNumber = new Map(openPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]));
+  return states.filter((state) => {
+    if (state.phase === 'complete' || !state.pr) return false;
+    return pullRequestsByNumber.get(state.pr)?.headRefName === state.branch;
+  });
+}
+
+export function forbiddenCheckpointPublicationReason(forbiddenFiles: string[]): string | undefined {
+  return forbiddenFiles.length > 0 ? `forbidden paths changed: ${forbiddenFiles.join(', ')}` : undefined;
 }

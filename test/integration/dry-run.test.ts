@@ -2166,6 +2166,7 @@ describe('runKaizen PR flow', () => {
     });
 
     let promoted = false;
+    let failPushes = false;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/7\n');
@@ -2195,6 +2196,7 @@ describe('runKaizen PR flow', () => {
         return result(command, args, workspace, 'built');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args[0] === 'push' && failPushes) throw new Error('push unavailable');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -2222,6 +2224,26 @@ describe('runKaizen PR flow', () => {
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('push'))).toBe(true);
 
+    failPushes = true;
+    const interruptedResume = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in interruptedResume && interruptedResume.issues[0].outcome).toBe('failed');
+    await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
+      phase: 'failed',
+      pr: 7,
+      prUrl: 'https://github.com/o/r/pull/7'
+    });
+
+    failPushes = false;
     const resumed = await runKaizen({
       cwd: repo,
       project: 'o-r',

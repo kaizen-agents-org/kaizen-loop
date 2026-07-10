@@ -36,7 +36,13 @@ import {
   summarizeGeneratedPullRequestBacklog
 } from './wipLimit.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
-import { listImplementationStates, loadImplementationState, saveImplementationState } from './implementationState.js';
+import {
+  forbiddenCheckpointPublicationReason,
+  listImplementationStates,
+  loadImplementationState,
+  openCheckpointStates,
+  saveImplementationState
+} from './implementationState.js';
 
 export interface RunOptions {
   cwd: string;
@@ -120,12 +126,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       openPullRequests
     });
     const implementationStates = await listImplementationStates(stateDir);
-    const resumableIssueNumbers = new Set(
-      implementationStates.filter((state) => state.phase !== 'complete').map((state) => state.issue)
-    );
-    const resumeBranches = new Set(
-      implementationStates.filter((state) => state.phase !== 'complete').map((state) => state.branch)
-    );
+    const openCheckpoints = openCheckpointStates(implementationStates, openPullRequests);
+    const resumableIssueNumbers = new Set(openCheckpoints.map((state) => state.issue));
+    const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
     const limited = await applyOpenPullRequestLimit({
       config,
       selection,
@@ -1182,20 +1185,22 @@ async function finishBlocked(
 ): Promise<RunIssueSummary> {
   const requiresHuman = requiresHumanForBlockedAgent(agentResult);
   const reason = agentResult.blockedReason ?? agentResult.summary;
+  const previousState = await loadImplementationState(options.stateDir, options.issue.number);
   const checkpointError = await checkpointPartialChanges(options, options.issue);
   const checkpointReason = checkpointError ? `${reason}\n\nCheckpoint commit failed: ${checkpointError}` : reason;
   const draft = await publishDraftCheckpoint(options, attempt, checkpointReason);
+  const publicationReason = draft.skipped ? `${checkpointReason}\n\nDraft PR publication skipped: ${draft.skipped}` : checkpointReason;
   const recordedReason = draft.error
-    ? `${checkpointReason}\n\nDraft PR publication failed: ${draft.error}`
-    : checkpointReason;
+    ? `${publicationReason}\n\nDraft PR publication failed: ${draft.error}`
+    : publicationReason;
   await saveImplementationState(options.stateDir, {
     issue: options.issue.number,
     branch: options.branch,
     phase: 'blocked',
     attempt,
     lastFailure: recordedReason,
-    pr: draft.pr?.number,
-    prUrl: draft.pr?.url
+    pr: draft.pr?.number ?? previousState?.pr,
+    prUrl: draft.pr?.url ?? previousState?.prUrl
   });
   await options.github.comment(
     options.issue.number,
@@ -1212,7 +1217,7 @@ async function finishBlocked(
       maxAttempts: options.config.run.maxAttemptsPerIssue,
       requiresHuman,
       resumeBranch: options.branch,
-      prUrl: draft.pr?.url
+      prUrl: draft.pr?.url ?? previousState?.prUrl
     })
   );
   if (requiresHuman) {
@@ -1267,18 +1272,20 @@ async function finishFailed(
   started: number,
   verifyResults?: Array<{ command: string; ok: boolean; output: string }>
 ): Promise<RunIssueSummary> {
+  const previousState = await loadImplementationState(options.stateDir, options.issue.number);
   const checkpointError = await checkpointPartialChanges(options, options.issue);
   const checkpointReason = checkpointError ? `${reason}\n\nCheckpoint commit failed: ${checkpointError}` : reason;
   const draft = await publishDraftCheckpoint(options, attempt, checkpointReason, verifyResults);
-  const recordedReason = draft.error ? `${checkpointReason}\n\nDraft PR publication failed: ${draft.error}` : checkpointReason;
+  const publicationReason = draft.skipped ? `${checkpointReason}\n\nDraft PR publication skipped: ${draft.skipped}` : checkpointReason;
+  const recordedReason = draft.error ? `${publicationReason}\n\nDraft PR publication failed: ${draft.error}` : publicationReason;
   await saveImplementationState(options.stateDir, {
     issue: options.issue.number,
     branch: options.branch,
     phase: 'failed',
     attempt,
     lastFailure: recordedReason,
-    pr: draft.pr?.number,
-    prUrl: draft.pr?.url
+    pr: draft.pr?.number ?? previousState?.pr,
+    prUrl: draft.pr?.url ?? previousState?.prUrl
   });
   await options.github.comment(
     options.issue.number,
@@ -1294,7 +1301,7 @@ async function finishFailed(
       trigger: options.trigger,
       maxAttempts: options.config.run.maxAttemptsPerIssue,
       resumeBranch: options.branch,
-      prUrl: draft.pr?.url
+      prUrl: draft.pr?.url ?? previousState?.prUrl
     })
   );
   if (attempt >= options.config.run.maxAttemptsPerIssue) {
@@ -1325,11 +1332,13 @@ async function publishDraftCheckpoint(
   attempt: number,
   reason: string,
   verifyResults: Array<{ command: string; ok: boolean; output: string }> = []
-): Promise<{ pr?: PullRequestResult; error?: string }> {
+): Promise<{ pr?: PullRequestResult; error?: string; skipped?: string }> {
   try {
     const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
     const current = await loadImplementationState(options.stateDir, options.issue.number);
     const diff = await workspace.collectDiffStats(options.config);
+    const publicationBlocker = forbiddenCheckpointPublicationReason(diff.forbiddenFiles);
+    if (publicationBlocker) return { skipped: publicationBlocker };
     if (diff.changedFiles === 0 && !current?.pr) return {};
     await workspace.git().push(options.branch, { forceWithLease: true });
     const title = `[WIP] kaizen: ${shortSummary(options.issue.title)} (#${options.issue.number})`;
