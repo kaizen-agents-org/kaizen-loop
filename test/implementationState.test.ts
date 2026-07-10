@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   implementationStatePath,
   forbiddenCheckpointPublicationReason,
+  isResumableImplementationState,
   loadImplementationState,
   openCheckpointStates,
   saveImplementationState
@@ -76,5 +77,20 @@ describe('implementation state', () => {
       'forbidden paths changed: .env, .github/private.key'
     );
     expect(forbiddenCheckpointPublicationReason([])).toBeUndefined();
+  });
+
+  it('resumes only active implementation checkpoint phases', () => {
+    const base = {
+      version: 1 as const,
+      issue: 1,
+      branch: 'kaizen/issue-1',
+      attempt: 1,
+      updatedAt: new Date().toISOString()
+    };
+    expect(isResumableImplementationState({ ...base, phase: 'failed' })).toBe(true);
+    expect(isResumableImplementationState({ ...base, phase: 'blocked' })).toBe(true);
+    expect(isResumableImplementationState({ ...base, phase: 'guardian' })).toBe(false);
+    expect(isResumableImplementationState({ ...base, phase: 'complete' })).toBe(false);
+    expect(isResumableImplementationState(undefined)).toBe(false);
   });
 });

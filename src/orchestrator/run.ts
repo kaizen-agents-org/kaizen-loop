@@ -38,6 +38,7 @@ import {
 import { schedulerJob } from '../scheduler/scheduler.js';
 import {
   forbiddenCheckpointPublicationReason,
+  isResumableImplementationState,
   listImplementationStates,
   loadImplementationState,
   openCheckpointStates,
@@ -276,7 +277,8 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
               assertRunWithinDeadline(runDeadlineAt);
               const checkpoint = await loadImplementationState(stateDir, issue.number);
               const worktree = await baseWorkspace.createIssueWorktree(config, issue, runId, {
-                branch: checkpoint?.branch
+                branch: checkpoint?.branch,
+                resume: isResumableImplementationState(checkpoint)
               });
               worktrees.push({ issue, branch: worktree.branch, path: worktree.path });
             }

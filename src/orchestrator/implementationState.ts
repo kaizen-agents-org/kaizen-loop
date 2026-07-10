@@ -75,3 +75,7 @@ export function openCheckpointStates(
 export function forbiddenCheckpointPublicationReason(forbiddenFiles: string[]): string | undefined {
   return forbiddenFiles.length > 0 ? `forbidden paths changed: ${forbiddenFiles.join(', ')}` : undefined;
 }
+
+export function isResumableImplementationState(state: ImplementationState | undefined): state is ImplementationState {
+  return Boolean(state && ['implementing', 'verifying', 'publishing', 'blocked', 'failed'].includes(state.phase));
+}

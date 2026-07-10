@@ -121,7 +121,7 @@ export class WorkspaceManager {
     config: KaizenConfig,
     issue: { number: number; title: string },
     runId: string,
-    options: { branch?: string } = {}
+    options: { branch?: string; resume?: boolean } = {}
   ): Promise<{ branch: string; path: string; resumed: boolean }> {
     const branch = options.branch ?? issueBranchName(config, issue);
     const worktreePath = issueWorktreePath(this.workspacePath, runId, issue.number);
@@ -131,6 +131,11 @@ export class WorkspaceManager {
     await fs.rm(worktreePath, { recursive: true, force: true });
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
     await this.removeWorktreesForBranch(branch);
+    if (!options.resume) {
+      await git.deleteLocalBranch(branch);
+      await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
+      return { branch, path: worktreePath, resumed: false };
+    }
     const localBranchExists = await git.localBranchExists(branch);
     const remoteBranchExists = !localBranchExists && await git.remoteBranchExists(branch);
     if (localBranchExists) {

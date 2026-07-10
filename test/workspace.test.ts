@@ -99,7 +99,7 @@ describe('workspace branch handling', () => {
     const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
     const config = configSchema.parse({ version: 1 });
 
-    const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Retry branch' }, 'new-run');
+    const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Retry branch' }, 'new-run', { resume: true });
 
     expect(worktree).toEqual({
       branch: 'kaizen/issue-12-retry-branch',
@@ -152,7 +152,8 @@ describe('workspace branch handling', () => {
     const config = configSchema.parse({ version: 1 });
 
     const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Edited title' }, 'new-run', {
-      branch: 'kaizen/issue-12-original-title'
+      branch: 'kaizen/issue-12-original-title',
+      resume: true
     });
 
     expect(worktree.branch).toBe('kaizen/issue-12-original-title');
@@ -176,7 +177,7 @@ describe('workspace branch handling', () => {
     const workspace = new WorkspaceManager(runner, workspacePath);
     const config = configSchema.parse({ version: 1 });
 
-    const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Resume' }, 'new-run');
+    const worktree = await workspace.createIssueWorktree(config, { number: 12, title: 'Resume' }, 'new-run', { resume: true });
 
     expect(worktree.resumed).toBe(true);
     expect(runner.mock.calls.map(([, args]) => args.join(' '))).toContain(
