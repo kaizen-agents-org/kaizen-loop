@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildResultComment, countAttempts, markedPullRequestNumbers } from '../src/report/comments.js';
+import { buildResultComment, countAttempts, hasRetryableExternalBlock, markedPullRequestNumbers } from '../src/report/comments.js';
 
 describe('result comments', () => {
   it('includes a machine-readable marker and counts attempts', () => {
@@ -60,6 +60,42 @@ describe('result comments', () => {
     expect(countAttempts([{ body: retryable }])).toBe(0);
     expect(human).toContain('Blocked; needs human input');
     expect(countAttempts([{ body: human }])).toBe(1);
+    expect(hasRetryableExternalBlock([{ body: retryable }])).toBe(true);
+    expect(hasRetryableExternalBlock([{ body: human }])).toBe(false);
+  });
+
+  it('uses the latest result when deciding whether a blocked issue is retryable', () => {
+    const retryable = buildResultComment({
+      runId: '2026-06-12T02-00-00Z',
+      issue: 42,
+      attempt: 1,
+      outcome: 'blocked',
+      agent: 'codex',
+      summary: 'provider capacity exhausted',
+      requiresHuman: false,
+      maxAttempts: 3
+    });
+    const human = buildResultComment({
+      runId: '2026-06-13T02-00-00Z',
+      issue: 42,
+      attempt: 2,
+      outcome: 'blocked',
+      agent: 'codex',
+      summary: 'needs credentials',
+      maxAttempts: 3
+    });
+
+    expect(hasRetryableExternalBlock([{ body: retryable }, { body: human }])).toBe(false);
+    expect(hasRetryableExternalBlock([{ body: human }, { body: retryable }])).toBe(true);
+  });
+
+  it('recognizes legacy retryable provider evidence without the marker flag', () => {
+    expect(hasRetryableExternalBlock([{
+      body: [
+        'failureClass=command_missing; fallbackReason=auth_failed',
+        '<!-- kaizen-loop:result {"attempt":1,"outcome":"blocked"} -->'
+      ].join('\n')
+    }])).toBe(true);
   });
 
   it('does not count legacy retryable provider blocks as attempts', () => {

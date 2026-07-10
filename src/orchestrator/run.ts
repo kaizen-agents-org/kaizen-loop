@@ -1109,6 +1109,8 @@ async function finishBlocked(
   );
   if (requiresHuman) {
     await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  } else {
+    await options.github.removeLabels(options.issue.number, ['kaizen:needs-human']);
   }
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
   return {
@@ -1137,7 +1139,9 @@ function isProviderCapacityBlock(text: string): boolean {
     /\bagent command timed out after \d+ms\b/i,
     /["']result["']\s*:\s*["'][^"']*(session limit|rate limit exceeded|too many requests)/i,
     /\bfailed to initialize in-process app-server client:\s*operation not permitted\b/i,
-    /\bcould not create path aliases:\s*operation not permitted\b/i
+    /\bcould not create path aliases:\s*operation not permitted\b/i,
+    /\bfailureclass\s*[:=]\s*(command_missing|auth_failed|authentication_failed|login_required)\b/i,
+    /\bfallbackreason\s*[:=]\s*(command_missing|auth_failed|authentication_failed|login_required)\b/i
   ].some((pattern) => pattern.test(text));
 }
 

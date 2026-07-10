@@ -79,6 +79,17 @@ export function countAttempts(comments: Array<{ body: string }>): number {
   }).length;
 }
 
+export function hasRetryableExternalBlock(comments: Array<{ body: string }>): boolean {
+  const marker = [...comments]
+    .reverse()
+    .map((comment) => ({ comment, marker: parseKaizenMarker(comment.body, 'result') }))
+    .find((candidate) => candidate.marker !== undefined);
+  return Boolean(
+    marker?.marker?.outcome === 'blocked' &&
+      (marker.marker.retryableExternal === true || hasRetryableExternalEvidence(marker.comment.body))
+  );
+}
+
 export function hasPendingPullRequest(comments: Array<{ body: string }>, openPullRequests: GitHubPullRequest[] = []): boolean {
   return comments.some((comment) => {
     const marker = parseKaizenMarker(comment.body, 'result') ?? parseKaizenMarker(comment.body, 'progress');
@@ -145,7 +156,9 @@ function hasRetryableExternalEvidence(body: string): boolean {
     /\bagent command timed out after \d+ms\b/i,
     /["']result["']\s*:\s*["'][^"']*(session limit|rate limit exceeded|too many requests)/i,
     /\bfailed to initialize in-process app-server client:\s*operation not permitted\b/i,
-    /\bcould not create path aliases:\s*operation not permitted\b/i
+    /\bcould not create path aliases:\s*operation not permitted\b/i,
+    /\bfailureclass\s*[:=]\s*(command_missing|auth_failed|authentication_failed|login_required)\b/i,
+    /\bfallbackreason\s*[:=]\s*(command_missing|auth_failed|authentication_failed|login_required)\b/i
   ].some((pattern) => pattern.test(body));
 }
 

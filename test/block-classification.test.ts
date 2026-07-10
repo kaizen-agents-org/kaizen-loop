@@ -45,6 +45,12 @@ describe('blocked agent classification', () => {
     }))).toBe(true);
   });
 
+  it('retries command and authentication failures from the execution environment', () => {
+    expect(requiresHumanForBlockedAgent(agentResult({
+      notes: 'failureClass=command_missing; fallbackReason=auth_failed'
+    }))).toBe(false);
+  });
+
   it('does not treat free-form retry wording as provider capacity evidence', () => {
     expect(requiresHumanForBlockedAgent(agentResult({
       summary: 'Add a rate limited retry scenario to the fixture corpus.',
