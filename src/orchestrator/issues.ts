@@ -1,6 +1,6 @@
 import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
-import { countAttempts, hasPendingPullRequest } from '../report/comments.js';
+import { countAttempts, hasPendingPullRequest, hasRetryableExternalBlock } from '../report/comments.js';
 
 export interface IssueSelection {
   selected: GitHubIssue[];
@@ -42,7 +42,7 @@ export function selectIssues(options: {
     }
 
     const excludedLabel = options.config.issues.selection.excludeLabels.find((label) => labels.includes(label));
-    if (excludedLabel) {
+    if (excludedLabel && !(excludedLabel === 'kaizen:needs-human' && hasRetryableExternalBlock(issue.comments ?? []))) {
       skipped.push({ number: issue.number, reason: excludedLabel === 'kaizen:needs-human' ? 'needs-human' : `excluded label: ${excludedLabel}` });
       return false;
     }

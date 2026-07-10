@@ -59,6 +59,26 @@ describe('selectIssues', () => {
     ]);
   });
 
+  it('retries a needs-human issue after a retryable external block', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [
+        {
+          ...issue(1, 'provider unavailable', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:needs-human']),
+          comments: [
+            {
+              body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"blocked","retryableExternal":true} -->'
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
+  });
+
   it('skips issues that already have a pending pull request in automatic selection', () => {
     const selection = selectIssues({
       config,
