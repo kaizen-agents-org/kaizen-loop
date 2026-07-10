@@ -79,6 +79,25 @@ describe('selectIssues', () => {
     expect(selection.skipped).toEqual([]);
   });
 
+  it('keeps other excluded labels effective during retryable external recovery', () => {
+    const selection = selectIssues({
+      config: configSchema.parse({
+        version: 1,
+        issues: { selection: { excludeLabels: ['kaizen:needs-human', 'do-not-run'] } }
+      }),
+      maxIssues: 10,
+      issues: [{
+        ...issue(1, 'provider unavailable', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:needs-human', 'do-not-run']),
+        comments: [{
+          body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"blocked","retryableExternal":true} -->'
+        }]
+      }]
+    });
+
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'excluded label: do-not-run' }]);
+  });
+
   it('skips issues that already have a pending pull request in automatic selection', () => {
     const selection = selectIssues({
       config,

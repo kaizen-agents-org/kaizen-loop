@@ -41,8 +41,11 @@ export function selectIssues(options: {
       return false;
     }
 
-    const excludedLabel = options.config.issues.selection.excludeLabels.find((label) => labels.includes(label));
-    if (excludedLabel && !(excludedLabel === 'kaizen:needs-human' && hasRetryableExternalBlock(issue.comments ?? []))) {
+    const retryableExternalBlock = hasRetryableExternalBlock(issue.comments ?? []);
+    const excludedLabel = options.config.issues.selection.excludeLabels.find(
+      (label) => labels.includes(label) && !(label === 'kaizen:needs-human' && retryableExternalBlock)
+    );
+    if (excludedLabel) {
       skipped.push({ number: issue.number, reason: excludedLabel === 'kaizen:needs-human' ? 'needs-human' : `excluded label: ${excludedLabel}` });
       return false;
     }
