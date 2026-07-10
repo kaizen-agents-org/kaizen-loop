@@ -2251,15 +2251,6 @@ describe('runKaizen PR flow', () => {
     expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(buildersBeforeRecovery);
     const recoveryState = await loadImplementationState(path.join(home, 'projects', 'o-r'), 1);
     expect(recoveryState).toMatchObject({ phase: 'recovery-needed', pr: 7 });
-    await saveImplementationState(path.join(home, 'projects', 'o-r'), {
-      issue: 1,
-      branch: recoveryState?.branch ?? 'kaizen/issue-1-fix-bug',
-      phase: 'failed',
-      attempt: recoveryState?.attempt ?? 1,
-      pr: 7,
-      prUrl: 'https://github.com/o/r/pull/7',
-      lastFailure: 'operator restored the checkpoint branch'
-    });
     missingCheckpointRefs = false;
 
     failPushes = true;

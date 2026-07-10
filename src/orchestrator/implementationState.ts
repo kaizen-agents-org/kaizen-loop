@@ -86,5 +86,5 @@ export function forbiddenCheckpointPublicationReason(forbiddenFiles: string[]): 
 }
 
 export function isResumableImplementationState(state: ImplementationState | undefined): state is ImplementationState {
-  return Boolean(state && ['implementing', 'verifying', 'publishing', 'blocked', 'failed'].includes(state.phase));
+  return Boolean(state && ['implementing', 'verifying', 'publishing', 'blocked', 'failed', 'recovery-needed'].includes(state.phase));
 }
