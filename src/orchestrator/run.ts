@@ -1691,10 +1691,12 @@ function buildPullRequestBody(
   verifierResult?: VerifierResult
 ): string {
   const verify = verifyResults.length
-    ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\``).join('\n')
-    : '- Verification commands are not configured';
+    ? verifyResults.map((result) => `- ${result.ok ? '[x]' : '[ ]'} \`${result.command}\` — ${result.ok ? '成功' : '失敗'}`).join('\n')
+    : '- スキップ: リポジトリに検証コマンドが設定されていません';
   const notes = agentResult.notes.trim() ? `\n## Builder notes\n${agentResult.notes.trim()}\n` : '';
-  const verifier = verifierResult ? `\n## Verifier\n${verifierPrBodyLines(verifierResult).join('\n')}\n` : '';
+  const verifier = verifierResult
+    ? verifierPrBodyLines(verifierResult).join('\n')
+    : 'verifier: not run (verifier.enabled is false for this project)';
   const evidence = [
     '- reported: builder summary and builder notes come from the builder-agent self-report.',
     verifyResults.length > 0
@@ -1703,25 +1705,51 @@ function buildPullRequestBody(
     verifierEvidenceStrength(verifierResult),
     '- static: changed file and line counts come from git diff metadata.'
   ].join('\n');
+  const changedFiles = diff.files.length
+    ? diff.files.map((file) => `- \`${file}\` — ${agentResult.summary}`).join('\n')
+    : '- (no files changed)';
+
   return `Closes #${issue.number}
 
-## Summary
+## 元Issue
+**#${issue.number}: ${escapeClosingReferences(issue.title)}**
+${summarizeIssueBody(issue.body)}
+
+## Builder task understanding
 ${agentResult.summary}
 ${notes}
 
+## 変更ファイル
+${changedFiles}
+
+Changed files: ${diff.changedFiles} / Changed lines: ${diff.changedLines}
+
 ## Verification
 ${verify}
+
+## Verifier verdict
 ${verifier}
 
 ## Evidence strength
 ${evidence}
 
-## Kaizen risk policy
+## 残存リスク / レビュー観点
 ${riskReason}
-
-Changed files: ${diff.changedFiles}
-Changed lines: ${diff.changedLines}
 `;
+}
+
+function summarizeIssueBody(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) return '(issue has no body)';
+  const firstLines = trimmed.split('\n').slice(0, 10).join('\n');
+  const summary = trimmed.length > firstLines.length || trimmed.split('\n').length > 10
+    ? `${firstLines}\n…`
+    : firstLines;
+  return escapeClosingReferences(summary);
+}
+
+function escapeClosingReferences(text: string): string {
+  return text.replace(/\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi, '$1 \\#$2');
 }
 
 function verifierPrBodyLines(verifierResult: VerifierResult): string[] {
