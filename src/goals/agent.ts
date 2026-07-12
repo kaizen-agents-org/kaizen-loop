@@ -24,6 +24,9 @@ const nextIssueSchema = z
     if (PLACEHOLDER_ISSUE_TEXT.some((placeholder) => normalized.includes(placeholder))) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: 'Goal issue contains placeholder text.' });
     }
+    if (/<[^>\n]+>/.test(`${issue.title}\n${issue.body}`)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Goal issue contains unresolved template text.' });
+    }
     if (!/(acceptance criteria|受入条件|受け入れ条件)/i.test(issue.body)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

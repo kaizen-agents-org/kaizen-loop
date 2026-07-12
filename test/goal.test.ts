@@ -488,8 +488,8 @@ function goalRunner(options: {
             status: 'issue',
             reason: 'First scoped step',
             nextIssue: {
-              title: 'Short GitHub issue title',
-              body: 'Issue body with goal context and the exact iteration scope.',
+              title: '<repository-specific action and behavior>',
+              body: '## Scope\n<files or behavior changed and why this advances the goal>\n\n## Acceptance Criteria\n- <observable verification>',
               priority: 'P2'
             }
           });
