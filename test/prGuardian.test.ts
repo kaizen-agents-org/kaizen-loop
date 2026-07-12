@@ -295,6 +295,67 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
+  it('requires two unchanged stabilization snapshots', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    let views = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], { headRefOid: ++views === 3 ? 'new-head' : 'old-head' })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.raw).toContain('PR head changed during stabilization');
+  });
+
+  it('treats a merged PR as a successful terminal state', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? ghResponse(args, [], { state: 'MERGED', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.summary).toContain('PR is merged');
+  });
+
   it('persists one guardian job per PR head SHA', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
@@ -577,6 +638,7 @@ function ghResponse(
     mergeable: string;
     reviewDecision: string;
     statusCheckRollup: Array<Record<string, unknown>>;
+    headRefOid: string;
   }> = {}
 ): string {
   return isPrView(args) ? mergeablePrResponse(pr) : reviewThreadsResponse(threads);
@@ -593,6 +655,7 @@ function mergeablePrResponse(pr: Partial<{
   mergeable: string;
   reviewDecision: string;
   statusCheckRollup: Array<Record<string, unknown>>;
+  headRefOid: string;
 }> = {}): string {
   return JSON.stringify({
     state: pr.state ?? 'OPEN',
@@ -600,6 +663,9 @@ function mergeablePrResponse(pr: Partial<{
     mergeStateStatus: pr.mergeStateStatus ?? 'CLEAN',
     mergeable: pr.mergeable ?? 'MERGEABLE',
     reviewDecision: pr.reviewDecision ?? '',
+    headRefOid: pr.headRefOid ?? 'head-sha',
+    reviews: [],
+    comments: [],
     statusCheckRollup: pr.statusCheckRollup ?? [
       {
         __typename: 'CheckRun',
