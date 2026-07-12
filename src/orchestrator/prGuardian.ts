@@ -211,14 +211,19 @@ export async function runPrGuardianSkill(
       if (attempt > 1) {
         const preflight = await inspectPrGate(runCommand, req);
         if (preflight.isReady) {
-          return {
-            status: 'success',
-            summary: successSummary(preflight),
-            raw: rawOutputs.join('\n'),
-            durationMs: Date.now() - startMs
-          };
+          const stablePreflight = await waitForStablePrGate(runCommand, req, preflight);
+          if (stablePreflight.isReady) {
+            return {
+              status: 'success',
+              summary: successSummary(stablePreflight),
+              raw: rawOutputs.join('\n'),
+              durationMs: Date.now() - startMs
+            };
+          }
+          rawOutputs.push(`PR became not merge-ready after retry preflight settle wait before pass ${attempt}:\n${summarizeGate(stablePreflight)}`);
+        } else {
+          rawOutputs.push(`PR still not merge-ready before guardian pass ${attempt}:\n${summarizeGate(preflight)}`);
         }
-        rawOutputs.push(`PR still not merge-ready before guardian pass ${attempt}:\n${summarizeGate(preflight)}`);
       }
 
       const result = await runCommand(
@@ -249,7 +254,7 @@ export async function runPrGuardianSkill(
 
       const gate = await inspectPrGate(runCommand, req);
       if (gate.isReady) {
-        const lateGate = await waitForLatePrGate(runCommand, req);
+        const lateGate = await waitForStablePrGate(runCommand, req, gate);
         if (!lateGate.isReady) {
           rawOutputs.push(`PR became not merge-ready after bot review settle wait on pass ${attempt}:\n${summarizeGate(lateGate)}`);
           continue;
@@ -347,6 +352,8 @@ interface PrGateSummary {
   mergeStateStatus?: string;
   mergeable?: string;
   reviewDecision?: string;
+  headRefOid?: string;
+  activityFingerprint?: string;
   checks: PrCheckSummary[];
 }
 
@@ -386,6 +393,9 @@ interface PullRequestViewResponse {
   mergeStateStatus?: string;
   mergeable?: string;
   reviewDecision?: string;
+  headRefOid?: string;
+  reviews?: Array<{ id?: string; submittedAt?: string; commit?: { oid?: string } | null }>;
+  comments?: Array<{ id?: string; updatedAt?: string }>;
   statusCheckRollup?: Array<Record<string, unknown>>;
 }
 
@@ -476,13 +486,14 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
     inspectPullRequest(runCommand, req),
     listUnresolvedReviewThreads(runCommand, req)
   ]);
+  const terminal = pullRequest.state === 'MERGED';
   const blockers = [
     ...mergeabilityBlockers(pullRequest),
-    ...unresolvedThreads.map((thread) => {
+    ...(terminal ? [] : unresolvedThreads.map((thread) => {
       const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
       const author = thread.author ? ` by ${thread.author}` : '';
       return `unresolved review thread at ${location}${author}`;
-    })
+    }))
   ];
 
   return {
@@ -503,7 +514,7 @@ async function inspectPullRequest(
     '--repo',
     req.repo,
     '--json',
-    'state,isDraft,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup'
+    'state,isDraft,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup,headRefOid,reviews,comments'
   ], {
     cwd: req.workspaceDir,
     env: githubCliEnv(),
@@ -520,6 +531,13 @@ async function inspectPullRequest(
     mergeStateStatus: parsed.mergeStateStatus,
     mergeable: parsed.mergeable,
     reviewDecision: parsed.reviewDecision,
+    headRefOid: parsed.headRefOid,
+    activityFingerprint: JSON.stringify({
+      headRefOid: parsed.headRefOid,
+      checks: normalizeStatusChecks(parsed.statusCheckRollup),
+      reviews: (parsed.reviews ?? []).map((review) => [review.id, review.submittedAt, review.commit?.oid]),
+      comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
+    }),
     checks: normalizeStatusChecks(parsed.statusCheckRollup)
   };
 }
@@ -534,6 +552,7 @@ function normalizeStatusChecks(statusCheckRollup: Array<Record<string, unknown>>
 
 function mergeabilityBlockers(state: Omit<PrGateSummary, 'isReady' | 'blockers'>): string[] {
   const blockers: string[] = [];
+  if (state.state === 'MERGED') return blockers;
   if (state.state && state.state !== 'OPEN') blockers.push(`PR state is ${state.state}`);
   if (state.isDraft) blockers.push('PR is draft');
   if (state.mergeable && state.mergeable !== 'MERGEABLE') blockers.push(`mergeable is ${state.mergeable}`);
@@ -556,14 +575,25 @@ function isPassingCheck(check: PrCheckSummary): boolean {
   return check.status === 'SUCCESS';
 }
 
-async function waitForLatePrGate(
+async function waitForStablePrGate(
   runCommand: CommandRunner,
-  req: PrGuardianSkillRequest
+  req: PrGuardianSkillRequest,
+  initial: PrGateSummary
 ): Promise<PrGateSummary> {
   const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
-  if (settleMs <= 0) return inspectPrGate(runCommand, req);
-  await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
-  return inspectPrGate(runCommand, req);
+  if (settleMs > 0) await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
+  const first = await inspectPrGate(runCommand, req);
+  if (!first.isReady) return first;
+  if (first.headRefOid !== initial.headRefOid) {
+    return { ...first, isReady: false, blockers: ['PR head changed during stabilization'] };
+  }
+  if (settleMs > 0) await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
+  const second = await inspectPrGate(runCommand, req);
+  if (!second.isReady) return second;
+  if (second.headRefOid !== first.headRefOid || second.activityFingerprint !== first.activityFingerprint) {
+    return { ...second, isReady: false, blockers: ['PR activity changed during stabilization'] };
+  }
+  return second;
 }
 
 function boundedTimeoutMs(configuredTimeoutMs: number, runDeadlineAt: number | undefined): number {
@@ -601,6 +631,7 @@ function summarizeGate(gate: PrGateSummary): string {
 }
 
 function successSummary(gate: PrGateSummary): string {
+  if (gate.state === 'MERGED') return 'PR guardian completed; PR is merged.';
   return `PR guardian completed; PR is merge-ready (${gate.mergeStateStatus ?? 'unknown'}) with passing checks and no unresolved review threads.`;
 }
 
