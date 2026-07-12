@@ -83,7 +83,7 @@ export class GoalAgentAdapter {
         payload = await this.run(
           attempt === 1 ? req : {
             ...req,
-            prompt: `${req.prompt}\n\nThe previous response failed validation. Return only valid JSON with a repository-specific title and a body of at least 80 characters containing an explicit Acceptance Criteria section.`
+            prompt: `${req.prompt}\n\nThe previous response failed validation:\n${validationFeedback(lastError)}\nReturn only valid JSON with a repository-specific title and a body of at least 80 characters containing an explicit Acceptance Criteria section.`
           },
           planSchema,
           'planner'
@@ -149,9 +149,20 @@ async function readPayload<T>(resultPath: string, schema: z.ZodType<T>): Promise
 }
 
 function parsePayload<T>(raw: string, schema: z.ZodType<T>): T | undefined {
+  let extracted: unknown;
   try {
-    return schema.parse(extractLastJsonObject(raw));
+    extracted = extractLastJsonObject(raw);
   } catch {
     return undefined;
   }
+  return schema.parse(extracted);
+}
+
+function validationFeedback(error: unknown): string {
+  if (!(error instanceof z.ZodError)) return 'No parseable JSON payload was returned.';
+  return JSON.stringify(error.issues.map((issue) => ({
+    path: issue.path.join('.') || '(root)',
+    code: issue.code,
+    message: issue.message
+  })));
 }
