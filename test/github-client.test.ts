@@ -487,6 +487,25 @@ describe('GitHubClient', () => {
     })).resolves.toBeUndefined();
   });
 
+  it('rechecks exact fingerprint markers in the broad open-issue fallback', async () => {
+    const target = {
+      repo: 'kaizen-agents-org/verifier', title: 'Code mode host is unavailable',
+      evidence: 'provider=codex path=/opt/codex-host exit=127', failureClass: 'command_missing'
+    };
+    const existingIssue = {
+      number: 96, title: 'Differently titled provider failure',
+      body: buildDiscoveredIssueFingerprint(target)?.marker,
+      labels: [], createdAt: '2026-07-12T00:00:00Z', comments: [],
+      url: 'https://github.com/kaizen-agents-org/verifier/issues/96'
+    };
+    const runner = vi.fn<CommandRunner>(async (command, args) =>
+      ghResult(command, args, args.includes('--search') ? '[]' : JSON.stringify([existingIssue]))
+    );
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByTitle(target)).resolves.toEqual(existingIssue);
+  });
+
   it('normalizes only CRLF and whitespace when fingerprinting substantive evidence', async () => {
     const markerSearches: string[] = [];
     const runner = vi.fn<CommandRunner>(async (command, args) => {

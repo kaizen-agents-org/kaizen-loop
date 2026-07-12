@@ -197,7 +197,8 @@ export class GitHubClient {
     const args = openIssueListArgs(options.repo, '1000');
     const result = await this.gh(args);
     const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
-    return issues.find((issue) => isEquivalentLegacyEvidence(issue, fingerprint))
+    return (fingerprint && issues.find((issue) => hasDiscoveredIssueFingerprint(issue.body, fingerprint.marker)))
+      ?? issues.find((issue) => isEquivalentLegacyEvidence(issue, fingerprint))
       ?? issues.find((issue) => isEquivalentOpenIssue(issue, options));
   }
 
