@@ -30,6 +30,8 @@ ${goal.iterations.length ? goal.iterations.map((iteration) => formatIteration(it
 # Final response
 Return only this JSON:
 
+The object must have exactly these fields: status (one of "issue", "succeeded", or "blocked"), reason (string), and nextIssue only when status is "issue". nextIssue must have exactly title (string), body (string), and priority (one of "P0", "P1", or "P2"). Do not add repository-name keys or return plans for other repositories.
+
 \`\`\`json
 {
   "status": "issue",
@@ -42,7 +44,7 @@ Return only this JSON:
 }
 \`\`\`
 
-Use status "succeeded" or "blocked" instead of "issue" when appropriate. Omit nextIssue unless status is "issue".`;
+Use status "succeeded" or "blocked" instead of "issue" when appropriate. Set nextIssue to null unless status is "issue".`;
 }
 
 export function buildGoalEvaluatorPrompt(options: {
@@ -90,6 +92,8 @@ ${tail(options.mechanicalEvaluation.output, 200)}
 # Final response
 Return only this JSON:
 
+The object must have exactly status (one of "succeeded", "continue", "blocked", or "failed"), confidence (number from 0 to 1), reason (string), satisfiedCriteria (string array), missingCriteria (string array), and optionally nextIssue. nextIssue, when present, must have exactly title, body, and priority. Do not add repository-name keys.
+
 \`\`\`json
 {
   "status": "continue",
@@ -105,7 +109,7 @@ Return only this JSON:
 }
 \`\`\`
 
-Omit nextIssue unless another iteration is needed.`;
+Set nextIssue to null unless another iteration is needed.`;
 }
 
 function formatIteration(iteration: GoalState['iterations'][number]): string {
