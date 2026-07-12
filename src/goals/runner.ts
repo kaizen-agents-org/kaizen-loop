@@ -322,8 +322,14 @@ async function createGoalIssue(options: {
 }) {
   const github = new GitHubClient(options.runCommand, options.repoDir);
   const marker = `<!-- kaizen-loop:goal ${JSON.stringify({ goalId: options.goal.id, iteration: options.iterationNumber })} -->`;
-  const existing = await github.findOpenIssueByBodyMarker(marker);
-  if (existing) return existing;
+  const existingMatches = await github.findOpenIssuesByBodyMarker(marker);
+  if (existingMatches.length > 0) {
+    const canonical = existingMatches[0];
+    for (const duplicate of existingMatches.slice(1)) {
+      await github.closeIssue(duplicate.number, `Closing duplicate Goal issue; canonical issue is #${canonical.number}.`);
+    }
+    return canonical;
+  }
   await github.createLabels([options.issueLabel]);
   const created = await reportIssue({
     cwd: options.cwd,
