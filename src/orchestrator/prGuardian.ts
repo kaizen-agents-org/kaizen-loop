@@ -211,14 +211,19 @@ export async function runPrGuardianSkill(
       if (attempt > 1) {
         const preflight = await inspectPrGate(runCommand, req);
         if (preflight.isReady) {
-          return {
-            status: 'success',
-            summary: successSummary(preflight),
-            raw: rawOutputs.join('\n'),
-            durationMs: Date.now() - startMs
-          };
+          const stablePreflight = await waitForStablePrGate(runCommand, req, preflight);
+          if (stablePreflight.isReady) {
+            return {
+              status: 'success',
+              summary: successSummary(stablePreflight),
+              raw: rawOutputs.join('\n'),
+              durationMs: Date.now() - startMs
+            };
+          }
+          rawOutputs.push(`PR became not merge-ready after retry preflight settle wait before pass ${attempt}:\n${summarizeGate(stablePreflight)}`);
+        } else {
+          rawOutputs.push(`PR still not merge-ready before guardian pass ${attempt}:\n${summarizeGate(preflight)}`);
         }
-        rawOutputs.push(`PR still not merge-ready before guardian pass ${attempt}:\n${summarizeGate(preflight)}`);
       }
 
       const result = await runCommand(
@@ -481,13 +486,14 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
     inspectPullRequest(runCommand, req),
     listUnresolvedReviewThreads(runCommand, req)
   ]);
+  const terminal = pullRequest.state === 'MERGED';
   const blockers = [
     ...mergeabilityBlockers(pullRequest),
-    ...unresolvedThreads.map((thread) => {
+    ...(terminal ? [] : unresolvedThreads.map((thread) => {
       const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
       const author = thread.author ? ` by ${thread.author}` : '';
       return `unresolved review thread at ${location}${author}`;
-    })
+    }))
   ];
 
   return {

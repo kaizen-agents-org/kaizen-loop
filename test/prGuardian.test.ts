@@ -179,7 +179,7 @@ describe('runPrGuardianSkill', () => {
     expect(result.status).toBe('success');
   });
 
-  it('does not rerun the guardian command when retry preflight finds no unresolved threads', async () => {
+  it('stabilizes a ready retry preflight before returning without another guardian pass', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 3, reviewSettleSeconds: 0 }
@@ -234,7 +234,7 @@ describe('runPrGuardianSkill', () => {
 
     expect(result.status).toBe('success');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
-    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(2);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(4);
   });
 
   it('waits once for late bot review threads before declaring success', async () => {
@@ -337,7 +337,13 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? ghResponse(args, [], { state: 'MERGED', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }) : 'done',
+      stdout: command === 'gh'
+        ? ghResponse(args, [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Already obsolete.' }], {
+          state: 'MERGED',
+          mergeable: 'UNKNOWN',
+          mergeStateStatus: 'UNKNOWN'
+        })
+        : 'done',
       stderr: '',
       durationMs: 1
     }));
