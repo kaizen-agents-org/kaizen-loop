@@ -265,6 +265,8 @@ describe('goal commands', () => {
     expect(result.iterations).toHaveLength(0);
     const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'create');
     expect(issueCreates).toHaveLength(0);
+    expect(runner.mock.calls.filter(([command, , runOptions]) =>
+      command === 'goal-agent' && runOptions?.env?.KAIZEN_GOAL_MODE === 'planner')).toHaveLength(2);
   });
 
   it('rejects placeholder planner output before an issue is created', async () => {

@@ -76,7 +76,24 @@ export class GoalAgentAdapter {
   ) {}
 
   async plan(req: GoalAgentRequest): Promise<GoalPlan> {
-    const payload = await this.run(req, planSchema, 'planner');
+    let payload: GoalPlan | undefined;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        payload = await this.run(
+          attempt === 1 ? req : {
+            ...req,
+            prompt: `${req.prompt}\n\nThe previous response failed validation. Return only valid JSON with a repository-specific title and a body of at least 80 characters containing an explicit Acceptance Criteria section.`
+          },
+          planSchema,
+          'planner'
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!payload) throw lastError;
     if (payload.status === 'issue' && !payload.nextIssue) {
       return { status: 'blocked', reason: 'Goal planner returned status "issue" without nextIssue.' };
     }
