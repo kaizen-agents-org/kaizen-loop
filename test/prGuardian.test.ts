@@ -33,7 +33,7 @@ describe('runPrGuardianSkill', () => {
       baseBranch: 'main'
     });
 
-    const prompt = String(runner.mock.calls[0][1].at(-1));
+    const prompt = String(runner.mock.calls.find(([command]) => command === 'codex')?.[1].at(-1));
 
     expect(prompt).toContain('Always inspect PR review feedback before declaring the PR ready to merge');
     expect(prompt).toContain('Do not require reviewDecision=APPROVED or human approval');
@@ -309,7 +309,7 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: 0,
       stdout: command === 'gh'
-        ? ghResponse(args, [], { headRefOid: ++views === 3 ? 'new-head' : 'old-head' })
+        ? ghResponse(args, [], { headRefOid: ++views === 4 ? 'new-head' : 'old-head' })
         : 'done',
       stderr: '',
       durationMs: 1
@@ -362,6 +362,7 @@ describe('runPrGuardianSkill', () => {
 
     expect(result.status).toBe('success');
     expect(result.summary).toContain('PR is merged');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
   });
 
   it('persists one guardian job per PR head SHA', async () => {

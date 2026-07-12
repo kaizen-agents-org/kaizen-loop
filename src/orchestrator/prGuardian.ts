@@ -207,6 +207,15 @@ export async function runPrGuardianSkill(
   const maxAttempts = req.config.guardian.maxAttempts;
   const rawOutputs: string[] = [];
   try {
+    const initialState = await inspectPullRequest(runCommand, req);
+    if (initialState.state === 'MERGED') {
+      return {
+        status: 'success',
+        summary: successSummary({ ...initialState, isReady: true, blockers: [] }),
+        raw: '',
+        durationMs: Date.now() - startMs
+      };
+    }
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (attempt > 1) {
         const preflight = await inspectPrGate(runCommand, req);
