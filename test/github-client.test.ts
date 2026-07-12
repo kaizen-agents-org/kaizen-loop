@@ -172,11 +172,40 @@ describe('GitHubClient', () => {
         body: 'Closes #1',
         expectedClosingIssueNumber: 1
       });
-    await expect(create).rejects.toThrow('closing issue reference #1 was not recognized by GitHub');
+    await expect(create).rejects.toThrow('closing issue reference #1 was not recognized by GitHub after 5 attempts');
     await expect(create).rejects.toMatchObject({
       pr: { url: 'https://github.com/o/r/pull/7', number: 7 }
     });
     await expect(create).rejects.toBeInstanceOf(CreatedPullRequestValidationError);
+  });
+
+  it('retries a newly created pull request until GitHub recognizes its closing issue', async () => {
+    let linkageReads = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'repo') return ghResult(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      if (args[0] === 'pr' && args[1] === 'view') {
+        linkageReads += 1;
+        return ghResult(command, args, JSON.stringify({
+          number: 7,
+          url: 'https://github.com/o/r/pull/7',
+          baseRefName: 'main',
+          isDraft: false,
+          closingIssuesReferences: linkageReads === 1 ? [] : [{ number: 1 }]
+        }));
+      }
+      return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
+    });
+
+    const pr = await new GitHubClient(runner, '/repo').createPullRequest({
+      base: 'main',
+      head: 'kaizen/issue-1-x',
+      title: 'title',
+      body: 'Closes #1',
+      expectedClosingIssueNumber: 1
+    });
+
+    expect(pr.number).toBe(7);
+    expect(linkageReads).toBe(2);
   });
 
   it('lists open pull requests for backlog limiting', async () => {
