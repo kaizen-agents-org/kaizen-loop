@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -111,6 +112,13 @@ export class GoalAgentAdapter {
       : path.join(req.stateDir, this.options.resultPath);
     await fs.rm(resultPath, { force: true });
     await fs.mkdir(path.dirname(resultPath), { recursive: true });
+    const schemaPath = path.join(req.stateDir, `${mode}-output-schema.json`);
+    const diagnosticPath = path.join(req.stateDir, `${mode}-diagnostic.json`);
+    await fs.rm(diagnosticPath, { force: true });
+    const structuredCodex = path.basename(this.options.command) === 'codex';
+    if (structuredCodex) {
+      await fs.writeFile(schemaPath, JSON.stringify(z.toJSONSchema(schema), null, 2), { mode: 0o600 });
+    }
 
     const env = await envWithKaizenTemp(
       buildAllowlistedEnv(process.env, this.options.envAllowlist, {
@@ -119,7 +127,10 @@ export class GoalAgentAdapter {
       }),
       req.cwd
     );
-    const result = await this.runCommand(this.options.command, this.options.args, {
+    const args = structuredCodex
+      ? withCodexStructuredOutput(this.options.args, schemaPath, resultPath)
+      : this.options.args;
+    const result = await this.runCommand(this.options.command, args, {
       cwd: req.cwd,
       input: req.prompt,
       timeoutMs: this.options.timeoutMinutes * 60_000,
@@ -127,16 +138,42 @@ export class GoalAgentAdapter {
       env
     });
     const raw = `${result.stdout}${result.stderr}`;
-    const payload = (await readPayload(resultPath, schema)) ?? parsePayload(raw, schema);
-    await fs.rm(resultPath, { force: true });
-    if (result.exitCode !== 0 && !payload) {
-      throw new Error(`Goal ${mode} agent exited with code ${result.exitCode}: ${raw}`);
+    try {
+      if (result.exitCode !== 0) {
+        throw new Error(`Goal ${mode} agent exited with code ${result.exitCode}.`);
+      }
+      const payload = (await readPayload(resultPath, schema)) ?? parsePayload(raw, schema);
+      if (!payload) throw new Error(`Goal ${mode} agent did not return a valid JSON payload.`);
+      return payload;
+    } catch (error) {
+      await fs.writeFile(diagnosticPath, JSON.stringify({
+        mode,
+        exitCode: result.exitCode,
+        classification: classifyAgentFailure(error, raw),
+        validation: validationFeedback(error),
+        stdoutBytes: Buffer.byteLength(result.stdout),
+        stderrBytes: Buffer.byteLength(result.stderr),
+        outputHash: createHash('sha256').update(raw).digest('hex')
+      }, null, 2), { mode: 0o600 });
+      throw error;
+    } finally {
+      await Promise.all([fs.rm(resultPath, { force: true }), fs.rm(schemaPath, { force: true })]);
     }
-    if (!payload) {
-      throw new Error(`Goal ${mode} agent did not return a valid JSON payload.`);
-    }
-    return payload;
   }
+}
+
+function classifyAgentFailure(error: unknown, raw: string): string {
+  if (error instanceof z.ZodError) return 'agent_schema_invalid';
+  if (!raw.trim()) return 'agent_no_output';
+  if (String(error).includes('exited with code')) return 'agent_execution_failed';
+  return 'agent_no_json';
+}
+
+function withCodexStructuredOutput(args: string[], schemaPath: string, resultPath: string): string[] {
+  const promptIndex = args.lastIndexOf('-');
+  const options = ['--output-schema', schemaPath, '--output-last-message', resultPath];
+  if (promptIndex < 0) return [...args, ...options];
+  return [...args.slice(0, promptIndex), ...options, ...args.slice(promptIndex)];
 }
 
 async function readPayload<T>(resultPath: string, schema: z.ZodType<T>): Promise<T | undefined> {

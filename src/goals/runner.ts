@@ -321,6 +321,9 @@ async function createGoalIssue(options: {
   runCommand: CommandRunner;
 }) {
   const github = new GitHubClient(options.runCommand, options.repoDir);
+  const marker = `<!-- kaizen-loop:goal ${JSON.stringify({ goalId: options.goal.id, iteration: options.iterationNumber })} -->`;
+  const existing = await github.findOpenIssueByBodyMarker(marker);
+  if (existing) return existing;
   await github.createLabels([options.issueLabel]);
   return reportIssue({
     cwd: options.cwd,
