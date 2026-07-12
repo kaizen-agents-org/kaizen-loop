@@ -91,6 +91,8 @@ interface RunIssueSelection {
   selected: GitHubIssue[];
   skipped: Array<{ number: number; reason: string }>;
   openPullRequests: GitHubPullRequest[];
+  resumableIssueNumbers?: Set<number>;
+  resumeBranches?: Set<string>;
 }
 
 const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
@@ -106,10 +108,11 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   let github = new GitHubClient(runCommand, resolved.project.localPath);
   const stateDir = projectStateDir(resolved.slug);
-  const selectRunIssues = async () => {
+  const configuredMaxIssues = (requestedIssueNumbers?: number[]) =>
+    options.maxIssues ?? scheduledJob?.config.run.maxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
+  const selectRunIssues = async (): Promise<RunIssueSelection> => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
-    const jobMaxIssues = scheduledJob?.config.run.maxIssues;
-    const maxIssues = options.maxIssues ?? jobMaxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
+    const maxIssues = configuredMaxIssues(requestedIssueNumbers);
     const requestedIssues = requestedIssueNumbers
       ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
       : undefined;
@@ -129,7 +132,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const selection = selectIssues({
       issues: selectableIssues,
       config,
-      maxIssues,
+      maxIssues: automatic && !options.dryRun ? Number.MAX_SAFE_INTEGER : maxIssues,
       explicit: requestedIssues !== undefined,
       openPullRequests
     });
@@ -141,6 +144,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const openCheckpoints = openCheckpointStates(selectedResumableStates, openPullRequests);
     const resumableIssueNumbers = new Set(selectedResumableStates.map((state) => state.issue));
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
+    if (automatic && !options.dryRun) {
+      return { ...selection, openPullRequests, resumableIssueNumbers, resumeBranches };
+    }
     const limited = await applyOpenPullRequestLimit({
       config,
       selection,
@@ -255,6 +261,31 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
           github,
           openPullRequests: selection.openPullRequests
         });
+        if (options.scheduled && options.issueNumbers === undefined && options.issue === undefined) {
+          selection = applyImplementationBudget(selection, configuredMaxIssues());
+          selection = {
+            ...selection,
+            ...await applyOpenPullRequestLimit({
+              config,
+              selection,
+              automatic: true,
+              openPullRequests: selection.openPullRequests,
+              resumableIssueNumbers: selection.resumableIssueNumbers,
+              resumeBranches: selection.resumeBranches
+            })
+          };
+          selection = {
+            ...selection,
+            ...await applyGeneratedPullRequestWipLimit({
+              config,
+              selection,
+              automatic: true,
+              repo: resolved.project.repo,
+              github,
+              resumableIssueNumbers: selection.resumableIssueNumbers
+            })
+          };
+        }
         summary.skipped = selection.skipped;
       }
       if (selection.selected.length > 0) {
@@ -390,6 +421,18 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 }
 
+export function applyImplementationBudget(selection: RunIssueSelection, maxIssues: number): RunIssueSelection {
+  if (selection.selected.length <= maxIssues) return selection;
+  return {
+    ...selection,
+    selected: selection.selected.slice(0, maxIssues),
+    skipped: [
+      ...selection.skipped,
+      ...selection.selected.slice(maxIssues).map((issue) => ({ number: issue.number, reason: 'maxIssuesPerNight reached' }))
+    ]
+  };
+}
+
 function assertJobEnabled(config: KaizenConfig, jobName: string | undefined): void {
   if (!jobName) return;
   const configuredJob = config.scheduler.jobs[jobName];
@@ -427,7 +470,7 @@ async function applyIssueIntakeGate(options: {
     skipped.push({ number: issue.number, reason: `intake ${decision.status}: ${decision.reason}` });
   }
 
-  return { selected, skipped, openPullRequests: options.openPullRequests };
+  return { ...options.selection, selected, skipped, openPullRequests: options.openPullRequests };
 }
 
 async function loadLatestConfigFromExistingWorkspace(options: {

@@ -6,11 +6,27 @@ import { parse, stringify } from 'yaml';
 import { defaultConfigYaml as buildDefaultConfigYaml } from '../../src/config/config.js';
 import { saveRegistry } from '../../src/config/registry.js';
 import type { GitHubIssue } from '../../src/github/types.js';
-import { runKaizen } from '../../src/orchestrator/run.js';
+import { applyImplementationBudget, runKaizen } from '../../src/orchestrator/run.js';
 import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
+  it('applies the implementation budget after intake-rejected candidates are removed', () => {
+    const actionable = [issue(3), issue(4), issue(5)];
+    const selection = applyImplementationBudget({
+      selected: actionable,
+      skipped: [
+        { number: 1, reason: 'intake not_improvement: not actionable' },
+        { number: 2, reason: 'intake upstream_first: fix another repo' }
+      ],
+      openPullRequests: []
+    }, 2);
+
+    expect(selection.selected.map(({ number }) => number)).toEqual([3, 4]);
+    expect(selection.skipped).toContainEqual({ number: 5, reason: 'maxIssuesPerNight reached' });
+    expect(selection.skipped.filter(({ reason }) => reason.startsWith('intake'))).toHaveLength(2);
+  });
+
   it('reports configured disabled scheduler jobs separately from unknown jobs', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
