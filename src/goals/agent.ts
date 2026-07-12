@@ -42,7 +42,7 @@ const planSchema = z
   .object({
     status: z.enum(['issue', 'succeeded', 'blocked']),
     reason: z.string().default(''),
-    nextIssue: nextIssueSchema.nullable()
+    nextIssue: nextIssueSchema.nullish()
   })
   .strict();
 
@@ -53,7 +53,7 @@ const evaluationSchema = z
     reason: z.string().default(''),
     satisfiedCriteria: z.array(z.string()).default([]),
     missingCriteria: z.array(z.string()).default([]),
-    nextIssue: nextIssueSchema.nullable()
+    nextIssue: nextIssueSchema.nullish()
   })
   .strict();
 
@@ -118,7 +118,7 @@ export class GoalAgentAdapter {
     await fs.rm(diagnosticPath, { force: true });
     const structuredCodex = path.basename(this.options.command) === 'codex';
     if (structuredCodex) {
-      await fs.writeFile(schemaPath, JSON.stringify(z.toJSONSchema(schema), null, 2), { mode: 0o600 });
+      await fs.writeFile(schemaPath, JSON.stringify(toOpenAIStrictSchema(z.toJSONSchema(schema)), null, 2), { mode: 0o600 });
     }
 
     const env = await envWithKaizenTemp(
@@ -175,6 +175,19 @@ function withCodexStructuredOutput(args: string[], schemaPath: string, resultPat
   const options = ['--output-schema', schemaPath, '--output-last-message', resultPath];
   if (promptIndex < 0) return [...args, ...options];
   return [...args.slice(0, promptIndex), ...options, ...args.slice(promptIndex)];
+}
+
+function toOpenAIStrictSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(toOpenAIStrictSchema);
+  if (!schema || typeof schema !== 'object') return schema;
+  const value = Object.fromEntries(Object.entries(schema).map(([key, item]) => [key, toOpenAIStrictSchema(item)]));
+  if (value.type !== 'object' || !value.properties || typeof value.properties !== 'object') return value;
+  const properties = value.properties as Record<string, unknown>;
+  const required = new Set(Array.isArray(value.required) ? value.required as string[] : []);
+  for (const key of Object.keys(properties)) {
+    if (!required.has(key)) properties[key] = { anyOf: [properties[key], { type: 'null' }] };
+  }
+  return { ...value, properties, required: Object.keys(properties), additionalProperties: false };
 }
 
 async function readPayload<T>(resultPath: string, schema: z.ZodType<T>): Promise<T | undefined> {

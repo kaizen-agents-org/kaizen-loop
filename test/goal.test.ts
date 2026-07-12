@@ -512,8 +512,7 @@ function goalRunner(options: {
           confidence: options.evaluationStatus === 'succeeded' ? 0.9 : 0.4,
           reason: options.evaluationStatus === 'succeeded' ? 'All criteria are satisfied.' : 'More work is needed.',
           satisfiedCriteria: options.evaluationStatus === 'succeeded' ? ['npm test passes'] : [],
-          missingCriteria: options.evaluationStatus === 'succeeded' ? [] : ['coverage >= 80'],
-          nextIssue: null
+          missingCriteria: options.evaluationStatus === 'succeeded' ? [] : ['coverage >= 80']
         });
       }
       return result(command, args, runOptions?.cwd, '');
