@@ -22,26 +22,22 @@ export function extractLastJsonObject(text: string): unknown {
 
 function jsonObjects(text: string): string[] {
   const objects: string[] = [];
-  for (let start = 0; start < text.length; start += 1) {
-    if (text[start] !== '{') continue;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let end = start; end < text.length; end += 1) {
-      const char = text[end];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === '\\') escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') inString = true;
-      else if (char === '{') depth += 1;
-      else if (char === '}' && --depth === 0) {
-        objects.push(text.slice(start, end + 1));
-        start = end;
-        break;
-      }
+  const starts: number[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"' && starts.length > 0) inString = true;
+    else if (char === '{') starts.push(index);
+    else if (char === '}' && starts.length > 0) {
+      const start = starts.pop();
+      if (start !== undefined) objects.push(text.slice(start, index + 1));
     }
   }
   return objects;

@@ -15,4 +15,27 @@ describe('extractLastJsonObject', () => {
       ok: true
     });
   });
+
+  it('handles escaped quotes and backslashes inside strings', () => {
+    expect(extractLastJsonObject('Text {"key":"path\\\\with\\\"quote","ok":true}')).toEqual({
+      key: 'path\\with"quote',
+      ok: true
+    });
+  });
+
+  it('returns the last parseable object', () => {
+    expect(extractLastJsonObject('{"first":1} middle {"second":2}')).toEqual({ second: 2 });
+  });
+
+  it('extracts fenced JSON', () => {
+    expect(extractLastJsonObject('```json\n{"fenced":true}\n```')).toEqual({ fenced: true });
+  });
+
+  it('finds JSON after unmatched opening braces', () => {
+    expect(extractLastJsonObject(`${'{'.repeat(1000)} prose {"ok":true}`)).toEqual({ ok: true });
+  });
+
+  it('throws when no JSON object is parseable', () => {
+    expect(() => extractLastJsonObject('no json here')).toThrow('No parseable JSON object found');
+  });
 });
