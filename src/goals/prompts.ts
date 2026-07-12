@@ -24,6 +24,8 @@ ${goal.iterations.length ? goal.iterations.map((iteration) => formatIteration(it
 3. Use status "succeeded" only when all success criteria are satisfied by the previous iterations.
 4. Use status "blocked" when progress requires human input or unsafe changes.
 5. The generated issue must be scoped to one implementation/test/documentation step.
+6. The title and body must name repository-specific behavior; never copy schema descriptions or example text.
+7. The body must include sections named "Scope" and "Acceptance Criteria" with concrete, verifiable checks.
 
 # Final response
 Return only this JSON:
@@ -33,8 +35,8 @@ Return only this JSON:
   "status": "issue",
   "reason": "Why this is the right next step.",
   "nextIssue": {
-    "title": "Short GitHub issue title",
-    "body": "Issue body with goal context and the exact iteration scope.",
+    "title": "<repository-specific action and behavior>",
+    "body": "## Scope\\n<files or behavior changed and why this advances the goal>\\n\\n## Acceptance Criteria\\n- <observable verification>",
     "priority": "P2"
   }
 }
@@ -83,6 +85,7 @@ ${tail(options.mechanicalEvaluation.output, 200)}
 3. Return "blocked" when human input is required or the max-iteration loop should not continue automatically.
 4. Return "failed" when the latest run failed in a way that should stop the goal.
 5. If status is "continue", you may include nextIssue, but the planner can also derive the next issue from your missing criteria.
+6. When nextIssue is present, its title and body must name repository-specific behavior and its body must include "Scope" and "Acceptance Criteria" sections with verifiable checks.
 
 # Final response
 Return only this JSON:
@@ -95,8 +98,8 @@ Return only this JSON:
   "satisfiedCriteria": ["criterion already satisfied"],
   "missingCriteria": ["criterion still missing"],
   "nextIssue": {
-    "title": "Short GitHub issue title",
-    "body": "Issue body for the next iteration.",
+    "title": "<repository-specific action and behavior>",
+    "body": "## Scope\\n<files or behavior changed and why this advances the goal>\\n\\n## Acceptance Criteria\\n- <observable verification>",
     "priority": "P2"
   }
 }

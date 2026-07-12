@@ -6,13 +6,32 @@ import { extractLastJsonObject } from '../utils/json.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import type { GoalEvaluation, GoalPlan } from './types.js';
 
+const PLACEHOLDER_ISSUE_TEXT = [
+  'short github issue title',
+  'issue body with goal context and the exact iteration scope',
+  'issue body for the next iteration'
+];
+
 const nextIssueSchema = z
   .object({
-    title: z.string().min(1),
-    body: z.string().default(''),
+    title: z.string().trim().min(12),
+    body: z.string().trim().min(80),
     priority: z.enum(['P0', 'P1', 'P2']).default('P2')
   })
-  .strict();
+  .strict()
+  .superRefine((issue, context) => {
+    const normalized = `${issue.title}\n${issue.body}`.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (PLACEHOLDER_ISSUE_TEXT.some((placeholder) => normalized.includes(placeholder))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Goal issue contains placeholder text.' });
+    }
+    if (!/(acceptance criteria|受入条件|受け入れ条件)/i.test(issue.body)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['body'],
+        message: 'Goal issue body must include explicit acceptance criteria.'
+      });
+    }
+  });
 
 const planSchema = z
   .object({

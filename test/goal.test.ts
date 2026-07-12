@@ -267,6 +267,33 @@ describe('goal commands', () => {
     expect(issueCreates).toHaveLength(0);
   });
 
+  it('rejects placeholder planner output before an issue is created', async () => {
+    const { repo } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Improve onboarding',
+      description: 'Make first-run setup reliable.',
+      successCriteria: ['npm test passes'],
+      constraints: []
+    });
+    const runner = goalRunner({ repo, workspace: repo, evaluationStatus: 'succeeded', placeholderPlanner: true });
+
+    const result = await runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.finalReason).toContain('Goal planner failed');
+    expect(result.iterations).toHaveLength(0);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'create')).toHaveLength(0);
+  });
+
   it('rejects running a stopped goal', async () => {
     const { repo } = await setupProject();
     const goal = await createGoal({
@@ -443,6 +470,7 @@ function goalRunner(options: {
   failRunPipeline?: boolean;
   noDiff?: boolean;
   invalidPlanner?: boolean;
+  placeholderPlanner?: boolean;
   invalidEvaluator?: boolean;
   failMechanicalEvaluation?: boolean;
   mechanicalEvaluationOutput?: string;
@@ -455,13 +483,23 @@ function goalRunner(options: {
       expect(runOptions?.env?.TEMP).toBe(expectedTmpDir);
       const mode = runOptions?.env?.KAIZEN_GOAL_MODE;
       if (mode === 'planner') {
-        if (!options.invalidPlanner) {
+        if (options.placeholderPlanner) {
+          await writeJsonResult(runOptions?.env?.KAIZEN_GOAL_RESULT_PATH, {
+            status: 'issue',
+            reason: 'First scoped step',
+            nextIssue: {
+              title: 'Short GitHub issue title',
+              body: 'Issue body with goal context and the exact iteration scope.',
+              priority: 'P2'
+            }
+          });
+        } else if (!options.invalidPlanner) {
           await writeJsonResult(runOptions?.env?.KAIZEN_GOAL_RESULT_PATH, {
             status: 'issue',
             reason: 'First scoped step',
             nextIssue: {
               title: 'Add onboarding smoke test',
-              body: 'Add a small smoke test for first-run setup.',
+              body: '## Scope\nAdd a small smoke test for first-run setup behavior.\n\n## Acceptance Criteria\n- The onboarding smoke test passes.',
               priority: 'P2'
             }
           });
