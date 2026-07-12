@@ -325,7 +325,7 @@ async function createGoalIssue(options: {
   const existing = await github.findOpenIssueByBodyMarker(marker);
   if (existing) return existing;
   await github.createLabels([options.issueLabel]);
-  return reportIssue({
+  const created = await reportIssue({
     cwd: options.cwd,
     project: options.project,
     title: options.issue.title,
@@ -335,6 +335,13 @@ async function createGoalIssue(options: {
     extraLabels: [options.issueLabel],
     runCommand: options.runCommand
   });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const matches = await github.findOpenIssuesByBodyMarker(marker);
+  const canonical = matches[0] ?? created;
+  for (const duplicate of matches.slice(1)) {
+    await github.closeIssue(duplicate.number, `Closing duplicate Goal issue; canonical issue is #${canonical.number}.`);
+  }
+  return canonical;
 }
 
 function goalIssueBody(

@@ -189,13 +189,18 @@ export class GitHubClient {
   }
 
   async findOpenIssueByBodyMarker(marker: string): Promise<GitHubIssue | undefined> {
-    const escapedMarker = marker.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+    return (await this.findOpenIssuesByBodyMarker(marker))[0];
+  }
+
+  async findOpenIssuesByBodyMarker(marker: string): Promise<GitHubIssue[]> {
+    const goalId = marker.match(/"goalId":"([^"]+)"/)?.[1];
+    if (!goalId) throw new Error('Goal issue marker does not contain a searchable goalId.');
     const result = await this.gh([
       'issue', 'list', '--state', 'open', '--json', 'number,title,body,labels,createdAt,comments,url',
-      '--search', `"${escapedMarker}" in:body`, '--limit', '10'
+      '--search', `${goalId} in:body`, '--limit', '100'
     ]);
     const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
-    return issues.find((issue) => issue.body?.includes(marker));
+    return issues.filter((issue) => issue.body?.includes(marker)).sort((left, right) => left.number - right.number);
   }
 
   async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {

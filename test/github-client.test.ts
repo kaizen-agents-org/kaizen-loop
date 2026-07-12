@@ -345,6 +345,23 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[1][1]).toContain('kaizen-agents-org/verifier');
   });
 
+  it('searches goal issue markers with a quote-free goal id token', async () => {
+    const marker = '<!-- kaizen-loop:goal {"goalId":"goal-123","iteration":1} -->';
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: JSON.stringify([{ number: 9, title: 'Goal issue', body: marker, labels: [], createdAt: '', comments: [] }]),
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByBodyMarker(marker)).resolves.toMatchObject({ number: 9 });
+    expect(runner.mock.calls[0][1]).toContain('goal-123 in:body');
+    expect(runner.mock.calls[0][1]).not.toContain(expect.stringContaining('"goalId"'));
+  });
+
   it('preserves a custom base label when optional labels are missing', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       const labelValue = String(args.at(args.indexOf('--label') + 1));
@@ -412,7 +429,7 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[1][1]).not.toContain('--search');
   });
 
-  it('escapes quotes when searching for an issue body marker', async () => {
+  it('uses a quote-free goal id when searching for an issue body marker', async () => {
     const marker = '<!-- kaizen-loop:goal {"goalId":"goal-1","iteration":1} -->';
     const existingIssue = {
       number: 77,
@@ -427,9 +444,7 @@ describe('GitHubClient', () => {
     const client = new GitHubClient(runner, '/repo');
 
     await expect(client.findOpenIssueByBodyMarker(marker)).resolves.toEqual(existingIssue);
-    expect(runner.mock.calls[0][1]).toContain(
-      '"<!-- kaizen-loop:goal {\\"goalId\\":\\"goal-1\\",\\"iteration\\":1} -->" in:body'
-    );
+    expect(runner.mock.calls[0][1]).toContain('goal-1 in:body');
   });
 
   it('returns exact-title matches from targeted search', async () => {
