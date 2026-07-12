@@ -9,7 +9,8 @@ import type { GoalEvaluation, GoalPlan } from './types.js';
 const PLACEHOLDER_ISSUE_TEXT = [
   'short github issue title',
   'issue body with goal context and the exact iteration scope',
-  'issue body for the next iteration'
+  'issue body for the next iteration',
+  'replace this sentence with the actual'
 ];
 
 const nextIssueSchema = z
@@ -83,7 +84,7 @@ export class GoalAgentAdapter {
         payload = await this.run(
           attempt === 1 ? req : {
             ...req,
-            prompt: `${req.prompt}\n\nThe previous response failed validation:\n${validationFeedback(lastError)}\nReturn only valid JSON with a repository-specific title and a body of at least 80 characters containing an explicit Acceptance Criteria section.`
+            prompt: `${req.prompt}\n\nThe previous response failed validation:\n${validationFeedback(lastError)}\nReturn only valid JSON with a repository-specific title and a body of at least 80 characters containing an explicit Acceptance Criteria section. Replace every example and template token with actual content; do not emit angle brackets or text beginning with "Replace this sentence".`
           },
           planSchema,
           'planner'
