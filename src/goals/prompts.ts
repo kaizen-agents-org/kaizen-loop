@@ -35,8 +35,8 @@ Return only this JSON:
   "status": "issue",
   "reason": "Why this is the right next step.",
   "nextIssue": {
-    "title": "<repository-specific action and behavior>",
-    "body": "## Scope\\n<files or behavior changed and why this advances the goal>\\n\\n## Acceptance Criteria\\n- <observable verification>",
+    "title": "Replace this sentence with the actual repository-specific action",
+    "body": "## Scope\\nReplace this sentence with the actual files and behavior to change.\\n\\n## Acceptance Criteria\\n- Replace this sentence with an observable verification.",
     "priority": "P2"
   }
 }
@@ -98,8 +98,8 @@ Return only this JSON:
   "satisfiedCriteria": ["criterion already satisfied"],
   "missingCriteria": ["criterion still missing"],
   "nextIssue": {
-    "title": "<repository-specific action and behavior>",
-    "body": "## Scope\\n<files or behavior changed and why this advances the goal>\\n\\n## Acceptance Criteria\\n- <observable verification>",
+    "title": "Replace this sentence with the actual repository-specific action",
+    "body": "## Scope\\nReplace this sentence with the actual files and behavior to change.\\n\\n## Acceptance Criteria\\n- Replace this sentence with an observable verification.",
     "priority": "P2"
   }
 }
