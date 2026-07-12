@@ -254,9 +254,8 @@ export class GitHubClient {
       const defaultBranch = await this.getRepositoryDefaultBranch();
       if (!defaultBranch) throw new Error('Could not verify created pull request: repository default branch is unknown');
 
-      const linkage = await this.getPullRequestLinkage(prNumber);
-      validateCreatedPullRequest({
-        linkage,
+      const linkage = await this.waitForCreatedPullRequestLinkage({
+        number: prNumber,
         defaultBranch,
         expectedClosingIssueNumber: options.expectedClosingIssueNumber,
         allowDraft: Boolean(options.draft)
@@ -265,6 +264,31 @@ export class GitHubClient {
     } catch (error) {
       throw new CreatedPullRequestValidationError(created, error);
     }
+  }
+
+  private async waitForCreatedPullRequestLinkage(options: {
+    number: number;
+    defaultBranch: string;
+    expectedClosingIssueNumber: number;
+    allowDraft: boolean;
+  }): Promise<GitHubPullRequestLinkage> {
+    const attempts = 5;
+    let linkage = await this.getPullRequestLinkage(options.number);
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      validateCreatedPullRequestStructure(linkage, options.defaultBranch, options.allowDraft);
+      if (linkage.closingIssuesReferences.some((issue) => issue.number === options.expectedClosingIssueNumber)) {
+        return linkage;
+      }
+      if (attempt < attempts) {
+        await sleep(250 * 2 ** (attempt - 1));
+        linkage = await this.getPullRequestLinkage(options.number);
+      }
+    }
+    const observed = linkage.closingIssuesReferences.map((issue) => `#${issue.number}`).join(', ') || 'none';
+    throw new Error(
+      `Created pull request #${linkage.number} is not ready: closing issue reference #${options.expectedClosingIssueNumber} ` +
+        `was not recognized by GitHub after ${attempts} attempts (observed: ${observed})`
+    );
   }
 
   async editPullRequest(number: number, options: { title: string; body: string }): Promise<void> {
@@ -497,22 +521,17 @@ function duplicateTokens(input: string): Set<string> {
   );
 }
 
-function validateCreatedPullRequest(options: {
-  linkage: GitHubPullRequestLinkage;
-  defaultBranch: string;
-  expectedClosingIssueNumber: number;
-  allowDraft?: boolean;
-}): void {
-  const { linkage, defaultBranch, expectedClosingIssueNumber } = options;
+function validateCreatedPullRequestStructure(
+  linkage: GitHubPullRequestLinkage,
+  defaultBranch: string,
+  allowDraft: boolean
+): void {
   const errors: string[] = [];
   if (linkage.baseRefName !== defaultBranch) {
     errors.push(`base branch is ${linkage.baseRefName || '<unknown>'}, expected repository default branch ${defaultBranch}`);
   }
-  if (options.allowDraft && !linkage.isDraft) errors.push('pull request was expected to be a draft');
-  if (linkage.isDraft && !options.allowDraft) errors.push('pull request is a draft');
-  if (!linkage.closingIssuesReferences.some((issue) => issue.number === expectedClosingIssueNumber)) {
-    errors.push(`closing issue reference #${expectedClosingIssueNumber} was not recognized by GitHub`);
-  }
+  if (allowDraft && !linkage.isDraft) errors.push('pull request was expected to be a draft');
+  if (linkage.isDraft && !allowDraft) errors.push('pull request is a draft');
   if (errors.length > 0) {
     throw new Error(`Created pull request #${linkage.number} is not ready: ${errors.join('; ')}`);
   }
