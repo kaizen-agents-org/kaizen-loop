@@ -85,9 +85,10 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   const owner = options.owner ?? await ownerFromCwd(options.cwd, options.runCommand);
   const discovered = await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
   const registry = await loadRegistry();
-  if (options.prune && discovered.length === 0 && Object.keys(registry.projects).length > 0) {
+  const projectCount = Object.keys(registry.projects).length;
+  if (options.prune && discovered.length === 0 && projectCount > 0) {
     throw new KaizenError(
-      `Refusing to prune ${Object.keys(registry.projects).length} registered project(s) because fleet discovery under ${root} found no projects.`
+      `Refusing to prune ${projectCount} registered project(s) because fleet discovery under ${root} found no projects.`
     );
   }
   const projects: FleetProjectResult[] = [];
