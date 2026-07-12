@@ -93,6 +93,7 @@ interface RunIssueSelection {
   openPullRequests: GitHubPullRequest[];
   resumableIssueNumbers?: Set<number>;
   resumeBranches?: Set<string>;
+  resumeBranchByIssue?: Map<number, string>;
 }
 
 const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
@@ -144,8 +145,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const openCheckpoints = openCheckpointStates(selectedResumableStates, openPullRequests);
     const resumableIssueNumbers = new Set(selectedResumableStates.map((state) => state.issue));
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
+    const resumeBranchByIssue = new Map(openCheckpoints.map((state) => [state.issue, state.branch]));
     if (automatic && !options.dryRun) {
-      return { ...selection, openPullRequests, resumableIssueNumbers, resumeBranches };
+      return { ...selection, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
     }
     const limited = await applyOpenPullRequestLimit({
       config,
@@ -263,6 +265,15 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         });
         if (options.scheduled && options.issueNumbers === undefined && options.issue === undefined) {
           selection = applyImplementationBudget(selection, configuredMaxIssues());
+          const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
+          const resumableIssueNumbers = new Set(
+            [...(selection.resumableIssueNumbers ?? [])].filter((issue) => selectedIssueNumbers.has(issue))
+          );
+          const resumeBranches = new Set(
+            [...(selection.resumeBranchByIssue ?? [])]
+              .filter(([issue]) => selectedIssueNumbers.has(issue))
+              .map(([, branch]) => branch)
+          );
           selection = {
             ...selection,
             ...await applyOpenPullRequestLimit({
@@ -270,8 +281,8 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
               selection,
               automatic: true,
               openPullRequests: selection.openPullRequests,
-              resumableIssueNumbers: selection.resumableIssueNumbers,
-              resumeBranches: selection.resumeBranches
+              resumableIssueNumbers,
+              resumeBranches
             })
           };
           selection = {
@@ -282,7 +293,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
               automatic: true,
               repo: resolved.project.repo,
               github,
-              resumableIssueNumbers: selection.resumableIssueNumbers
+              resumableIssueNumbers
             })
           };
         }
