@@ -46,6 +46,8 @@ describe('runPrGuardianSkill', () => {
     expect(prompt).toContain('missing approval or reviewDecision other than APPROVED is not a blocker');
     expect(prompt).toContain('required checks are passing');
     expect(prompt).toContain('unresolved/skipped feedback with reasons');
+    expect(prompt).toContain('If GitHub reports state=MERGED');
+    expect(prompt).toContain('stop all watches immediately and exit successfully');
   });
 
   it('reruns while unresolved review threads remain and fails after the retry budget', async () => {
