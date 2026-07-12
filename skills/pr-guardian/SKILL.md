@@ -13,7 +13,7 @@ Use this workflow by default after opening a pull request in any repository wher
 2. Check the initial PR state:
 
    ```sh
-   gh pr view <pr> --json url,state,isDraft,mergeStateStatus,baseRefName,headRefName,statusCheckRollup,reviewDecision
+   gh pr view <pr> --json url,state,isDraft,mergeable,mergeStateStatus,baseRefName,headRefName,statusCheckRollup,reviewDecision
    gh pr checks <pr>
    ```
 
