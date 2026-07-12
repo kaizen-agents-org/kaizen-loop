@@ -189,9 +189,10 @@ export class GitHubClient {
   }
 
   async findOpenIssueByBodyMarker(marker: string): Promise<GitHubIssue | undefined> {
+    const escapedMarker = marker.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
     const result = await this.gh([
       'issue', 'list', '--state', 'open', '--json', 'number,title,body,labels,createdAt,comments,url',
-      '--search', `"${marker}" in:body`, '--limit', '10'
+      '--search', `"${escapedMarker}" in:body`, '--limit', '10'
     ]);
     const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
     return issues.find((issue) => issue.body?.includes(marker));

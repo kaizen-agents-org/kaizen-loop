@@ -412,6 +412,26 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[1][1]).not.toContain('--search');
   });
 
+  it('escapes quotes when searching for an issue body marker', async () => {
+    const marker = '<!-- kaizen-loop:goal {"goalId":"goal-1","iteration":1} -->';
+    const existingIssue = {
+      number: 77,
+      title: 'follow-up',
+      body: marker,
+      labels: [],
+      createdAt: '2026-06-12T00:00:00Z',
+      comments: [],
+      url: 'https://github.com/o/r/issues/77'
+    };
+    const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, JSON.stringify([existingIssue])));
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByBodyMarker(marker)).resolves.toEqual(existingIssue);
+    expect(runner.mock.calls[0][1]).toContain(
+      '"<!-- kaizen-loop:goal {\\"goalId\\":\\"goal-1\\",\\"iteration\\":1} -->" in:body'
+    );
+  });
+
   it('returns exact-title matches from targeted search', async () => {
     const existingIssue = {
       number: 77,

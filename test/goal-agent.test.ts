@@ -16,6 +16,7 @@ describe('GoalAgentAdapter', () => {
       expect(JSON.parse(await fs.readFile(args[schemaIndex + 1], 'utf8'))).toMatchObject({ type: 'object' });
       const outputSchema = JSON.parse(await fs.readFile(args[schemaIndex + 1], 'utf8')) as { required: string[] };
       expect(outputSchema.required).toContain('nextIssue');
+      expect(JSON.stringify(outputSchema)).not.toContain('"default"');
       await fs.writeFile(args[outputIndex + 1], JSON.stringify({ status: 'blocked', reason: 'No safe work.', nextIssue: null }));
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '', stderr: '', durationMs: 1 };
     });
@@ -43,5 +44,28 @@ describe('GoalAgentAdapter', () => {
     });
 
     await expect(adapter.plan({ cwd: stateDir, stateDir, prompt: 'Plan.' })).rejects.toThrow(/exited with code 1/);
+    const diagnostic = JSON.parse(await fs.readFile(path.join(stateDir, 'planner-diagnostic.json'), 'utf8')) as {
+      classification: string;
+      outputHash: string;
+    };
+    expect(diagnostic.classification).toBe('agent_execution_failed');
+    expect(diagnostic.outputHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('does not treat an unrelated dash argument as the stdin placeholder', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'goal-agent-'));
+    const run = vi.fn<CommandRunner>(async (command, args, options) => {
+      expect(args.slice(0, 3)).toEqual(['exec', '--label', '-']);
+      expect(args[3]).toBe('run');
+      expect(args.slice(4, 6)).toEqual(['--output-schema', expect.any(String)]);
+      const outputIndex = args.indexOf('--output-last-message');
+      await fs.writeFile(args[outputIndex + 1], JSON.stringify({ status: 'blocked', reason: 'No safe work.', nextIssue: null }));
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '', stderr: '', durationMs: 1 };
+    });
+    const adapter = new GoalAgentAdapter(run, {
+      command: 'codex', args: ['exec', '--label', '-', 'run'], resultPath: 'goal-result.json', timeoutMinutes: 1, envAllowlist: []
+    });
+
+    await expect(adapter.plan({ cwd: stateDir, stateDir, prompt: 'Plan.' })).resolves.toMatchObject({ status: 'blocked' });
   });
 });

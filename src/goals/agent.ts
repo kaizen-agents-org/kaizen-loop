@@ -155,23 +155,26 @@ export class GoalAgentAdapter {
         stdoutBytes: Buffer.byteLength(result.stdout),
         stderrBytes: Buffer.byteLength(result.stderr),
         outputHash: createHash('sha256').update(raw).digest('hex')
-      }, null, 2), { mode: 0o600 });
+      }, null, 2), { mode: 0o600 }).catch(() => undefined);
       throw error;
     } finally {
-      await Promise.all([fs.rm(resultPath, { force: true }), fs.rm(schemaPath, { force: true })]);
+      await Promise.all([
+        fs.rm(resultPath, { force: true }).catch(() => undefined),
+        fs.rm(schemaPath, { force: true }).catch(() => undefined)
+      ]);
     }
   }
 }
 
 function classifyAgentFailure(error: unknown, raw: string): string {
   if (error instanceof z.ZodError) return 'agent_schema_invalid';
-  if (!raw.trim()) return 'agent_no_output';
   if (String(error).includes('exited with code')) return 'agent_execution_failed';
+  if (!raw.trim()) return 'agent_no_output';
   return 'agent_no_json';
 }
 
 function withCodexStructuredOutput(args: string[], schemaPath: string, resultPath: string): string[] {
-  const promptIndex = args.lastIndexOf('-');
+  const promptIndex = args.at(-1) === '-' ? args.length - 1 : -1;
   const options = ['--output-schema', schemaPath, '--output-last-message', resultPath];
   if (promptIndex < 0) return [...args, ...options];
   return [...args.slice(0, promptIndex), ...options, ...args.slice(promptIndex)];
@@ -180,7 +183,11 @@ function withCodexStructuredOutput(args: string[], schemaPath: string, resultPat
 function toOpenAIStrictSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(toOpenAIStrictSchema);
   if (!schema || typeof schema !== 'object') return schema;
-  const value = Object.fromEntries(Object.entries(schema).map(([key, item]) => [key, toOpenAIStrictSchema(item)]));
+  const value = Object.fromEntries(
+    Object.entries(schema)
+      .filter(([key]) => key !== 'default')
+      .map(([key, item]) => [key, toOpenAIStrictSchema(item)])
+  );
   if (value.type !== 'object' || !value.properties || typeof value.properties !== 'object') return value;
   const properties = value.properties as Record<string, unknown>;
   const required = new Set(Array.isArray(value.required) ? value.required as string[] : []);
