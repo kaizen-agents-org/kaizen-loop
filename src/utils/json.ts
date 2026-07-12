@@ -7,11 +7,9 @@ export function extractLastJsonObject(text: string): unknown {
     try {
       return JSON.parse(trimmed);
     } catch {
-      const start = trimmed.lastIndexOf('{');
-      const end = trimmed.lastIndexOf('}');
-      if (start >= 0 && end > start) {
+      for (const json of jsonObjects(trimmed).reverse()) {
         try {
-          return JSON.parse(trimmed.slice(start, end + 1));
+          return JSON.parse(json);
         } catch {
           continue;
         }
@@ -20,4 +18,31 @@ export function extractLastJsonObject(text: string): unknown {
   }
 
   throw new Error('No parseable JSON object found');
+}
+
+function jsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== '{') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < text.length; end += 1) {
+      const char = text[end];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === '{') depth += 1;
+      else if (char === '}' && --depth === 0) {
+        objects.push(text.slice(start, end + 1));
+        start = end;
+        break;
+      }
+    }
+  }
+  return objects;
 }
