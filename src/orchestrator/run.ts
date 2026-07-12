@@ -7,6 +7,7 @@ import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
 import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
 import type { KaizenConfig, Registry } from '../config/schema.js';
+import { buildDiscoveredIssueFingerprint, parseFailureClass } from '../discovered-issue-fingerprint.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestDetails, PullRequestResult } from '../github/types.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts, markedPullRequestNumbers } from '../report/comments.js';
@@ -2007,14 +2008,21 @@ async function fileDiscoveredIssues(options: {
       registry
     });
     const repo = routing.repo;
-    const key = `${repo}\n${issue.title.trim().toLowerCase()}`;
+    const fingerprint = buildDiscoveredIssueFingerprint({
+      repo,
+      evidence: issue.evidence,
+      failureClass: parseFailureClass(issue.evidence)
+    });
+    const key = `${repo}\n${fingerprint?.marker ?? issue.title.trim().toLowerCase()}`;
     if (options.filedKeys.has(key)) continue;
 
     try {
       const existing = await options.github.findOpenIssueByTitle({
         repo,
         title: issue.title,
-        body: [issue.body, issue.expected, issue.evidence].filter(Boolean).join('\n\n')
+        body: [issue.body, issue.expected, issue.evidence].filter(Boolean).join('\n\n'),
+        evidence: issue.evidence,
+        failureClass: parseFailureClass(issue.evidence)
       });
       if (existing) {
         filed.push({ title: issue.title, repo, status: 'duplicate', url: existing.url });
@@ -2076,8 +2084,13 @@ function buildDiscoveredIssueBody(options: {
   const body = options.issue.body?.trim() || 'A separate bug was discovered while processing a Kaizen issue.';
   const evidence = options.issue.evidence?.trim() || 'No additional evidence was provided by the builder agent.';
   const expected = options.issue.expected?.trim() || 'The behavior should be investigated and corrected.';
+  const fingerprint = buildDiscoveredIssueFingerprint({
+    repo: options.repo,
+    evidence: options.issue.evidence,
+    failureClass: parseFailureClass(options.issue.evidence)
+  });
 
-  return `## Bug
+  return `${fingerprint ? `${fingerprint.marker}\n\n` : ''}## Bug
 ${body}
 
 ## Evidence

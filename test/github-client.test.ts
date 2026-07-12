@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CreatedPullRequestValidationError, GitHubClient } from '../src/github/client.js';
+import { buildDiscoveredIssueFingerprint } from '../src/discovered-issue-fingerprint.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('GitHubClient', () => {
@@ -427,6 +428,145 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[0][1]).toContain('--search');
     expect(runner.mock.calls[0][1]).toContain('in:title "[monitor] Add GitHub CI checks for PR validation"');
     expect(runner.mock.calls[1][1]).not.toContain('--search');
+  });
+
+  it('looks up a versioned discovered-issue fingerprint before title matching in the target repository', async () => {
+    const fingerprint = buildDiscoveredIssueFingerprint({
+      repo: 'kaizen-agents-org/verifier',
+      evidence: 'provider=codex path=/opt/codex-host exit=127',
+      failureClass: 'command_missing'
+    });
+    const existingIssue = {
+      number: 91,
+      title: 'A differently worded provider outage',
+      body: fingerprint?.marker,
+      labels: [],
+      createdAt: '2026-07-12T00:00:00Z',
+      comments: [],
+      url: 'https://github.com/kaizen-agents-org/verifier/issues/91'
+    };
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      const search = String(args.at(args.indexOf('--search') + 1));
+      return ghResult(command, args, search.includes('kaizen-loop:discovered-issue:v1') ? JSON.stringify([existingIssue]) : '[]');
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByTitle({
+      repo: 'kaizen-agents-org/verifier',
+      title: 'Code mode host is unavailable',
+      evidence: 'provider=codex path=/opt/codex-host exit=127',
+      failureClass: 'command_missing'
+    })).resolves.toEqual(existingIssue);
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner.mock.calls[0][1]).toEqual(expect.arrayContaining([
+      'issue', 'list', '--repo', 'kaizen-agents-org/verifier', '--state', 'open', '--limit', '1000', '--search'
+    ]));
+    expect(String(runner.mock.calls[0][1].at(runner.mock.calls[0][1].indexOf('--search') + 1)))
+      .toContain('kaizen-loop:discovered-issue:v1');
+  });
+
+  it('requires an exact, complete fingerprint marker match', async () => {
+    const fingerprint = buildDiscoveredIssueFingerprint({
+      repo: 'kaizen-agents-org/verifier',
+      evidence: 'provider=codex path=/opt/codex-host exit=127',
+      failureClass: 'command_missing'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args,
+      args.includes('--search') && String(args.at(args.indexOf('--search') + 1)).includes('kaizen-loop:discovered-issue:v1')
+        ? JSON.stringify([{
+            number: 94, title: 'Near collision', body: `${fingerprint?.marker.slice(0, -4)}-extra -->`,
+            labels: [], createdAt: '2026-07-12T00:00:00Z', comments: []
+          }])
+        : '[]'));
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByTitle({
+      repo: 'kaizen-agents-org/verifier', title: 'Host executable missing',
+      evidence: 'provider=codex path=/opt/codex-host exit=127', failureClass: 'command_missing'
+    })).resolves.toBeUndefined();
+  });
+
+  it('normalizes only CRLF and whitespace when fingerprinting substantive evidence', async () => {
+    const markerSearches: string[] = [];
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args.includes('--search')) markerSearches.push(String(args.at(args.indexOf('--search') + 1)));
+      return ghResult(command, args, '[]');
+    });
+    const client = new GitHubClient(runner, '/repo');
+    const base = { repo: 'kaizen-agents-org/verifier', title: 'Provider failed', failureClass: 'timeout' };
+
+    await client.findOpenIssueByTitle({ ...base, evidence: 'request 42\r\n  timed out at https://api.example.test/jobs/42' });
+    await client.findOpenIssueByTitle({ ...base, evidence: ' request 42 timed out at https://api.example.test/jobs/42 ' });
+    await client.findOpenIssueByTitle({ ...base, evidence: 'request 43 timed out at https://api.example.test/jobs/42' });
+
+    expect(markerSearches[0]).toBe(markerSearches[2]);
+    expect(markerSearches[0]).not.toBe(markerSearches[4]);
+  });
+
+  it('scopes discovered-issue fingerprints to the target repository', () => {
+    const finding = { evidence: 'provider=codex path=/opt/codex-host exit=127', failureClass: 'command_missing' };
+
+    const verifier = buildDiscoveredIssueFingerprint({ ...finding, repo: 'kaizen-agents-org/verifier' });
+    const builder = buildDiscoveredIssueFingerprint({ ...finding, repo: 'kaizen-agents-org/builder-agent' });
+
+    expect(verifier?.marker).not.toBe(builder?.marker);
+  });
+
+  it('conservatively reuses a legacy unmarked issue only for substantive evidence and the same present failureClass', async () => {
+    const legacyIssue = {
+      number: 92,
+      title: 'Older wording for the outage',
+      body: '## Evidence\nprovider=codex path=/opt/codex-host exit=127\n\nfailureClass=command_missing',
+      labels: [], createdAt: '2026-07-12T00:00:00Z', comments: [],
+      url: 'https://github.com/kaizen-agents-org/verifier/issues/92'
+    };
+    const runner = vi.fn<CommandRunner>(async (command, args) =>
+      ghResult(command, args, args.includes('--search') ? '[]' : JSON.stringify([legacyIssue]))
+    );
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByTitle({
+      repo: 'kaizen-agents-org/verifier', title: 'Host executable missing',
+      evidence: ' provider=codex\r\npath=/opt/codex-host   exit=127 ', failureClass: 'command_missing'
+    })).resolves.toEqual(legacyIssue);
+  });
+
+  it.each([
+    ['candidate class absent', undefined, 'failureClass=command_missing', 'provider=codex path=/opt/codex-host exit=127'],
+    ['legacy class absent', 'command_missing', '', 'provider=codex path=/opt/codex-host exit=127'],
+    ['different class', 'timeout', 'failureClass=command_missing', 'provider=codex path=/opt/codex-host exit=127'],
+    ['different material evidence', 'command_missing', 'failureClass=command_missing', 'provider=codex path=/usr/bin/other-host exit=126'],
+    ['generic evidence', 'command_missing', 'failureClass=command_missing', 'error']
+  ])('does not evidence-deduplicate when %s', async (_case, failureClass, legacyClass, evidence) => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, args.includes('--search')
+      ? '[]'
+      : JSON.stringify([{
+          number: 93, title: 'Unrelated wording',
+          body: `## Evidence\nprovider=codex path=/opt/codex-host exit=127\n\n${legacyClass}`,
+          labels: [], createdAt: '2026-07-12T00:00:00Z', comments: []
+        }])));
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByTitle({
+      repo: 'kaizen-agents-org/verifier', title: 'Host executable missing', evidence, failureClass
+    })).resolves.toBeUndefined();
+  });
+
+  it('does not read failure metadata from a section after Evidence', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, args.includes('--search')
+      ? '[]'
+      : JSON.stringify([{
+          number: 95, title: 'Unrelated wording',
+          body: '## Evidence\nprovider=codex path=/opt/codex-host exit=127\n\n## Expected\nfailureClass=command_missing',
+          labels: [], createdAt: '2026-07-12T00:00:00Z', comments: []
+        }])));
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.findOpenIssueByTitle({
+      repo: 'kaizen-agents-org/verifier', title: 'Host executable missing',
+      evidence: 'provider=codex path=/opt/codex-host exit=127', failureClass: 'command_missing'
+    })).resolves.toBeUndefined();
   });
 
   it('uses a quote-free goal id when searching for an issue body marker', async () => {

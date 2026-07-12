@@ -1780,7 +1780,7 @@ describe('runKaizen PR flow', () => {
               repo: 'verifier',
               body: 'Verifier rejected a clean run from summary text.',
               expected: 'Only real failures should block PR creation.',
-              evidence: 'verifier.log',
+              evidence: 'failureClass=false_positive verifier.log rejected exit=0 status=approved',
               severity: 'P2'
             },
             {
@@ -1845,6 +1845,7 @@ describe('runKaizen PR flow', () => {
     expect(issueCreateArgs).toContain('--label');
     expect(issueCreateArgs).toContain('kaizen,kaizen:P2');
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('Source issue');
+    expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('<!-- kaizen-loop:discovered-issue:v1');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Kaizen discovered follow-up issue'))).toBe(true);
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Existing in `kaizen-agents-org/verifier`'))).toBe(true);

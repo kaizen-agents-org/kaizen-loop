@@ -1,5 +1,12 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { githubCliEnv, type CommandRunner } from '../utils/command.js';
+import {
+  buildDiscoveredIssueFingerprint,
+  extractEvidence,
+  hasDiscoveredIssueFingerprint,
+  hasDiscoveredIssueMarker,
+  parseFailureClass
+} from '../discovered-issue-fingerprint.js';
 import type {
   GitHubIssue,
   GitHubPullRequest,
@@ -153,7 +160,22 @@ export class GitHubClient {
     await this.gh(['issue', 'comment', String(issue), '--body', body]);
   }
 
-  async findOpenIssueByTitle(options: { repo?: string; title: string; body?: string }): Promise<GitHubIssue | undefined> {
+  async findOpenIssueByTitle(options: {
+    repo?: string;
+    title: string;
+    body?: string;
+    evidence?: string;
+    failureClass?: string;
+  }): Promise<GitHubIssue | undefined> {
+    const fingerprint = buildDiscoveredIssueFingerprint(options);
+    if (fingerprint) {
+      const markerArgs = openIssueListArgs(options.repo, '1000', fingerprint.searchTerm);
+      const markerResult = await this.gh(markerArgs);
+      const markerIssues = JSON.parse(markerResult.stdout || '[]') as GitHubIssue[];
+      const markerMatch = markerIssues.find((issue) => hasDiscoveredIssueFingerprint(issue.body, fingerprint.marker));
+      if (markerMatch) return markerMatch;
+    }
+
     const exactArgs = [
       'issue',
       'list',
@@ -164,7 +186,7 @@ export class GitHubClient {
       '--search',
       exactTitleSearch(options.title),
       '--limit',
-      '100'
+      '1000'
     ];
     if (options.repo) exactArgs.push('--repo', options.repo);
     const exactResult = await this.gh(exactArgs);
@@ -172,20 +194,11 @@ export class GitHubClient {
     const exactMatch = exactIssues.find((issue) => normalizedTitle(issue.title) === normalizedTitle(options.title));
     if (exactMatch) return exactMatch;
 
-    const args = [
-      'issue',
-      'list',
-      '--state',
-      'open',
-      '--json',
-      'number,title,body,labels,createdAt,comments,url',
-      '--limit',
-      '100'
-    ];
-    if (options.repo) args.push('--repo', options.repo);
+    const args = openIssueListArgs(options.repo, '1000');
     const result = await this.gh(args);
     const issues = JSON.parse(result.stdout || '[]') as GitHubIssue[];
-    return issues.find((issue) => isEquivalentOpenIssue(issue, options));
+    return issues.find((issue) => isEquivalentLegacyEvidence(issue, fingerprint))
+      ?? issues.find((issue) => isEquivalentOpenIssue(issue, options));
   }
 
   async findOpenIssueByBodyMarker(marker: string): Promise<GitHubIssue | undefined> {
@@ -465,6 +478,34 @@ function normalizedTitle(title: string): string {
 
 function exactTitleSearch(title: string): string {
   return `in:title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function openIssueListArgs(repo: string | undefined, limit: string, search?: string): string[] {
+  const args = [
+    'issue', 'list',
+    '--state', 'open',
+    '--json', 'number,title,body,labels,createdAt,comments,url',
+    '--limit', limit
+  ];
+  if (repo) args.push('--repo', repo);
+  if (search) args.push('--search', search);
+  return args;
+}
+
+function isEquivalentLegacyEvidence(
+  issue: GitHubIssue,
+  target: ReturnType<typeof buildDiscoveredIssueFingerprint>
+): boolean {
+  if (!target?.failureClass || hasDiscoveredIssueMarker(issue.body)) return false;
+  const evidence = extractEvidence(issue.body);
+  const candidateFailureClass = parseFailureClass(evidence ?? issue.body);
+  if (!candidateFailureClass || candidateFailureClass !== target.failureClass) return false;
+  const candidate = buildDiscoveredIssueFingerprint({
+    repo: 'legacy-comparison',
+    evidence,
+    failureClass: candidateFailureClass
+  });
+  return candidate?.normalizedEvidence === target.normalizedEvidence;
 }
 
 function isEquivalentOpenIssue(issue: GitHubIssue, target: { title: string; body?: string }): boolean {
