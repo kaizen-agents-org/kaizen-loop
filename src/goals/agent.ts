@@ -42,7 +42,7 @@ const planSchema = z
   .object({
     status: z.enum(['issue', 'succeeded', 'blocked']),
     reason: z.string().default(''),
-    nextIssue: nextIssueSchema.optional()
+    nextIssue: nextIssueSchema.nullable()
   })
   .strict();
 
@@ -53,7 +53,7 @@ const evaluationSchema = z
     reason: z.string().default(''),
     satisfiedCriteria: z.array(z.string()).default([]),
     missingCriteria: z.array(z.string()).default([]),
-    nextIssue: nextIssueSchema.optional()
+    nextIssue: nextIssueSchema.nullable()
   })
   .strict();
 
@@ -78,7 +78,7 @@ export class GoalAgentAdapter {
   ) {}
 
   async plan(req: GoalAgentRequest): Promise<GoalPlan> {
-    let payload: GoalPlan | undefined;
+    let payload: z.infer<typeof planSchema> | undefined;
     let lastError: unknown;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
@@ -99,11 +99,12 @@ export class GoalAgentAdapter {
     if (payload.status === 'issue' && !payload.nextIssue) {
       return { status: 'blocked', reason: 'Goal planner returned status "issue" without nextIssue.' };
     }
-    return payload;
+    return { ...payload, nextIssue: payload.nextIssue ?? undefined };
   }
 
   async evaluate(req: GoalAgentRequest): Promise<GoalEvaluation> {
-    return this.run(req, evaluationSchema, 'evaluator');
+    const payload = await this.run(req, evaluationSchema, 'evaluator');
+    return { ...payload, nextIssue: payload.nextIssue ?? undefined };
   }
 
   private async run<T>(req: GoalAgentRequest, schema: z.ZodType<T>, mode: 'planner' | 'evaluator'): Promise<T> {

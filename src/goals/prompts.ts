@@ -44,7 +44,7 @@ The object must have exactly these fields: status (one of "issue", "succeeded", 
 }
 \`\`\`
 
-Use status "succeeded" or "blocked" instead of "issue" when appropriate. Omit nextIssue unless status is "issue".`;
+Use status "succeeded" or "blocked" instead of "issue" when appropriate. Set nextIssue to null unless status is "issue".`;
 }
 
 export function buildGoalEvaluatorPrompt(options: {
@@ -109,7 +109,7 @@ The object must have exactly status (one of "succeeded", "continue", "blocked", 
 }
 \`\`\`
 
-Omit nextIssue unless another iteration is needed.`;
+Set nextIssue to null unless another iteration is needed.`;
 }
 
 function formatIteration(iteration: GoalState['iterations'][number]): string {
