@@ -84,6 +84,47 @@ describe('migrateLegacySchedulerConfig', () => {
 });
 
 describe('syncFleet', () => {
+  it('preserves a non-empty registry when prune discovery is empty', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('HOME', home);
+    const registryPath = path.join(home, 'registry.json');
+    const registry = {
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: '/tmp/r',
+          workspacePath: '/tmp/r-workspace',
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    };
+    await fs.writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    const before = await fs.readFile(registryPath, 'utf8');
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(syncFleet({
+      cwd: root,
+      root,
+      owner: 'o',
+      migrateConfig: true,
+      ensureWorkspace: true,
+      ensureLabels: true,
+      syncScheduler: true,
+      repairLocks: true,
+      verify: false,
+      prune: true,
+      dryRun: false,
+      runCommand: runner
+    })).rejects.toThrow('Refusing to prune 1 registered project(s) because fleet discovery');
+
+    await expect(fs.readFile(registryPath, 'utf8')).resolves.toBe(before);
+  });
+
   it('rebuilds registry entries from repo checkouts and migrates legacy configs', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));

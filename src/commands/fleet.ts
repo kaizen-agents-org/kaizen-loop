@@ -9,6 +9,7 @@ import { GitHubClient } from '../github/client.js';
 import { RunLock } from '../orchestrator/lock.js';
 import { enableScheduler } from '../scheduler/scheduler.js';
 import type { CommandRunner } from '../utils/command.js';
+import { KaizenError } from '../utils/errors.js';
 import { projectStateDir, workspaceDir } from '../utils/paths.js';
 import { assertProjectSlug, repoFromRemote, slugFromRepo } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
@@ -84,6 +85,11 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   const owner = options.owner ?? await ownerFromCwd(options.cwd, options.runCommand);
   const discovered = await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
   const registry = await loadRegistry();
+  if (options.prune && discovered.length === 0 && Object.keys(registry.projects).length > 0) {
+    throw new KaizenError(
+      `Refusing to prune ${Object.keys(registry.projects).length} registered project(s) because fleet discovery under ${root} found no projects.`
+    );
+  }
   const projects: FleetProjectResult[] = [];
   const seen = new Set<string>();
 
