@@ -250,7 +250,7 @@ describe('GitHubClient', () => {
         '--state',
         'open',
         '--json',
-        'number,headRefName,headRepositoryOwner,createdAt,url,isDraft',
+        'number,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
         '--limit',
         '3'
       ]);

@@ -2,6 +2,7 @@ import { loadConfig } from '../config/config.js';
 import { resolveProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
 import {
+  enqueueManagedPrGuardianJobs,
   enqueuePrGuardianJob,
   findPrGuardianJob,
   listPrGuardianJobs,
@@ -52,7 +53,8 @@ export async function runGuardianForPullRequest(options: {
     config,
     workspaceDir: resolved.project.workspacePath,
     runCommand: options.runCommand,
-    job
+    job,
+    isolateWorktree: true
   });
 }
 
@@ -64,12 +66,21 @@ export async function watchGuardianJobs(options: {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
   if (!config.guardian.enabled) throw new KaizenError('PR guardian is disabled for this project.', 2);
+  const stateDir = projectStateDir(resolved.slug);
+  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+  await enqueueManagedPrGuardianJobs({
+    stateDir,
+    config,
+    repo: resolved.project.repo,
+    pullRequests: await github.listOpenPullRequests()
+  });
   return {
     jobs: await runPendingPrGuardianJobs({
-      stateDir: projectStateDir(resolved.slug),
+      stateDir,
       config,
       workspaceDir: resolved.project.workspacePath,
-      runCommand: options.runCommand
+      runCommand: options.runCommand,
+      isolateWorktree: true
     })
   };
 }

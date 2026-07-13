@@ -26,6 +26,9 @@ export interface PullRequestResult {
 export interface GitHubPullRequest {
   number: number;
   isDraft?: boolean;
+  body?: string;
+  baseRefName?: string;
+  headRefOid?: string;
   headRefName?: string;
   headRepositoryOwner?: { login?: string };
   author?: { login?: string; type?: string; is_bot?: boolean };
