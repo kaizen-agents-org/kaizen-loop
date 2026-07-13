@@ -1,4 +1,4 @@
-import type { CommandRunner } from '../utils/command.js';
+import { gitCliEnv, type CommandRunner } from '../utils/command.js';
 
 export class GitClient {
   constructor(
@@ -27,7 +27,7 @@ export class GitClient {
   }
 
   async clone(remote: string, target: string): Promise<void> {
-    await this.run('git', ['clone', remote, target], { cwd: this.cwd });
+    await this.git(['clone', remote, target]);
   }
 
   async fetch(): Promise<void> {
@@ -175,7 +175,11 @@ export class GitClient {
   }
 
   private git(args: string[], options?: { rejectOnNonZero?: boolean }) {
-    return this.run('git', args, { cwd: this.cwd, rejectOnNonZero: options?.rejectOnNonZero });
+    return this.run('git', args, {
+      cwd: this.cwd,
+      env: gitCliEnv(),
+      rejectOnNonZero: options?.rejectOnNonZero
+    });
   }
 }
 

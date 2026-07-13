@@ -4,6 +4,64 @@ import { buildDiscoveredIssueFingerprint } from '../src/discovered-issue-fingerp
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('GitHubClient', () => {
+  it('accepts an active authorization label applied by a triage maintainer', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue') {
+        return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen', 'Kaizen:Authorized'])));
+      }
+      if (args.at(-1)?.endsWith('/events')) {
+        return ghResult(command, args, JSON.stringify([
+          [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' } }]
+        ]));
+      }
+      return ghResult(command, args, JSON.stringify({ role_name: 'triage' }));
+    });
+
+    const decision = await new GitHubClient(runner, '/repo').checkExecutionAuthorization({
+      repo: 'o/r', issue: 1, label: 'kaizen:authorized', minimumPermission: 'triage'
+    });
+
+    expect(decision).toMatchObject({ authorized: true, actor: 'maintainer', permission: 'triage' });
+    expect(runner.mock.calls[1][1]).toEqual([
+      'api', '--paginate', '--slurp', 'repos/o/r/issues/1/events'
+    ]);
+  });
+
+  it('fails closed when the latest authorization transition is removal', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue') return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));
+      return ghResult(command, args, JSON.stringify([
+        [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' } }],
+        [{ event: 'unlabeled', label: { name: 'KAIZEN:AUTHORIZED' }, actor: { login: 'maintainer' } }]
+      ]));
+    });
+
+    const decision = await new GitHubClient(runner, '/repo').checkExecutionAuthorization({
+      repo: 'o/r', issue: 1, label: 'kaizen:authorized', minimumPermission: 'triage'
+    });
+
+    expect(decision).toEqual({ authorized: false, reason: 'qualifying authorization label event not found: kaizen:authorized' });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an authorization label applied by a read-only actor', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue') return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));
+      if (args.at(-1)?.endsWith('/events')) {
+        return ghResult(command, args, JSON.stringify([
+          [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'reader' } }]
+        ]));
+      }
+      return ghResult(command, args, JSON.stringify({ permission: 'read' }));
+    });
+
+    const decision = await new GitHubClient(runner, '/repo').checkExecutionAuthorization({
+      repo: 'o/r', issue: 1, label: 'kaizen:authorized', minimumPermission: 'triage'
+    });
+
+    expect(decision).toMatchObject({ authorized: false, actor: 'reader', permission: 'read' });
+  });
+
   it('creates a pull request without draft mode', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'repo') {
@@ -738,5 +796,16 @@ function ghResult(command: string, args: string[], stdout: string) {
     stdout,
     stderr: '',
     durationMs: 1
+  };
+}
+
+function issueWithLabels(labels: string[]) {
+  return {
+    number: 1,
+    title: 'issue',
+    body: '',
+    labels: labels.map((name) => ({ name })),
+    createdAt: '2026-07-01T00:00:00Z',
+    comments: []
   };
 }

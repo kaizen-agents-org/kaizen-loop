@@ -22,6 +22,7 @@ export const KAIZEN_LABELS = [
   'kaizen:P1',
   'kaizen:P2',
   'kaizen:ready',
+  'kaizen:authorized',
   'kaizen:direct',
   'kaizen:pr-only',
   'kaizen:in-progress',
@@ -30,6 +31,15 @@ export const KAIZEN_LABELS = [
   'kaizen:agent:claude',
   'kaizen:agent:codex'
 ];
+
+export type RepositoryPermission = 'none' | 'read' | 'triage' | 'write' | 'maintain' | 'admin';
+
+export interface ExecutionAuthorization {
+  authorized: boolean;
+  actor?: string;
+  permission?: RepositoryPermission;
+  reason: string;
+}
 
 export class GitHubClient {
   constructor(
@@ -75,6 +85,59 @@ export class GitHubClient {
       'number,title,body,labels,createdAt,comments,url'
     ]);
     return JSON.parse(result.stdout) as GitHubIssue;
+  }
+
+  async checkExecutionAuthorization(options: {
+    repo: string;
+    issue: number;
+    label: string;
+    minimumPermission: Exclude<RepositoryPermission, 'none' | 'read'>;
+  }): Promise<ExecutionAuthorization> {
+    const currentIssue = await this.getIssue(options.issue);
+    const normalizedLabel = options.label.toLowerCase();
+    if (!currentIssue.labels.some((label) => label.name.toLowerCase() === normalizedLabel)) {
+      return { authorized: false, reason: `execution authorization label is not active: ${options.label}` };
+    }
+
+    const eventsResult = await this.gh([
+      'api',
+      '--paginate',
+      '--slurp',
+      `repos/${options.repo}/issues/${options.issue}/events`
+    ]);
+    const pages = JSON.parse(eventsResult.stdout || '[]') as Array<Array<{
+      event?: string;
+      actor?: { login?: string };
+      label?: { name?: string };
+    }>>;
+    const transition = pages
+      .flat()
+      .filter((item) =>
+        (item.event === 'labeled' || item.event === 'unlabeled')
+        && item.label?.name?.toLowerCase() === normalizedLabel
+      )
+      .at(-1);
+    const actor = transition?.actor?.login;
+    if (transition?.event !== 'labeled' || !actor) {
+      return { authorized: false, reason: `qualifying authorization label event not found: ${options.label}` };
+    }
+
+    const permissionResult = await this.gh(['api', `repos/${options.repo}/collaborators/${actor}/permission`]);
+    const payload = JSON.parse(permissionResult.stdout || '{}') as {
+      permission?: string;
+      role_name?: string;
+      user?: { permissions?: Record<string, boolean> };
+    };
+    const permission = repositoryPermission(payload);
+    const authorized = permissionRank(permission) >= permissionRank(options.minimumPermission);
+    return {
+      authorized,
+      actor,
+      permission,
+      reason: authorized
+        ? `authorized by ${actor} (${permission})`
+        : `authorization label was applied by ${actor} with insufficient permission: ${permission}`
+    };
   }
 
   async listOpenPullRequests(limit = 100): Promise<GitHubPullRequest[]> {
@@ -611,6 +674,7 @@ function descriptionForLabel(label: string): string {
     'kaizen:P1': 'Kaizen priority P1',
     'kaizen:P2': 'Kaizen priority P2',
     'kaizen:ready': 'Approved for Kaizen Loop execution',
+    'kaizen:authorized': 'Execution authorized by a repository maintainer',
     'kaizen:direct': 'Allow direct commit when policy permits',
     'kaizen:pr-only': 'Force pull request reflection',
     'kaizen:in-progress': 'Currently being processed by Kaizen Loop',
@@ -620,4 +684,24 @@ function descriptionForLabel(label: string): string {
     'kaizen:agent:codex': 'Prefer Codex through builder-agent for this issue'
   };
   return descriptions[label] ?? 'Kaizen Loop label';
+}
+
+function repositoryPermission(payload: {
+  permission?: string;
+  role_name?: string;
+  user?: { permissions?: Record<string, boolean> };
+}): RepositoryPermission {
+  const permissions = payload.user?.permissions;
+  if (permissions?.admin) return 'admin';
+  if (permissions?.maintain) return 'maintain';
+  if (permissions?.push) return 'write';
+  if (permissions?.triage) return 'triage';
+  const role = payload.role_name ?? payload.permission;
+  return role === 'read' || role === 'triage' || role === 'write' || role === 'maintain' || role === 'admin'
+    ? role
+    : 'none';
+}
+
+function permissionRank(permission: RepositoryPermission): number {
+  return ['none', 'read', 'triage', 'write', 'maintain', 'admin'].indexOf(permission);
 }

@@ -16,6 +16,7 @@
 | 時間 | Issue 単位・実行全体のタイムアウト、プロセスツリー kill | ハング・長時間占有、子プロセス残留 |
 | 容量 | `safety.minFreeDiskMb` の preflight | clone / worktree / install 中のディスク逼迫 |
 | 環境 | `safety.envAllowlist` | agent / shell command への不要な環境変数露出 |
+| 実行認可 | external mode の authorization label + 付与者権限検証 | 第三者がラベルだけを模倣して無人実行を開始すること |
 | 排他 | `run.lock`(PID 検証つき) | 多重実行による競合 |
 | 停止 | `kaizen scheduler disable` / `PAUSE` ファイル / ラベル操作 | 異常時に止められない事態 |
 
@@ -71,6 +72,7 @@
 - Kaizen Loop はトークン・API キーを保存しない。GitHub 認証は `gh`、AI 実行は `builder-agent` / `verifier` に委譲
 - エージェントプロセスと setup / verify shell command へ渡す環境変数は `safety.envAllowlist` に限定する(→ [06-agents.md](./06-agents.md) §2.3)。ターゲットプロジェクトの `.env` は渡さない
 - `**/.env*` はデフォルトで `protectedPaths`。ログへの秘密情報混入を避けるため、エージェントログは GitHub へは「要約 + 末尾抜粋」のみ投稿し、全量はローカルにのみ保存
+- `GH_CONFIG_DIR` は GitHub CLI、`SSH_AUTH_SOCK` / `GIT_SSH_COMMAND` は Git CLI にだけ渡し、builder / verifier / setup / verify の一般環境には渡さない
 
 ## 6. スリープ復帰時の遅延実行ガード
 

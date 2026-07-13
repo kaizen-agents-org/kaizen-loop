@@ -37,6 +37,8 @@ run:
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
 safety:
+  # external は execution authorization と verifier を必須化。自組織運用のみ dogfood を明示できる
+  operationMode: external      # external | dogfood
   # workspace / worktree 作成前に必要な空き容量(MB)
   minFreeDiskMb: 1024
   # owner 全体の open 生成 PR がこの数に達したら自動 intake を止める
@@ -58,9 +60,6 @@ safety:
     - TEMP
     - KAIZEN_TMPDIR
     - KAIZEN_HOME
-    - GH_CONFIG_DIR
-    - SSH_AUTH_SOCK
-    - GIT_SSH_COMMAND
 
 scheduler:
   jobs:
@@ -151,14 +150,27 @@ policy:
   # 触れてよいが、触れたら必ず PR にするパス(glob)
   protectedPaths:
     - ".github/**"
+    - ".gitlab-ci.yml"
+    - ".circleci/**"
+    - "azure-pipelines.yml"
+    - "Jenkinsfile"
     - "**/.env*"
     - "**/secrets/**"
     - "**/*migration*/**"
+    - "**/*release*/**"
+    - "**/*publish*/**"
+    - ".npmrc"
+    - ".pypirc"
     - "Dockerfile"
     - ".kaizen/**"           # ループ自身の設定改変は必ず人間レビュー
   # エージェントがいかなる場合も変更してはならないパス(検出したら当該 Issue を失敗扱い)
   forbiddenPaths:
     - "**/.git/**"
+    - "**/.ssh/**"
+    - "**/.gnupg/**"
+    - "**/*credential*/**"
+    - "**/*.pem"
+    - "**/*.key"
 
 git:
   defaultBranch: main
@@ -177,6 +189,9 @@ report:
 
 issues:
   label: "kaizen"            # Kaizen 管理対象を示す base ラベル
+  executionAuthorization:
+    label: "kaizen:authorized"
+    minimumPermission: triage # triage | write | maintain | admin
   selection:
     mode: auto               # auto | opt-in | manual-only
     includeLabel: "kaizen:ready"
@@ -195,6 +210,7 @@ issues:
 - `safety.minFreeDiskMb` は workspace / worktree 作成前の空き容量 preflight。対象パスがまだ存在しない場合は既存の親ディレクトリを検査する
 - `safety.wipLimit` は owner 全体の open 生成 PR 数に対する自動 intake の WIP 上限。bot が作成した open PR が上限以上なら新しい Issue は選択せず、run summary に skip reason を残す。`kaizen status --metrics` は repository / organization の現在値、上限到達有無、最古の生成 PR の滞留日数を表示する
 - `safety.envAllowlist` は agent と shell command へ渡す環境変数名の allowlist。`KAIZEN_BUILD_RESULT_PATH` などの Kaizen 専用変数と短い Kaizen `TMPDIR` / `TMP` / `TEMP` は実行時に追加される。`KAIZEN_TMPDIR` を渡すと短い temp root を明示的に上書きでき、その配下に Kaizen 専用 child directory が作られる
+- `safety.operationMode: external` は生成時の既定。`issues.executionAuthorization.label` の最新の付与者が `minimumPermission` 以上であることを GitHub の event/permission API で検証し、検証不能時も fail-closed でスキップする。`verifier.enabled: false` は設定エラーになる。`dogfood` は信頼済みの自組織運用でのみ明示し、authorization API gate を省略する
 - `policy.mode` の既定は `pr-only`。直接コミットを許可するには `hybrid` または `direct-only` を明示する
 - `policy.mode: direct-only` は「可能なら PR ではなく直接コミットする」指定であり、安全ゲート違反時は PR または失敗に降格する
 - `run.maxOpenPullRequests` は scheduler job などの自動実行にだけ適用する repo 別 backpressure。未レビュー PR が溜まりすぎて競合やレビュー滞留を増やすのを避けるため、open PR 数が上限以上なら新しい Issue は選択せず、`kaizen fix` / `--issue` の明示実行は止めない。固定ブランチを再利用する sync PR (`codex/daily-dogfood-sync`、`codex/sync-kaizen-dogfood`、`codex/sync-kaizen-shared-skills`) はこのカウントから除外する

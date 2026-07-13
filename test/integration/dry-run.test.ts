@@ -11,6 +11,52 @@ import { loadImplementationState, saveImplementationState } from '../../src/orch
 import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
+  it('skips issues without execution authorization in the external default mode', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1)]));
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const selection = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in selection && selection.selected).toEqual([]);
+    expect('selected' in selection && selection.skipped).toEqual([
+      { number: 1, reason: 'missing execution authorization label: kaizen:authorized' }
+    ]);
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
   it('applies the implementation budget after intake-rejected candidates are removed', () => {
     const actionable = [issue(3), issue(4), issue(5)];
     const selection = applyImplementationBudget({
@@ -3080,7 +3126,7 @@ function defaultConfigWith(
 
 function defaultConfigYaml(options: { agent: 'claude' | 'codex'; setup: string | null; verify: string[] }): string {
   const config = parse(buildDefaultConfigYaml(options)) as Record<string, unknown>;
-  mergeConfig(config, { guardian: { reviewSettleSeconds: 0 } });
+  mergeConfig(config, { safety: { operationMode: 'dogfood' }, guardian: { reviewSettleSeconds: 0 } });
   return stringify(config);
 }
 

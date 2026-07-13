@@ -243,6 +243,7 @@ async function setupProject(options: { verify?: string[]; guardianEnabled?: bool
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
   let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: options.verify ?? [] });
+  config = config.replace('operationMode: external', 'operationMode: dogfood');
   if (options.guardianEnabled === false) {
     config = config.replace('guardian:\n  enabled: true', 'guardian:\n  enabled: false');
   }
