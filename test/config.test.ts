@@ -78,6 +78,35 @@ describe('configSchema', () => {
     expect(config.safety.wipLimit).toBe(7);
   });
 
+  it('keeps the audited external-repository path safety defaults', () => {
+    const config = configSchema.parse({ version: 1 });
+
+    expect(config.policy.protectedPaths).toEqual([
+      '.github/**',
+      '.gitlab-ci.yml',
+      '.circleci/**',
+      'azure-pipelines.yml',
+      'Jenkinsfile',
+      '**/.env*',
+      '**/secrets/**',
+      '**/*migration*/**',
+      '**/*release*/**',
+      '**/*publish*/**',
+      '.npmrc',
+      '.pypirc',
+      'Dockerfile',
+      '.kaizen/**'
+    ]);
+    expect(config.policy.forbiddenPaths).toEqual([
+      '**/.git/**',
+      '**/.ssh/**',
+      '**/.gnupg/**',
+      '**/*credential*/**',
+      '**/*.pem',
+      '**/*.key'
+    ]);
+  });
+
   it('does not allow the verifier to be disabled in external operation mode', () => {
     expect(() => configSchema.parse({ version: 1, verifier: { enabled: false } })).toThrow(
       'verifier.enabled cannot be false when safety.operationMode is external'
