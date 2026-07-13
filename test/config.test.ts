@@ -82,11 +82,14 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, verifier: { enabled: false } })).toThrow(
       'verifier.enabled cannot be false when safety.operationMode is external'
     );
+    expect(() => configSchema.parse({ version: 1, verifier: { command: 'true' } })).toThrow(
+      'verifier.command must be verifier when safety.operationMode is external'
+    );
     expect(configSchema.parse({
       version: 1,
       safety: { operationMode: 'dogfood' },
-      verifier: { enabled: false }
-    }).verifier.enabled).toBe(false);
+      verifier: { enabled: false, command: 'custom-verifier' }
+    }).verifier).toMatchObject({ enabled: false, command: 'custom-verifier' });
   });
 
   it('accepts scheduler jobs', () => {

@@ -8,7 +8,7 @@ In external mode, an issue is not executable merely because it has the base `kai
 
 This is not atomic with subsequent GitHub operations: a maintainer can remove a label after the check. Fetching fresh state narrows that race, while the PR-only and verifier gates limit its impact. Tokens used for external operation must be able to read issue events and collaborator permission; otherwise execution is intentionally skipped. If a migrated issue has an active label but no qualifying event, remove and re-add the authorization label.
 
-External mode rejects `verifier.enabled: false` during config parsing. Kaizen Loop can guarantee that the configured verifier command is invoked, but the deterministic auth/secrets/billing/migration classifier belongs to the separately installed `verifier` executable. This repository does not claim to validate that external executable's capability or version. A future capability handshake is required to close that remaining trust boundary.
+External mode rejects both `verifier.enabled: false` and replacement of `verifier.command` during config parsing, so repository-controlled configuration cannot substitute a no-op command for the deterministic auth/secrets/billing/migration classifier. That classifier belongs to the separately installed `verifier` executable. The host operator must provide the trusted executable on `PATH`; this repository does not validate its capability or version. A future capability handshake is required to close that host-installation trust boundary. Dogfood mode may use a custom verifier command.
 
 The defaults audit made these decisions:
 

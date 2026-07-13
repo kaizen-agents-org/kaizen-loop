@@ -333,6 +333,13 @@ export const configSchema = z
         message: 'verifier.enabled cannot be false when safety.operationMode is external'
       });
     }
+    if (config.safety.operationMode === 'external' && config.verifier.command !== 'verifier') {
+      context.addIssue({
+        code: 'custom',
+        path: ['verifier', 'command'],
+        message: 'verifier.command must be verifier when safety.operationMode is external'
+      });
+    }
   });
 
 export type KaizenConfig = z.infer<typeof configSchema>;
