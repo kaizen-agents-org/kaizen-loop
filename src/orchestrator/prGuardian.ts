@@ -363,6 +363,7 @@ interface PrGateSummary {
   reviewDecision?: string;
   headRefOid?: string;
   activityFingerprint?: string;
+  reviewBlockers?: string[];
   checks: PrCheckSummary[];
 }
 
@@ -403,8 +404,8 @@ interface PullRequestViewResponse {
   mergeable?: string;
   reviewDecision?: string;
   headRefOid?: string;
-  reviews?: Array<{ id?: string; submittedAt?: string; commit?: { oid?: string } | null }>;
-  comments?: Array<{ id?: string; updatedAt?: string }>;
+  reviews?: Array<{ id?: string; submittedAt?: string; author?: { login?: string } | null; commit?: { oid?: string } | null }>;
+  comments?: Array<{ id?: string; updatedAt?: string; author?: { login?: string } | null; body?: string }>;
   statusCheckRollup?: Array<Record<string, unknown>>;
 }
 
@@ -498,6 +499,7 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
   const terminal = pullRequest.state === 'MERGED';
   const blockers = [
     ...mergeabilityBlockers(pullRequest),
+    ...(pullRequest.reviewBlockers ?? []),
     ...(terminal ? [] : unresolvedThreads.map((thread) => {
       const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
       const author = thread.author ? ` by ${thread.author}` : '';
@@ -547,8 +549,20 @@ async function inspectPullRequest(
       reviews: (parsed.reviews ?? []).map((review) => [review.id, review.submittedAt, review.commit?.oid]),
       comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
     }),
+    reviewBlockers: currentHeadReviewBlockers(parsed),
     checks: normalizeStatusChecks(parsed.statusCheckRollup)
   };
+}
+
+function currentHeadReviewBlockers(parsed: PullRequestViewResponse): string[] {
+  if (!parsed.headRefOid || parsed.state === 'MERGED') return [];
+  const botReviews = (parsed.reviews ?? []).filter((review) => {
+    const login = review.author?.login?.toLowerCase() ?? '';
+    return login.includes('codex') || login.includes('coderabbit');
+  });
+  return botReviews
+    .filter((review) => review.commit?.oid !== parsed.headRefOid)
+    .map((review) => `${review.author?.login ?? 'automated reviewer'} review is not for current PR head ${parsed.headRefOid}`);
 }
 
 function normalizeStatusChecks(statusCheckRollup: Array<Record<string, unknown>> | undefined): PrCheckSummary[] {

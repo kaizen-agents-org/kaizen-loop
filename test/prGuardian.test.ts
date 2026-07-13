@@ -365,6 +365,40 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
   });
 
+  it('does not report success when an automated review targets an older head', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'new-head',
+          reviews: [{ id: 'review-1', author: { login: 'chatgpt-codex-connector' }, commit: { oid: 'old-head' } }]
+        })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('not for current PR head');
+  });
+
   it('persists one guardian job per PR head SHA', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
@@ -648,6 +682,7 @@ function ghResponse(
     reviewDecision: string;
     statusCheckRollup: Array<Record<string, unknown>>;
     headRefOid: string;
+    reviews: Array<Record<string, unknown>>;
   }> = {}
 ): string {
   return isPrView(args) ? mergeablePrResponse(pr) : reviewThreadsResponse(threads);
@@ -665,6 +700,7 @@ function mergeablePrResponse(pr: Partial<{
   reviewDecision: string;
   statusCheckRollup: Array<Record<string, unknown>>;
   headRefOid: string;
+  reviews: Array<Record<string, unknown>>;
 }> = {}): string {
   return JSON.stringify({
     state: pr.state ?? 'OPEN',
@@ -673,7 +709,7 @@ function mergeablePrResponse(pr: Partial<{
     mergeable: pr.mergeable ?? 'MERGEABLE',
     reviewDecision: pr.reviewDecision ?? '',
     headRefOid: pr.headRefOid ?? 'head-sha',
-    reviews: [],
+    reviews: pr.reviews ?? [],
     comments: [],
     statusCheckRollup: pr.statusCheckRollup ?? [
       {
