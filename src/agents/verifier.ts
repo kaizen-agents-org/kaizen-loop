@@ -15,6 +15,13 @@ import { envWithKaizenTemp } from '../utils/temp.js';
  */
 export type VerifierGateStatus = 'open_pr' | 'open_pr_with_warning' | 'block_pr' | 'needs_context';
 export type VerifierEvidenceGrade = 'executed' | 'reported';
+export type VerifierRisk = 'low' | 'medium' | 'high';
+
+export interface VerifierFinding {
+  source: 'task' | 'diff' | 'verify_logs' | 'builder_report' | 'system';
+  message: string;
+  evidence?: string;
+}
 
 /** Legacy statuses kept for temporary backward compatibility with older verifier payloads. */
 const legacyStatusMap: Record<string, VerifierGateStatus> = {
@@ -22,6 +29,12 @@ const legacyStatusMap: Record<string, VerifierGateStatus> = {
   pr_only: 'open_pr_with_warning',
   rejected: 'block_pr'
 };
+
+const verifierFindingSchema = z.object({
+  source: z.enum(['task', 'diff', 'verify_logs', 'builder_report', 'system']),
+  message: z.string(),
+  evidence: z.string().optional()
+});
 
 const verifierPayloadSchema = z
   .object({
@@ -31,6 +44,10 @@ const verifierPayloadSchema = z
     summary: z.string().default(''),
     notes: z.string().default(''),
     reason: z.string().optional(),
+    must_fix: z.array(verifierFindingSchema).optional(),
+    should_fix: z.array(verifierFindingSchema).optional(),
+    confidence: z.number().int().min(0).max(100).optional(),
+    risk: z.enum(['low', 'medium', 'high']).optional(),
     evidence_grade: z.preprocess(
       (value) => (value === 'executed' || value === 'reported' ? value : undefined),
       z.enum(['executed', 'reported']).optional()
@@ -56,6 +73,10 @@ export interface VerifierResult {
   summary: string;
   notes: string;
   reason?: string;
+  mustFix?: VerifierFinding[];
+  shouldFix?: VerifierFinding[];
+  confidence?: number;
+  risk?: VerifierRisk;
   evidenceGrade?: VerifierEvidenceGrade;
   raw: string;
   durationMs: number;
@@ -128,6 +149,10 @@ export class VerifierAgentAdapter {
         summary: payload.summary,
         notes: payload.notes,
         reason: payload.reason,
+        mustFix: payload.must_fix,
+        shouldFix: payload.should_fix,
+        confidence: payload.confidence,
+        risk: payload.risk,
         evidenceGrade: payload.evidence_grade,
         raw: `${raw}\n${JSON.stringify(payload)}`,
         durationMs: result.durationMs

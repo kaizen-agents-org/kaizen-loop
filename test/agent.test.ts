@@ -247,6 +247,35 @@ describe('VerifierAgentAdapter', () => {
     const result = await runVerifier({ status: 'open_pr', summary: 's', notes: '', evidence_grade: evidenceGrade });
     expect(result.evidenceGrade).toBe(evidenceGrade);
   });
+
+  it('preserves structured findings, confidence, and risk', async () => {
+    const mustFix = [{ source: 'verify_logs', message: 'Tests failed', evidence: 'npm test exited 1' }];
+    const shouldFix = [{ source: 'diff', message: 'Review the generated evidence' }];
+    const result = await runVerifier({
+      status: 'block_pr',
+      summary: 'verification found issues',
+      notes: '',
+      must_fix: mustFix,
+      should_fix: shouldFix,
+      confidence: 74,
+      risk: 'high'
+    });
+
+    expect(result.mustFix).toEqual(mustFix);
+    expect(result.shouldFix).toEqual(shouldFix);
+    expect(result.confidence).toBe(74);
+    expect(result.risk).toBe('high');
+  });
+
+  it('keeps older notes-only verifier payloads compatible', async () => {
+    const result = await runVerifier({ status: 'open_pr_with_warning', summary: 'legacy', notes: 'manual review needed' });
+
+    expect(result.notes).toBe('manual review needed');
+    expect(result.mustFix).toBeUndefined();
+    expect(result.shouldFix).toBeUndefined();
+    expect(result.confidence).toBeUndefined();
+    expect(result.risk).toBeUndefined();
+  });
 });
 
 describe('buildVerifierPrompt', () => {
