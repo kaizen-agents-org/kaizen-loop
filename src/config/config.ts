@@ -3,7 +3,7 @@ import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import { DEFAULT_ENV_ALLOWLIST } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
-import { configSchema, type KaizenConfig } from './schema.js';
+import { DEFAULT_FORBIDDEN_PATHS, DEFAULT_PROTECTED_PATHS, configSchema, type KaizenConfig } from './schema.js';
 
 export async function loadConfig(repoDir: string): Promise<KaizenConfig> {
   const configPath = path.join(repoDir, '.kaizen', 'config.yml');
@@ -47,6 +47,7 @@ export function defaultConfigYaml(options: {
       latestStartHour: 7
     },
     safety: {
+      operationMode: 'external',
       minFreeDiskMb: 1024,
       wipLimit: 5,
       envAllowlist: DEFAULT_ENV_ALLOWLIST
@@ -120,8 +121,8 @@ export function defaultConfigYaml(options: {
         maxChangedLines: 150,
         maxChangedFiles: 5
       },
-      protectedPaths: ['.github/**', '**/.env*', '**/secrets/**', '**/*migration*/**', 'Dockerfile', '.kaizen/**'],
-      forbiddenPaths: ['**/.git/**']
+      protectedPaths: DEFAULT_PROTECTED_PATHS,
+      forbiddenPaths: DEFAULT_FORBIDDEN_PATHS
     },
     git: {
       defaultBranch: 'main',
@@ -137,6 +138,10 @@ export function defaultConfigYaml(options: {
     },
     issues: {
       label: 'kaizen',
+      executionAuthorization: {
+        label: 'kaizen:authorized',
+        minimumPermission: 'triage'
+      },
       selection: {
         mode: 'auto',
         includeLabel: 'kaizen:ready',

@@ -6,6 +6,32 @@ const nullableString = z.string().nullable().optional();
 const timeString = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const jobIdString = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
 
+export const DEFAULT_PROTECTED_PATHS = [
+  '.github/**',
+  '.gitlab-ci.yml',
+  '.circleci/**',
+  'azure-pipelines.yml',
+  'Jenkinsfile',
+  '**/.env*',
+  '**/secrets/**',
+  '**/*migration*/**',
+  '**/*release*/**',
+  '**/*publish*/**',
+  '.npmrc',
+  '.pypirc',
+  'Dockerfile',
+  '.kaizen/**'
+];
+
+export const DEFAULT_FORBIDDEN_PATHS = [
+  '**/.git/**',
+  '**/.ssh/**',
+  '**/.gnupg/**',
+  '**/*credential*/**',
+  '**/*.pem',
+  '**/*.key'
+];
+
 const schedulerScheduleSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -106,12 +132,14 @@ export const configSchema = z
       }),
     safety: z
       .object({
+        operationMode: z.enum(['external', 'dogfood']).default('external'),
         minFreeDiskMb: z.number().int().nonnegative().default(1024),
         wipLimit: z.number().int().nonnegative().default(5),
         envAllowlist: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default(DEFAULT_ENV_ALLOWLIST)
       })
       .strict()
       .default({
+        operationMode: 'external',
         minFreeDiskMb: 1024,
         wipLimit: 5,
         envAllowlist: DEFAULT_ENV_ALLOWLIST
@@ -233,15 +261,15 @@ export const configSchema = z
           .default({ maxChangedLines: 150, maxChangedFiles: 5 }),
         protectedPaths: z
           .array(z.string())
-          .default(['.github/**', '**/.env*', '**/secrets/**', '**/*migration*/**', 'Dockerfile', '.kaizen/**']),
-        forbiddenPaths: z.array(z.string()).default(['**/.git/**'])
+          .default(DEFAULT_PROTECTED_PATHS),
+        forbiddenPaths: z.array(z.string()).default(DEFAULT_FORBIDDEN_PATHS)
       })
       .strict()
       .default({
         mode: 'pr-only',
         directCommit: { maxChangedLines: 150, maxChangedFiles: 5 },
-        protectedPaths: ['.github/**', '**/.env*', '**/secrets/**', '**/*migration*/**', 'Dockerfile', '.kaizen/**'],
-        forbiddenPaths: ['**/.git/**']
+        protectedPaths: DEFAULT_PROTECTED_PATHS,
+        forbiddenPaths: DEFAULT_FORBIDDEN_PATHS
       }),
     git: z
       .object({
@@ -271,6 +299,13 @@ export const configSchema = z
     issues: z
       .object({
         label: z.string().default('kaizen'),
+        executionAuthorization: z
+          .object({
+            label: z.string().default('kaizen:authorized'),
+            minimumPermission: z.enum(['triage', 'write', 'maintain', 'admin']).default('triage')
+          })
+          .strict()
+          .default({ label: 'kaizen:authorized', minimumPermission: 'triage' }),
         selection: z
           .object({
             mode: z.enum(['auto', 'opt-in', 'manual-only']).default('auto'),
@@ -284,11 +319,28 @@ export const configSchema = z
       .strict()
       .default({
         label: 'kaizen',
+        executionAuthorization: { label: 'kaizen:authorized', minimumPermission: 'triage' },
         selection: { mode: 'auto', includeLabel: 'kaizen:ready', excludeLabels: ['kaizen:needs-human'] },
         priorityOrder: ['kaizen:P0', 'kaizen:P1', 'kaizen:P2']
       })
   })
-  .strict();
+  .strict()
+  .superRefine((config, context) => {
+    if (config.safety.operationMode === 'external' && !config.verifier.enabled) {
+      context.addIssue({
+        code: 'custom',
+        path: ['verifier', 'enabled'],
+        message: 'verifier.enabled cannot be false when safety.operationMode is external'
+      });
+    }
+    if (config.safety.operationMode === 'external' && config.verifier.command !== 'verifier') {
+      context.addIssue({
+        code: 'custom',
+        path: ['verifier', 'command'],
+        message: 'verifier.command must be verifier when safety.operationMode is external'
+      });
+    }
+  });
 
 export type KaizenConfig = z.infer<typeof configSchema>;
 export type SchedulerSchedule = z.infer<typeof schedulerScheduleSchema>;

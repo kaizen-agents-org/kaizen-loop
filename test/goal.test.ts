@@ -456,6 +456,7 @@ async function setupProject(options: { maxIterations?: number; evaluationCommand
 
 function configYaml(options: { maxIterations?: number; evaluationCommand?: string }) {
   const config = parse(defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+  config.safety.operationMode = 'dogfood';
   config.verifier.enabled = false;
   config.guardian.enabled = false;
   config.goal.maxIterations = options.maxIterations ?? 3;

@@ -159,7 +159,9 @@ async function setupProject(options: { config?: string } = {}) {
   vi.stubEnv('KAIZEN_HOME', home);
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
-  await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), options.config ?? defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+  const config = (options.config ?? defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }))
+    .replace('operationMode: external', 'operationMode: dogfood');
+  await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), config);
   await saveRegistry({
     version: 1,
     projects: {
