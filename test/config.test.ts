@@ -107,7 +107,7 @@ describe('configSchema', () => {
     ]);
   });
 
-  it('does not allow the verifier to be disabled in external operation mode', () => {
+  it('tests mandatory verifier coverage for auth, secrets, billing, and migration in external mode', () => {
     expect(() => configSchema.parse({ version: 1, verifier: { enabled: false } })).toThrow(
       'verifier.enabled cannot be false when safety.operationMode is external'
     );
