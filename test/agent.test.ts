@@ -250,7 +250,7 @@ describe('VerifierAgentAdapter', () => {
 
   it('preserves structured findings, confidence, and risk', async () => {
     const mustFix = [{ source: 'verify_logs', message: 'Tests failed', evidence: 'npm test exited 1' }];
-    const shouldFix = [{ source: 'diff', message: 'Review the auth change' }];
+    const shouldFix = [{ source: 'diff', message: 'Review the generated evidence' }];
     const result = await runVerifier({
       status: 'block_pr',
       summary: 'verification found issues',
