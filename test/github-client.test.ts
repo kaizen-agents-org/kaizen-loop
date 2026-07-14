@@ -264,6 +264,38 @@ describe('GitHubClient', () => {
     }
   });
 
+  it('lists every open pull request page for guardian discovery', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => restPullRequest(index + 1));
+    const managed = restPullRequest(101, {
+      body: '<!-- kaizen-pr-guardian:managed -->',
+      head: {
+        ref: 'codex/daily-dogfood-sync',
+        sha: 'managed-head',
+        repo: { owner: { login: 'o' } }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) =>
+      ghResult(command, args, JSON.stringify([firstPage, [managed]]))
+    );
+
+    const pullRequests = await new GitHubClient(runner, '/repo').listAllOpenPullRequests();
+
+    expect(pullRequests).toHaveLength(101);
+    expect(pullRequests[100]).toMatchObject({
+      number: 101,
+      body: '<!-- kaizen-pr-guardian:managed -->',
+      headRefName: 'codex/daily-dogfood-sync',
+      headRefOid: 'managed-head',
+      headRepositoryOwner: { login: 'o' }
+    });
+    expect(runner.mock.calls[0][1]).toEqual([
+      'api',
+      '--paginate',
+      '--slurp',
+      'repos/{owner}/{repo}/pulls?state=open&per_page=100'
+    ]);
+  });
+
   it('searches owner pull requests for generated backlog metrics', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
@@ -738,5 +770,23 @@ function ghResult(command: string, args: string[], stdout: string) {
     stdout,
     stderr: '',
     durationMs: 1
+  };
+}
+
+function restPullRequest(number: number, overrides: Record<string, unknown> = {}) {
+  return {
+    number,
+    draft: false,
+    body: '',
+    base: { ref: 'main' },
+    head: {
+      ref: `feature/${number}`,
+      sha: `head-${number}`,
+      repo: { owner: { login: 'o' } }
+    },
+    user: { login: 's-hiraoku', type: 'User' },
+    created_at: '2026-07-01T00:00:00Z',
+    html_url: `https://github.com/o/r/pull/${number}`,
+    ...overrides
   };
 }

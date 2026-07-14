@@ -72,7 +72,7 @@ export async function watchGuardianJobs(options: {
     stateDir,
     config,
     repo: resolved.project.repo,
-    pullRequests: await github.listOpenPullRequests()
+    pullRequests: await github.listAllOpenPullRequests()
   });
   return {
     jobs: await runPendingPrGuardianJobs({

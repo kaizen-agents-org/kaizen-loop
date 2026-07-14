@@ -547,6 +547,29 @@ describe('runPrGuardianSkill', () => {
     expect(jobs[0]).toMatchObject({ prNumber: 4, branch: 'codex/daily-dogfood-sync', headSha: 'head-sha' });
   });
 
+  it('enqueues a managed pull request beyond the first 100 discovered results', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({ version: 1, guardian: { enabled: true, mode: 'async' } });
+    const pullRequests = [
+      ...Array.from({ length: 100 }, (_, index) => managedPullRequest({
+        number: index + 1,
+        body: 'not managed',
+        headRefName: `feature/${index + 1}`
+      })),
+      managedPullRequest({ number: 101, headRefOid: 'managed-head' })
+    ];
+
+    const jobs = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ prNumber: 101, headSha: 'managed-head' });
+  });
+
   it('persists one guardian job per PR head SHA', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
