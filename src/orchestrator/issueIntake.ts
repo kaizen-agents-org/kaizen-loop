@@ -3,6 +3,7 @@ import { hasPendingPullRequest } from '../report/comments.js';
 
 export type IssueIntakeDecisionStatus =
   | 'proceed'
+  | 'needs_human'
   | 'needs_context'
   | 'upstream_first'
   | 'not_improvement'
@@ -42,6 +43,16 @@ export function evaluateIssueIntake(options: {
       status: 'upstream_first',
       reason: `The issue describes source-of-truth drift; fix ${upstreamRepo} before downstream sync work.`,
       evidence: [`Referenced upstream/source-of-truth repository: ${upstreamRepo}`]
+    };
+  }
+
+  if (requiresLiveCrossRepositoryAction(options.issue, options.repo)) {
+    return {
+      status: 'needs_human',
+      reason: `The requested workflow requires live actions in a repository outside ${options.repo}.`,
+      evidence: [
+        'The builder workspace and execution authorization are scoped to the repository being processed.'
+      ]
     };
   }
 
@@ -129,6 +140,42 @@ function mentionsSourceOfTruthSync(normalized: string): boolean {
   return (
     /(source[- ]of[- ]truth|upstream|canonical)/.test(normalized) &&
     /(sync|copy|drift|downstream|mirror|vendored)/.test(normalized)
+  );
+}
+
+function requiresLiveCrossRepositoryAction(issue: GitHubIssue, currentRepo: string): boolean {
+  const directiveText = requestedActionDirectives(issue);
+  if (!directiveText) return false;
+  const normalized = directiveText.toLowerCase();
+  return mentionsExternalRepositoryTarget(directiveText, normalized, currentRepo) && mentionsLiveRepositoryWorkflow(normalized);
+}
+
+function requestedActionDirectives(issue: GitHubIssue): string {
+  const imperative = /^\s*(?:(?:[-*+]|\d+[.)])\s*)?(?:choose|complete|create|dogfood|execute|init(?:ialize)?|merge|open|perform|push|run|select|test|validate)\b/i;
+  if (reportsExistingFailure(issue.title) && !imperative.test(issue.title)) return '';
+  const directives = (issue.body ?? '').split('\n').filter((line) => imperative.test(line));
+  if (imperative.test(issue.title)) directives.unshift(issue.title);
+  return directives.join('\n');
+}
+
+function reportsExistingFailure(title: string): boolean {
+  return /\b(?:blocked|bug|cannot|dispatch(?:ed|es|ing)?|fail(?:ed|ing|s|ure)?|invalid|wrong)\b/i.test(title);
+}
+
+function mentionsExternalRepositoryTarget(text: string, normalized: string, currentRepo: string): boolean {
+  if (referencedUpstreamRepo(text, currentRepo)) return true;
+  return (
+    /\b(?:another|different|external|non[- ]node|other|separate)(?:\s+[a-z0-9.+#-]+){0,3}\s+repositor(?:y|ies)\b/.test(normalized) ||
+    /\brepositor(?:y|ies)\s+(?:different\s+from|other\s+than|outside)\b/.test(normalized)
+  );
+}
+
+function mentionsLiveRepositoryWorkflow(normalized: string): boolean {
+  return (
+    /\bkaizen\s+init\b/.test(normalized) ||
+    /\bissue\s*(?:→|->|to)\s*(?:pull request|pr)\s*(?:→|->|to)\s*merge\b/.test(normalized) ||
+    /\bgit\s+push\b/.test(normalized) ||
+    /\b(?:create|merge|open|push)\b[^.\n]{0,40}\b(?:pull request|pr|remote)\b/.test(normalized)
   );
 }
 
