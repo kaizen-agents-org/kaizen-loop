@@ -76,6 +76,17 @@ describe('evaluateIssueIntake', () => {
     }).status).toBe('needs_human');
   });
 
+  it('routes workflows naming a specific external repository to a human', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Run kaizen init in kaizen-agents-org/python-dogfood',
+        body: 'Open and merge the resulting pull request in that repository.'
+      })
+    }).status).toBe('needs_human');
+  });
+
   it('does not route reports about cross-repository dispatch as live external work', () => {
     expect(evaluateIssueIntake({
       repo: 'kaizen-agents-org/kaizen-loop',
