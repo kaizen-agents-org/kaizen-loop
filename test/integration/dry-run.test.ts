@@ -12,28 +12,7 @@ import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
   it('skips issues without execution authorization in the external default mode', async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
-    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
-    vi.stubEnv('KAIZEN_HOME', home);
-    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
-    await fs.writeFile(
-      path.join(repo, '.kaizen', 'config.yml'),
-      buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
-    );
-    await saveRegistry({
-      version: 1,
-      projects: {
-        'o-r': {
-          repo: 'o/r',
-          localPath: repo,
-          workspacePath: workspace,
-          schedule: '02:00',
-          enabled: false,
-          createdAt: '2026-06-12T00:00:00Z'
-        }
-      }
-    });
+    const repo = await setupExternalDryRunProject();
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(1)]));
@@ -55,6 +34,81 @@ describe('runKaizen dry-run', () => {
       { number: 1, reason: 'missing execution authorization label: kaizen:authorized' }
     ]);
     expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects an issue only after checking the active authorization event and actor permission', async () => {
+    const repo = await setupExternalDryRunProject();
+    const authorizedIssue = issue(1, {
+      labels: [{ name: 'kaizen' }, { name: 'Kaizen:Authorized' }]
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([authorizedIssue]));
+      }
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(authorizedIssue));
+      }
+      if (args.at(-1) === 'repos/o/r/issues/1/events') {
+        return result(command, args, repo, JSON.stringify([
+          [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' } }]
+        ]));
+      }
+      if (args.at(-1) === 'repos/o/r/collaborators/maintainer/permission') {
+        return result(command, args, repo, JSON.stringify({ role_name: 'triage' }));
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const selection = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in selection && selection.selected.map(({ number }) => number)).toEqual([1]);
+    expect('selected' in selection && selection.skipped).toEqual([]);
+    expect(runner.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([
+      ['issue', 'list'],
+      ['issue', 'view'],
+      ['api', '--paginate'],
+      ['api', 'repos/o/r/collaborators/maintainer/permission']
+    ]);
+  });
+
+  it('fails closed when authorization event history cannot be read', async () => {
+    const repo = await setupExternalDryRunProject();
+    const authorizedIssue = issue(1, {
+      labels: [{ name: 'kaizen' }, { name: 'kaizen:authorized' }]
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([authorizedIssue]));
+      }
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(authorizedIssue));
+      }
+      if (args.at(-1) === 'repos/o/r/issues/1/events') {
+        throw new Error('GitHub API returned 403');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const selection = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in selection && selection.selected).toEqual([]);
+    expect('selected' in selection && selection.skipped).toEqual([
+      { number: 1, reason: 'execution authorization could not be verified: GitHub API returned 403' }
+    ]);
   });
 
   it('applies the implementation budget after intake-rejected candidates are removed', () => {
@@ -3029,6 +3083,32 @@ function issue(number = 1, overrides: Partial<GitHubIssue> = {}) {
     createdAt: overrides.createdAt ?? '2026-06-12T00:00:00Z',
     comments: overrides.comments ?? []
   };
+}
+
+async function setupExternalDryRunProject(): Promise<string> {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+  vi.stubEnv('KAIZEN_HOME', home);
+  await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+  await fs.writeFile(
+    path.join(repo, '.kaizen', 'config.yml'),
+    buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+  );
+  await saveRegistry({
+    version: 1,
+    projects: {
+      'o-r': {
+        repo: 'o/r',
+        localPath: repo,
+        workspacePath: workspace,
+        schedule: '02:00',
+        enabled: false,
+        createdAt: '2026-06-12T00:00:00Z'
+      }
+    }
+  });
+  return repo;
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
