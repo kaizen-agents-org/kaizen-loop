@@ -146,13 +146,17 @@ function mentionsSourceOfTruthSync(normalized: string): boolean {
 function requiresLiveCrossRepositoryAction(issue: GitHubIssue, currentRepo: string): boolean {
   const directiveText = requestedActionDirectives(issue);
   if (!directiveText) return false;
-  const normalized = directiveText.toLowerCase();
-  return mentionsExternalRepositoryTarget(directiveText, normalized, currentRepo) && mentionsLiveRepositoryWorkflow(normalized);
+  const normalizedDirectives = directiveText.toLowerCase();
+  const fullText = issueText(issue);
+  return (
+    mentionsExternalRepositoryTarget(fullText, fullText.toLowerCase(), currentRepo) &&
+    mentionsLiveRepositoryWorkflow(normalizedDirectives)
+  );
 }
 
 function requestedActionDirectives(issue: GitHubIssue): string {
   const imperative = /^\s*(?:(?:[-*+]|\d+[.)])\s*)?(?:choose|complete|create|dogfood|execute|init(?:ialize)?|merge|open|perform|push|run|select|test|validate)\b/i;
-  if (reportsExistingFailure(issue.title) && !imperative.test(issue.title)) return '';
+  if (reportsExistingFailure(issue.title)) return '';
   const directives = (issue.body ?? '').split('\n').filter((line) => imperative.test(line));
   if (imperative.test(issue.title)) directives.unshift(issue.title);
   return directives.join('\n');

@@ -87,6 +87,37 @@ describe('evaluateIssueIntake', () => {
     }).status).toBe('needs_human');
   });
 
+  it('uses non-imperative target metadata when classifying live directives', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Complete the non-Node dogfood run',
+        body: [
+          'Target repository: kaizen-agents-org/python-dogfood',
+          'Run kaizen init there.',
+          'Open and merge the resulting pull request.'
+        ].join('\n')
+      })
+    }).status).toBe('needs_human');
+  });
+
+  it('does not route command-shaped failure reports as live external work', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Run kaizen init in another repository fails',
+        body: [
+          'Steps to reproduce:',
+          '- Select a separate Rust repository.',
+          '- Run kaizen init there.',
+          'Expected: Kaizen Loop should report the failure and continue safely.'
+        ].join('\n')
+      })
+    }).status).toBe('proceed');
+  });
+
   it('does not route reports about cross-repository dispatch as live external work', () => {
     expect(evaluateIssueIntake({
       repo: 'kaizen-agents-org/kaizen-loop',
