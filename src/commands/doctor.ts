@@ -6,6 +6,7 @@ import { VerifierAgentAdapter } from '../agents/verifier.js';
 import { loadConfig } from '../config/config.js';
 import { resolveProject } from '../config/registry.js';
 import type { KaizenConfig } from '../config/schema.js';
+import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
 import type { CommandRunner } from '../utils/command.js';
@@ -111,7 +112,7 @@ export function requiredLabels(config: KaizenConfig): string[] {
     'kaizen:direct',
     'kaizen:pr-only',
     'kaizen:in-progress',
-    'kaizen:needs-human',
+    ...Object.values(DISPOSITION_LABELS),
     config.goal.issueLabel,
     'kaizen:agent:claude',
     'kaizen:agent:codex'

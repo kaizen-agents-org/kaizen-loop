@@ -18,6 +18,13 @@ export interface GitHubIssue {
   url?: string;
 }
 
+export interface GitHubLabelEvent {
+  event: 'labeled' | 'unlabeled';
+  label: string;
+  actor?: string;
+  createdAt: string;
+}
+
 export interface PullRequestResult {
   number?: number;
   url: string;

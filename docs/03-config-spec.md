@@ -32,7 +32,7 @@ run:
   issueTimeoutMinutes: 120   # 1 Issue あたりのエージェント実行タイムアウト
   runTimeoutMinutes: 240     # 実行全体のタイムアウト(超過時は残 Issue をスキップして終了処理)
   maxVerifyRetries: 2        # 検証失敗時、エラーを添えてエージェントに再修正させる回数
-  maxAttemptsPerIssue: 3     # 夜をまたいだ累計試行回数。超えたら kaizen:needs-human へ
+  maxAttemptsPerIssue: 3     # 夜をまたいだ累計試行回数。超えたら kaizen:attempts-exhausted へ
   maxOpenPullRequests: 1     # 自動実行で新規 PR 作成を許可する repo 別 open PR 上限
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
@@ -222,7 +222,7 @@ issues:
 - `issues.selection.mode: auto` は既存互換で、`issues.label` 付きの open Issue を自動選択候補にする
 - `issues.selection.mode: opt-in` は `issues.label` と `issues.selection.includeLabel` の両方を持つ Issue だけを scheduled / backlog 実行候補にする
 - `issues.selection.mode: manual-only` は scheduled / backlog 実行で Issue を自動選択しない。`kaizen fix <Issue番号>` などの明示実行は可能
-- `issues.selection.excludeLabels` は selection mode より後の除外条件。デフォルトでは `kaizen:needs-human` を実行しない
+- `issues.selection.excludeLabels` は selection mode より後の追加除外条件。primary terminal disposition (`kaizen:needs-human`, `kaizen:blocked`, `kaizen:upstream-first`, `kaizen:not-actionable`, `kaizen:attempts-exhausted`) は設定に関係なく scheduled 実行から除外する。`kaizen:retryable` は除外しない
 
 ## 2. ローカル登録簿 `~/.kaizen/registry.json`
 
@@ -310,7 +310,7 @@ issues:
 }
 ```
 
-`outcome` の取りうる値: `direct-commit` | `pr-created` | `failed` | `blocked`(情報不足)| `skipped`。`kaizen:needs-human` は outcome ではなく、`failed` / `blocked` の結果として Issue に付与される状態ラベル。
+`outcome` の取りうる値: `direct-commit` | `pr-created` | `failed` | `blocked` | `skipped`。primary disposition は outcome と別で、`kaizen:needs-human` は schema-valid な具体的 human request が未回答の場合だけ付与する。一般的 blocked、上流先行、試行上限、一時障害はそれぞれ専用 disposition を使う。
 
 `discoveredFollowups` は builder-agent が返した別バグを Kaizen Loop が起票または重複判定した場合だけ記録する。`status: "created"` は新規 Issue、`status: "duplicate"` は同じタイトルの open Issue があり起票をスキップした follow-up を示す。
 

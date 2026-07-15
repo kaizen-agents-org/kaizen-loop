@@ -11,6 +11,20 @@ const builderPayloadSchema = z
     summary: z.string(),
     notes: z.string(),
     blockedReason: z.string().optional(),
+    humanRequest: z.object({
+      reasonCode: z.enum([
+        'missing_information',
+        'credentials',
+        'billing',
+        'destructive_action',
+        'production_change',
+        'policy_exception',
+        'external_repository_action',
+        'other_approval'
+      ]),
+      requestKey: z.string().regex(/^[a-z0-9][a-z0-9._:-]*$/),
+      question: z.string().min(1)
+    }).strict().optional(),
     discoveredIssues: z
       .array(
         z
@@ -27,7 +41,16 @@ const builderPayloadSchema = z
       )
       .default([])
   })
-  .strict();
+  .strict()
+  .superRefine((payload, context) => {
+    if (payload.humanRequest && payload.status !== 'blocked') {
+      context.addIssue({
+        code: 'custom',
+        path: ['humanRequest'],
+        message: 'humanRequest is only valid when status is blocked'
+      });
+    }
+  });
 
 export interface BuilderAgentOptions {
   command: string;
@@ -106,6 +129,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
         summary: payload.summary,
         notes: payload.notes,
         blockedReason: payload.blockedReason,
+        humanRequest: payload.humanRequest,
         discoveredIssues: payload.discoveredIssues,
         raw: `${raw}\n${JSON.stringify(payload)}`,
         durationMs: result.durationMs

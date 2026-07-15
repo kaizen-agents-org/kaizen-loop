@@ -1,6 +1,7 @@
 import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
-import { countAttempts, hasPendingPullRequest, hasRetryableExternalBlock } from '../report/comments.js';
+import { countAttempts, hasPendingPullRequest } from '../report/comments.js';
+import { TERMINAL_DISPOSITION_LABELS } from './disposition.js';
 
 export interface IssueSelection {
   selected: GitHubIssue[];
@@ -41,10 +42,17 @@ export function selectIssues(options: {
       return false;
     }
 
-    const retryableExternalBlock = hasRetryableExternalBlock(issue.comments ?? []);
-    const excludedLabel = options.config.issues.selection.excludeLabels.find(
-      (label) => labels.includes(label) && !(label === 'kaizen:needs-human' && retryableExternalBlock)
-    );
+    const terminalDisposition = TERMINAL_DISPOSITION_LABELS.find((label) => labels.includes(label));
+    if (terminalDisposition) {
+      skipped.push({
+        number: issue.number,
+        reason: terminalDisposition === 'kaizen:needs-human'
+          ? 'needs-human'
+          : `terminal disposition: ${terminalDisposition}`
+      });
+      return false;
+    }
+    const excludedLabel = options.config.issues.selection.excludeLabels.find((label) => labels.includes(label));
     if (excludedLabel) {
       skipped.push({ number: issue.number, reason: excludedLabel === 'kaizen:needs-human' ? 'needs-human' : `excluded label: ${excludedLabel}` });
       return false;

@@ -40,6 +40,13 @@ describe('doctorProject', () => {
       .map(([, args]) => args[2]);
     expect(createdLabels).toContain('kaizen:needs-human');
     expect(createdLabels.filter((label) => label === 'kaizen:needs-human')).toHaveLength(1);
+    expect(createdLabels).toEqual(expect.arrayContaining([
+      'kaizen:retryable',
+      'kaizen:blocked',
+      'kaizen:upstream-first',
+      'kaizen:not-actionable',
+      'kaizen:attempts-exhausted'
+    ]));
     expect(output.checks.find((item) => item.name === 'temporary directory')?.ok).toBe(true);
     expect(output.checks.find((item) => item.name === 'claude auth')?.ok).toBe(true);
     expect(output.checks.find((item) => item.name === 'codex auth')?.ok).toBe(true);

@@ -1034,7 +1034,9 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary.issues).toEqual([]);
     expect('issues' in summary && summary.skipped[0]?.reason).toContain('intake needs_human');
-    const commentCall = runner.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'comment');
+    const commentCall = runner.mock.calls.find(([, args]) =>
+      args[0] === 'issue' && args[1] === 'comment' && args.some((arg) => arg.includes('kaizen-loop:intake-decision'))
+    );
     const bodyIndex = commentCall?.[1].indexOf('--body') ?? -1;
     const commentBody = commentCall?.[1][bodyIndex + 1];
     expect(commentBody).toContain('<!-- kaizen-loop:intake-decision status=needs_human -->');
@@ -1096,7 +1098,7 @@ describe('runKaizen PR flow', () => {
     expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'comment')).toBe(false);
   });
 
-  it('closes open issues whose Kaizen pull request marker points to a merged PR', async () => {
+  it('closes merged-PR issues without removing a pending needs-human label', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -1124,7 +1126,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([
           issue(1, {
-            labels: [{ name: 'kaizen' }, { name: 'kaizen:in-progress' }],
+            labels: [{ name: 'kaizen' }, { name: 'kaizen:in-progress' }, { name: 'kaizen:needs-human' }],
             comments: [
               {
                 body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"pr-created","pr":"https://github.com/o/r/pull/4"} -->'
@@ -1172,9 +1174,24 @@ describe('runKaizen PR flow', () => {
     ]);
     expect(runner.mock.calls).toContainEqual([
       'gh',
-      ['issue', 'edit', '1', '--remove-label', 'kaizen:in-progress,kaizen:needs-human'],
+      ['issue', 'edit', '1', '--remove-label', 'kaizen:in-progress'],
       expect.any(Object)
     ]);
+    expect(runner.mock.calls).toContainEqual([
+      'gh',
+      [
+        'issue', 'edit', '1', '--remove-label',
+        'kaizen:retryable,kaizen:blocked,kaizen:upstream-first,kaizen:not-actionable,kaizen:attempts-exhausted'
+      ],
+      expect.any(Object)
+    ]);
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'gh' &&
+      args[0] === 'issue' &&
+      args[1] === 'edit' &&
+      args.includes('--remove-label') &&
+      args.some((arg) => arg.includes('kaizen:needs-human'))
+    )).toBe(false);
     expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
   });
 

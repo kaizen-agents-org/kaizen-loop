@@ -59,7 +59,7 @@ describe('selectIssues', () => {
     ]);
   });
 
-  it('retries a needs-human issue after a retryable external block', () => {
+  it('does not retry a reopened issue while its unanswered needs-human label remains active', () => {
     const selection = selectIssues({
       config,
       maxIssues: 10,
@@ -75,11 +75,35 @@ describe('selectIssues', () => {
       ]
     });
 
-    expect(selection.selected.map((item) => item.number)).toEqual([1]);
-    expect(selection.skipped).toEqual([]);
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'needs-human' }]);
   });
 
-  it('keeps other excluded labels effective during retryable external recovery', () => {
+  it.each([
+    'kaizen:blocked',
+    'kaizen:upstream-first',
+    'kaizen:not-actionable',
+    'kaizen:attempts-exhausted'
+  ])('excludes terminal disposition %s from scheduled selection', (label) => {
+    const result = selectIssues({
+      issues: [issue(1, 'terminal', '2026-06-12T01:00:00Z', ['kaizen', label])],
+      config,
+      maxIssues: 1
+    });
+    expect(result.selected).toEqual([]);
+    expect(result.skipped).toEqual([{ number: 1, reason: `terminal disposition: ${label}` }]);
+  });
+
+  it('keeps retryable disposition eligible', () => {
+    const result = selectIssues({
+      issues: [issue(1, 'retryable', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:retryable'])],
+      config,
+      maxIssues: 1
+    });
+    expect(result.selected.map((item) => item.number)).toEqual([1]);
+  });
+
+  it('treats needs-human as authoritative when another excluded label is active', () => {
     const selection = selectIssues({
       config: configSchema.parse({
         version: 1,
@@ -95,7 +119,7 @@ describe('selectIssues', () => {
     });
 
     expect(selection.selected).toEqual([]);
-    expect(selection.skipped).toEqual([{ number: 1, reason: 'excluded label: do-not-run' }]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'needs-human' }]);
   });
 
   it('skips issues that already have a pending pull request in automatic selection', () => {

@@ -28,4 +28,6 @@ For bundled issue-filing skills such as `kaizen-bug-router`:
 | Run immediately | `kaizen`, `kaizen:ready`, then an explicit immediate command such as `kaizen fix <issue>` |
 | Needs human input first | `kaizen`, `kaizen:needs-human` |
 
+`kaizen:needs-human` は具体的な未回答 request 専用である。単なる失敗・上流先行・試行上限を表す目的では指定しない。
+
 When `issues.selection.mode: auto`, the base `kaizen` label remains enough for automatic selection. When `issues.selection.mode: manual-only`, scheduled selection does not pick any issue; explicit commands are required.

@@ -62,7 +62,12 @@ export async function statusProject(options: { cwd: string; project?: string; me
       p0: countLabel(issues, 'kaizen:P0'),
       p1: countLabel(issues, 'kaizen:P1'),
       p2: countLabel(issues, 'kaizen:P2'),
-      needsHuman: countLabel(issues, 'kaizen:needs-human')
+      needsHuman: countLabel(issues, 'kaizen:needs-human'),
+      retryable: countLabel(issues, 'kaizen:retryable'),
+      blocked: countLabel(issues, 'kaizen:blocked'),
+      upstreamFirst: countLabel(issues, 'kaizen:upstream-first'),
+      notActionable: countLabel(issues, 'kaizen:not-actionable'),
+      attemptsExhausted: countLabel(issues, 'kaizen:attempts-exhausted')
     },
     pullRequests: {
       open: openPullRequests.length

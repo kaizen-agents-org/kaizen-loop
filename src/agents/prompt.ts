@@ -69,7 +69,7 @@ After completing the work, make your final response only this JSON in a json cod
 }
 \`\`\`
 
-Use an empty discoveredIssues array when you did not find a separate follow-up bug. Use status "blocked" if the issue lacks information, the recommended action would weaken safety/review/verification guardrails, the correct fix belongs in an upstream source-of-truth repository first, or the work requires human approval for secrets, credentials, billing, destructive data changes, or production infrastructure.`;
+Use an empty discoveredIssues array when you did not find a separate follow-up bug. Use status "blocked" if the issue lacks information, the recommended action would weaken safety/review/verification guardrails, the correct fix belongs in an upstream source-of-truth repository first, or the work requires human approval for secrets, credentials, billing, destructive data changes, or production infrastructure. Include humanRequest only when there is one concrete unanswered human question or approval, using {"reasonCode":"missing_information|credentials|billing|destructive_action|production_change|policy_exception|external_repository_action|other_approval","requestKey":"stable-lowercase-semantic-key","question":"exact question"}. Keep requestKey unchanged for wording-only changes and use a new key for a genuinely different decision. Omit humanRequest for upstream work, automation failures, retry exhaustion, and provider failures. Omit both blockedReason and humanRequest for fixed or partial results.`;
 }
 
 function formatVerifyCommands(commands: string[]): string {
