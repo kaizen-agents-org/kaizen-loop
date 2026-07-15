@@ -2,9 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { KaizenConfig } from '../config/schema.js';
+import type { GitHubPullRequest } from '../github/types.js';
 import { buildAllowlistedEnv, githubCliEnv, type CommandRunner } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
+import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
+import { isSyncPullRequest } from './wipLimit.js';
+
+export const MANAGED_PR_GUARDIAN_MARKER = '<!-- kaizen-pr-guardian:managed -->';
 
 export interface PrGuardianSkillRequest {
   config: KaizenConfig;
@@ -36,6 +41,8 @@ export interface PrGuardianJob {
   updatedAt: string;
   lastCheckedAt?: string;
   lastBlocker?: string;
+  reactivationCount?: number;
+  lastObservedFingerprint?: string;
 }
 
 export interface PrGuardianSkillResult {
@@ -92,6 +99,33 @@ export async function enqueuePrGuardianJob(options: {
   return job;
 }
 
+export async function enqueueManagedPrGuardianJobs(options: {
+  stateDir: string;
+  config: KaizenConfig;
+  repo: string;
+  pullRequests: GitHubPullRequest[];
+}): Promise<PrGuardianJob[]> {
+  const [owner] = options.repo.split('/');
+  const managed = options.pullRequests.filter((pullRequest) =>
+    !pullRequest.isDraft &&
+    isSyncPullRequest(pullRequest) &&
+    pullRequest.body?.includes(MANAGED_PR_GUARDIAN_MARKER) &&
+    pullRequest.headRepositoryOwner?.login?.toLowerCase() === owner?.toLowerCase() &&
+    pullRequest.baseRefName === options.config.git.defaultBranch &&
+    Boolean(pullRequest.headRefName && pullRequest.headRefOid)
+  );
+  return Promise.all(managed.map((pullRequest) => enqueuePrGuardianJob({
+    stateDir: options.stateDir,
+    config: options.config,
+    repo: options.repo,
+    prUrl: pullRequest.url,
+    prNumber: pullRequest.number,
+    branch: pullRequest.headRefName!,
+    baseBranch: pullRequest.baseRefName!,
+    headSha: pullRequest.headRefOid!
+  })));
+}
+
 export async function listPrGuardianJobs(stateDir: string): Promise<PrGuardianJob[]> {
   try {
     const dir = guardianJobsDir(stateDir);
@@ -116,6 +150,7 @@ export async function runPrGuardianJob(options: {
   workspaceDir: string;
   runCommand: CommandRunner;
   job: PrGuardianJob;
+  isolateWorktree?: boolean;
 }): Promise<PrGuardianJob> {
   const running = {
     ...options.job,
@@ -126,15 +161,28 @@ export async function runPrGuardianJob(options: {
   };
   await writeGuardianJob(options.stateDir, running);
 
-  const result = await runPrGuardianSkill(options.runCommand, {
+  const execute = async (workspaceDir: string) => runPrGuardianSkill(options.runCommand, {
     config: options.config,
-    workspaceDir: options.workspaceDir,
+    workspaceDir,
     repo: running.repo,
     prUrl: running.prUrl,
     prNumber: running.prNumber,
     branch: running.branch,
     baseBranch: running.baseBranch
   });
+  let result: PrGuardianSkillResult;
+  try {
+    result = options.isolateWorktree
+      ? await withGuardianWorktree(options, running, execute)
+      : await execute(options.workspaceDir);
+  } catch (error) {
+    result = {
+      status: 'failed',
+      summary: `PR guardian worktree failed: ${String(error)}`,
+      raw: String(error),
+      durationMs: 0
+    };
+  }
   const finished: PrGuardianJob = {
     ...running,
     status: result.status === 'success' ? 'success' : result.status === 'skipped' ? 'skipped' : 'blocked',
@@ -166,8 +214,39 @@ export async function runPendingPrGuardianJobs(options: {
   config: KaizenConfig;
   workspaceDir: string;
   runCommand: CommandRunner;
+  isolateWorktree?: boolean;
 }): Promise<PrGuardianJob[]> {
-  const jobs = await listPrGuardianJobs(options.stateDir);
+  let jobs = await listPrGuardianJobs(options.stateDir);
+  for (const job of jobs.filter((candidate) => candidate.status === 'success')) {
+    const gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
+    if (gate.state !== 'OPEN') {
+      if (job.lastObservedFingerprint !== gate.activityFingerprint) {
+        await writeGuardianJob(options.stateDir, { ...job, lastObservedFingerprint: gate.activityFingerprint });
+      }
+      continue;
+    }
+    const observedJob = gate.headRefOid && gate.headRefOid !== job.headSha
+      ? { ...job, headSha: gate.headRefOid }
+      : job;
+    if (gate.isReady) {
+      if (observedJob !== job || job.lastObservedFingerprint !== gate.activityFingerprint) {
+        await writeGuardianJob(options.stateDir, {
+          ...observedJob,
+          lastObservedFingerprint: gate.activityFingerprint
+        });
+      }
+      continue;
+    }
+    await writeGuardianJob(options.stateDir, {
+      ...observedJob,
+      status: 'pending',
+      reactivationCount: (job.reactivationCount ?? 0) + 1,
+      lastObservedFingerprint: gate.activityFingerprint,
+      updatedAt: new Date().toISOString(),
+      lastBlocker: `PR regressed after guardian success: ${gate.blockers.join('; ')}`
+    });
+  }
+  jobs = await listPrGuardianJobs(options.stateDir);
   for (const job of jobs) {
     if (isStaleRunningJob(job, options.config.guardian.timeoutMinutes) && job.attemptCount >= job.retryBudget) {
       const now = new Date().toISOString();
@@ -193,6 +272,46 @@ export async function runPendingPrGuardianJobs(options: {
     results.push(await runPrGuardianJob({ ...options, job }));
   }
   return results;
+}
+
+function requestForJob(
+  options: { config: KaizenConfig; workspaceDir: string },
+  job: PrGuardianJob
+): PrGuardianSkillRequest {
+  return {
+    config: options.config,
+    workspaceDir: options.workspaceDir,
+    repo: job.repo,
+    prUrl: job.prUrl,
+    prNumber: job.prNumber,
+    branch: job.branch,
+    baseBranch: job.baseBranch
+  };
+}
+
+async function withGuardianWorktree<T>(
+  options: { stateDir: string; workspaceDir: string; runCommand: CommandRunner },
+  job: PrGuardianJob,
+  execute: (workspaceDir: string) => Promise<T>
+): Promise<T> {
+  const git = new GitClient(options.runCommand, options.workspaceDir);
+  const worktreePath = path.join(options.stateDir, 'guardian', 'worktrees', job.id);
+  const localBranch = `kaizen-guardian/pr-${job.prNumber}-${job.headSha.slice(0, 12)}`;
+  await git.fetch();
+  await git.worktreePrune();
+  await git.worktreeRemove(worktreePath);
+  await fs.rm(worktreePath, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+  await git.deleteLocalBranch(localBranch);
+  await git.worktreeAdd(worktreePath, localBranch, job.headSha);
+  try {
+    return await execute(worktreePath);
+  } finally {
+    await git.worktreeRemove(worktreePath);
+    await fs.rm(worktreePath, { recursive: true, force: true });
+    await git.deleteLocalBranch(localBranch);
+    await git.worktreePrune();
+  }
 }
 
 export async function runPrGuardianSkill(
@@ -363,6 +482,7 @@ interface PrGateSummary {
   reviewDecision?: string;
   headRefOid?: string;
   activityFingerprint?: string;
+  reviewBlockers?: string[];
   checks: PrCheckSummary[];
 }
 
@@ -403,9 +523,15 @@ interface PullRequestViewResponse {
   mergeable?: string;
   reviewDecision?: string;
   headRefOid?: string;
-  reviews?: Array<{ id?: string; submittedAt?: string; commit?: { oid?: string } | null }>;
-  comments?: Array<{ id?: string; updatedAt?: string }>;
-  statusCheckRollup?: Array<Record<string, unknown>>;
+  comments?: Array<{ id?: string; updatedAt?: string; author?: { login?: string } | null; body?: string }>;
+}
+
+interface PullRequestReviewResponse {
+  id?: number;
+  user?: { login?: string } | null;
+  state?: string;
+  submitted_at?: string;
+  commit_id?: string;
 }
 
 const REVIEW_THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -498,6 +624,7 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
   const terminal = pullRequest.state === 'MERGED';
   const blockers = [
     ...mergeabilityBlockers(pullRequest),
+    ...(pullRequest.reviewBlockers ?? []),
     ...(terminal ? [] : unresolvedThreads.map((thread) => {
       const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
       const author = thread.author ? ` by ${thread.author}` : '';
@@ -507,6 +634,10 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
 
   return {
     ...pullRequest,
+    activityFingerprint: JSON.stringify({
+      pullRequest: pullRequest.activityFingerprint,
+      unresolvedThreads
+    }),
     blockers,
     isReady: blockers.length === 0
   };
@@ -516,20 +647,24 @@ async function inspectPullRequest(
   runCommand: CommandRunner,
   req: PrGuardianSkillRequest
 ): Promise<Omit<PrGateSummary, 'isReady' | 'blockers'>> {
-  const result = await runCommand('gh', [
-    'pr',
-    'view',
-    String(req.prNumber),
-    '--repo',
-    req.repo,
-    '--json',
-    'state,isDraft,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup,headRefOid,reviews,comments'
-  ], {
-    cwd: req.workspaceDir,
-    env: githubCliEnv(),
-    timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
-    rejectOnNonZero: false
-  });
+  const [result, reviews, requiredChecks] = await Promise.all([
+    runCommand('gh', [
+      'pr',
+      'view',
+      String(req.prNumber),
+      '--repo',
+      req.repo,
+      '--json',
+      'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,comments'
+    ], {
+      cwd: req.workspaceDir,
+      env: githubCliEnv(),
+      timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+      rejectOnNonZero: false
+    }),
+    listPullRequestReviews(runCommand, req),
+    listRequiredChecks(runCommand, req)
+  ]);
   if (result.exitCode !== 0) {
     throw new Error(`Could not inspect PR mergeability: ${result.stderr || result.stdout}`);
   }
@@ -543,20 +678,88 @@ async function inspectPullRequest(
     headRefOid: parsed.headRefOid,
     activityFingerprint: JSON.stringify({
       headRefOid: parsed.headRefOid,
-      checks: normalizeStatusChecks(parsed.statusCheckRollup),
-      reviews: (parsed.reviews ?? []).map((review) => [review.id, review.submittedAt, review.commit?.oid]),
+      checks: requiredChecks,
+      reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
       comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
     }),
-    checks: normalizeStatusChecks(parsed.statusCheckRollup)
+    reviewBlockers: currentHeadReviewBlockers(parsed, reviews),
+    checks: requiredChecks
   };
 }
 
-function normalizeStatusChecks(statusCheckRollup: Array<Record<string, unknown>> | undefined): PrCheckSummary[] {
-  return (statusCheckRollup ?? []).map((check) => ({
-    name: String(check.name ?? check.context ?? '(unknown check)'),
-    status: String(check.status ?? check.state ?? ''),
-    ...(typeof check.conclusion === 'string' ? { conclusion: check.conclusion } : {})
+async function listRequiredChecks(runCommand: CommandRunner, req: PrGuardianSkillRequest): Promise<PrCheckSummary[]> {
+  const result = await runCommand('gh', [
+    'pr',
+    'checks',
+    String(req.prNumber),
+    '--repo',
+    req.repo,
+    '--required',
+    '--json',
+    'name,state,bucket,workflow'
+  ], {
+    cwd: req.workspaceDir,
+    env: githubCliEnv(),
+    timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+    rejectOnNonZero: false
+  });
+  if (!result.stdout.trim()) {
+    if (result.exitCode === 0) return [];
+    if (/no required checks reported/i.test(result.stderr)) return [];
+    throw new Error(`Could not inspect required PR checks: ${result.stderr || `exit ${result.exitCode}`}`);
+  }
+  const checks = JSON.parse(result.stdout) as Array<{ name?: string; state?: string; bucket?: string }>;
+  return checks.map((check) => ({
+    name: check.name ?? '(unknown check)',
+    status: check.bucket === 'pass' || check.bucket === 'skipping' ? 'SUCCESS' : String(check.state ?? check.bucket ?? '')
   }));
+}
+
+async function listPullRequestReviews(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest
+): Promise<PullRequestReviewResponse[]> {
+  const result = await runCommand('gh', [
+    'api',
+    `repos/${req.repo}/pulls/${req.prNumber}/reviews?per_page=100`,
+    '--paginate',
+    '--slurp'
+  ], {
+    cwd: req.workspaceDir,
+    env: githubCliEnv(),
+    timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+    rejectOnNonZero: false
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not inspect PR reviews: ${result.stderr || result.stdout}`);
+  }
+  const pages = JSON.parse(result.stdout || '[]') as PullRequestReviewResponse[] | PullRequestReviewResponse[][];
+  return Array.isArray(pages[0])
+    ? (pages as PullRequestReviewResponse[][]).flat()
+    : pages as PullRequestReviewResponse[];
+}
+
+function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: PullRequestReviewResponse[]): string[] {
+  if (!parsed.headRefOid || parsed.state === 'MERGED') return [];
+  const latestByBot = new Map<string, PullRequestReviewResponse>();
+  for (const review of reviews) {
+    const login = normalizeReviewerLogin(review.user?.login);
+    if (!login.includes('codex') && !login.includes('coderabbit')) continue;
+    const current = latestByBot.get(login);
+    if (!current || String(review.submitted_at ?? '') > String(current.submitted_at ?? '')) latestByBot.set(login, review);
+  }
+  return [...latestByBot.entries()].flatMap(([login, review]) => {
+    if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'].includes(review.state ?? '')) {
+      return [`${login} review is not terminal for current PR head ${parsed.headRefOid}`];
+    }
+    return review.commit_id === parsed.headRefOid
+      ? []
+      : [`${login} review is not for current PR head ${parsed.headRefOid}`];
+  });
+}
+
+function normalizeReviewerLogin(login: string | undefined): string {
+  return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
 }
 
 function mergeabilityBlockers(state: Omit<PrGateSummary, 'isReady' | 'blockers'>): string[] {
@@ -574,7 +777,7 @@ function mergeabilityBlockers(state: Omit<PrGateSummary, 'isReady' | 'blockers'>
 }
 
 function isCleanMergeState(value: string | undefined): boolean {
-  return value === 'CLEAN' || value === 'HAS_HOOKS';
+  return value === 'CLEAN' || value === 'HAS_HOOKS' || value === 'UNSTABLE';
 }
 
 const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'SKIPPED', 'NEUTRAL']);
@@ -658,13 +861,15 @@ Monitor this pull request until it is mergeable or a real blocker remains:
 
 Requirements:
 - Read and follow skills/pr-guardian/SKILL.md.
+- This is an isolated worktree pinned to the recorded PR head. Before every push, compare GitHub headRefOid with the worktree's initial HEAD and stop without pushing if it changed; push only HEAD to the explicit remote branch ${req.branch}, without force.
 - Check the PR with gh pr view and gh pr checks.
 - Watch relevant workflow runs with gh run watch --exit-status when a run exists.
 - Always inspect PR review feedback before declaring the PR ready to merge. Do not require reviewDecision=APPROVED or human approval unless GitHub branch protection explicitly requires it.
 - Fetch inline review threads and PR comments with resolution state using paginated GraphQL/API reads, iterating until hasNextPage=false, for example via PullRequest.reviewThreads, so unresolved actionable feedback cannot be missed.
+- Fetch review commit evidence from the paginated REST pulls/${req.prNumber}/reviews endpoint and compare commit_id with the pinned head; gh pr view review objects are not current-head evidence.
 - Address every unresolved actionable review thread, PR comment, and check annotation with focused commits or an explicit disposition, then push any fixes. If you can resolve an addressed review thread, resolve it after replying with the disposition.
 - Reply in the same review thread or comment for each addressed review item with the action taken and validation run before resolving it. If GitHub does not support a threaded reply for that item, add a PR comment that links to the original comment or review and lists the action taken.
-- Stop only when GitHub reports the PR as fully mergeable: mergeable=MERGEABLE, mergeStateStatus=CLEAN or HAS_HOOKS, required checks are passing, and no unresolved review threads or actionable PR comments remain. If branch protection requires conversation resolution, outdated unresolved threads still block merging until they are replied to and resolved. A missing approval or reviewDecision other than APPROVED is not a blocker by itself; inspect comments again after every pushed fix.
+- Stop only when GitHub reports the PR as fully mergeable: mergeable=MERGEABLE, mergeStateStatus=CLEAN, HAS_HOOKS, or UNSTABLE with only documented non-required failures, required checks are passing, and no unresolved review threads or actionable PR comments remain. If branch protection requires conversation resolution, outdated unresolved threads still block merging until they are replied to and resolved. A missing approval or reviewDecision other than APPROVED is not a blocker by itself; inspect comments again after every pushed fix.
 - Re-check the PR state during every wait. If GitHub reports state=MERGED, stop all watches immediately and exit successfully so the parent guardian can reap this worker. A merged PR is a terminal success even if review threads remain unresolved; do not keep waiting or editing after merge.
 - Do not merge the PR.
 - Before finishing, comment on the PR with final mergeability, watched runs, fixes pushed, feedback addressed, unresolved/skipped feedback with reasons, and remaining blockers.`;
