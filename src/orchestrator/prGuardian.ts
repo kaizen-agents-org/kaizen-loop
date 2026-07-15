@@ -51,6 +51,7 @@ export interface PrGuardianSkillResult {
   raw: string;
   durationMs: number;
   jobId?: string;
+  headSha?: string;
 }
 
 export function guardianJobsDir(stateDir: string): string {
@@ -183,14 +184,20 @@ export async function runPrGuardianJob(options: {
       durationMs: 0
     };
   }
+  const observedHeadSha = result.status === 'success' ? result.headSha : undefined;
   const finished: PrGuardianJob = {
     ...running,
+    id: observedHeadSha ? guardianJobId(running.repo, running.prNumber, observedHeadSha) : running.id,
+    headSha: observedHeadSha ?? running.headSha,
     status: result.status === 'success' ? 'success' : result.status === 'skipped' ? 'skipped' : 'blocked',
     updatedAt: new Date().toISOString(),
     lastCheckedAt: new Date().toISOString(),
     lastBlocker: result.status === 'success' ? undefined : result.summary
   };
   await writeGuardianJob(options.stateDir, finished);
+  if (finished.id !== running.id) {
+    await fs.rm(path.join(guardianJobsDir(options.stateDir), `${running.id}.json`), { force: true });
+  }
   await syncImplementationState(options.stateDir, finished);
   return finished;
 }
@@ -320,7 +327,8 @@ export async function runPrGuardianSkill(
         status: 'success',
         summary: successSummary({ ...initialState, isReady: true, blockers: [] }),
         raw: '',
-        durationMs: Date.now() - startMs
+        durationMs: Date.now() - startMs,
+        headSha: initialState.headRefOid
       };
     }
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -333,7 +341,8 @@ export async function runPrGuardianSkill(
               status: 'success',
               summary: successSummary(stablePreflight),
               raw: rawOutputs.join('\n'),
-              durationMs: Date.now() - startMs
+              durationMs: Date.now() - startMs,
+              headSha: stablePreflight.headRefOid
             };
           }
           rawOutputs.push(`PR became not merge-ready after retry preflight settle wait before pass ${attempt}:\n${summarizeGate(stablePreflight)}`);
@@ -379,7 +388,8 @@ export async function runPrGuardianSkill(
           status: 'success',
           summary: successSummary(lateGate),
           raw: rawOutputs.join('\n'),
-          durationMs: Date.now() - startMs
+          durationMs: Date.now() - startMs,
+          headSha: lateGate.headRefOid
         };
       }
       rawOutputs.push(`PR still not merge-ready after guardian pass ${attempt}:\n${summarizeGate(gate)}`);
@@ -693,6 +703,7 @@ async function listRequiredChecks(runCommand: CommandRunner, req: PrGuardianSkil
   });
   if (!result.stdout.trim()) {
     if (result.exitCode === 0) return [];
+    if (result.exitCode === 1 && /no required checks (reported|found)/i.test(result.stderr)) return [];
     throw new Error(`Could not inspect required PR checks: ${result.stderr || `exit ${result.exitCode}`}`);
   }
   const checks = JSON.parse(result.stdout) as Array<{ name?: string; state?: string; bucket?: string }>;

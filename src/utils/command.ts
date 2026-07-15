@@ -15,13 +15,17 @@ export const DEFAULT_ENV_ALLOWLIST = [
   'TMP',
   'TEMP',
   'KAIZEN_TMPDIR',
-  'KAIZEN_HOME',
-  'GH_CONFIG_DIR',
-  'SSH_AUTH_SOCK',
-  'GIT_SSH_COMMAND'
+  'KAIZEN_HOME'
 ];
 
-const GITHUB_CLI_AUTH_ENV_ALLOWLIST = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
+  'GH_CONFIG_DIR',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN'
+];
+const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 let shutdownHooksInstalled = false;
@@ -166,6 +170,10 @@ export function buildAllowlistedEnv(
 
 export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
+}
+
+export function gitCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 }
 
 export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner {

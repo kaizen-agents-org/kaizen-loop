@@ -106,6 +106,7 @@ async function setupProject(options: { createWorkspace?: boolean } = {}) {
   vi.stubEnv('KAIZEN_HOME', home);
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   const config = parse(defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })) as Record<string, any>;
+  config.safety.operationMode = 'dogfood';
   config.verifier.enabled = false;
   config.guardian.enabled = false;
   config.issues.selection.excludeLabels = [];
