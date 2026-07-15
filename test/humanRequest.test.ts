@@ -24,6 +24,22 @@ describe('human request protocol', () => {
     expect(body).toContain('"state":"pending"');
   });
 
+  it('parses marker questions containing JSON braces', () => {
+    const questionWithJson = {
+      ...request,
+      question: 'Approve using { "env": "prod" } for this run?'
+    };
+    const issue = {
+      ...issueWithRequest('pending'),
+      comments: [{
+        body: buildHumanRequestComment(questionWithJson, 'run-1'),
+        createdAt: '2026-07-16T00:00:00Z'
+      }]
+    };
+
+    expect(latestHumanRequestRecord(issue, questionWithJson)?.question).toBe(questionWithJson.question);
+  });
+
   it('acknowledges only a removal after the exact pending request was labeled', () => {
     const issue = issueWithRequest('pending');
     const events = [

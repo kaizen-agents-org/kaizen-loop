@@ -145,8 +145,8 @@ stateDiagram-v2
     InProgress --> Blocked: 自動処理続行不能<br/>(kaizen:blocked)
     InProgress --> NeedsHuman: 具体的な確認要求<br/>(kaizen:needs-human)
     NeedsHuman --> Open: 人間が回答・承認 +<br/>needs-human を外す
-    Open --> UpstreamFirst: 上流対応が先
-    Open --> NotActionable: 現在は実行不能
+    InProgress --> UpstreamFirst: 上流対応が先
+    InProgress --> NotActionable: 現在は実行不能
     Blocked --> Open: blocker 解消 +<br/>blocked を外す
     AttemptsExhausted --> Open: retry 方針確認 +<br/>attempts-exhausted を外す
     UpstreamFirst --> Open: 上流対応完了 +<br/>upstream-first を外す

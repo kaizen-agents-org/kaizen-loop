@@ -144,10 +144,10 @@ export function humanRequestWasAcknowledged(options: {
 }
 
 function parseHumanRequestMarker(body: string): HumanRequestMarker | undefined {
-  const match = body.match(/<!--\s*kaizen-loop:human-request\s+({.*?})\s*-->/s);
+  const match = body.match(/<!--\s*kaizen-loop:human-request\s+([\s\S]*?)\s*-->/);
   if (!match) return undefined;
   try {
-    const marker = JSON.parse(match[1]) as Partial<HumanRequestMarker>;
+    const marker = JSON.parse(match[1].trim()) as Partial<HumanRequestMarker>;
     if (
       marker.version !== HUMAN_REQUEST_VERSION ||
       typeof marker.id !== 'string' ||
