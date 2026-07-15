@@ -43,6 +43,97 @@ describe('evaluateIssueIntake', () => {
     expect(decision.reason).toContain('kaizen-agents-org/.github');
   });
 
+  it('routes live cross-repository workflows to a human', () => {
+    const decision = evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Complete first non-Node dogfood run: Issue→PR→merge on a non-Node repository',
+        body: [
+          'Select a separate Rust repository.',
+          'Run kaizen init there.',
+          'Complete the live Issue→PR→merge workflow.'
+        ].join('\n')
+      })
+    });
+
+    expect(decision.status).toBe('needs_human');
+    expect(decision.reason).toContain('outside kaizen-agents-org/.github');
+  });
+
+  it('routes imperative body-only cross-repository workflows to a human', () => {
+    expect(evaluateIssueIntake({
+      repo: 'o/r',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Dogfood the full workflow',
+        body: [
+          '- Select another Python repository.',
+          '- Run kaizen init there.',
+          '- Open and merge the resulting pull request.'
+        ].join('\n')
+      })
+    }).status).toBe('needs_human');
+  });
+
+  it('routes workflows naming a specific external repository to a human', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Run kaizen init in kaizen-agents-org/python-dogfood',
+        body: 'Open and merge the resulting pull request in that repository.'
+      })
+    }).status).toBe('needs_human');
+  });
+
+  it('uses non-imperative target metadata when classifying live directives', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Complete the non-Node dogfood run',
+        body: [
+          'Target repository: kaizen-agents-org/python-dogfood',
+          'Run kaizen init there.',
+          'Open and merge the resulting pull request.'
+        ].join('\n')
+      })
+    }).status).toBe('needs_human');
+  });
+
+  it('does not route command-shaped failure reports as live external work', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Run kaizen init in another repository fails',
+        body: [
+          'Steps to reproduce:',
+          '- Select a separate Rust repository.',
+          '- Run kaizen init there.',
+          'Expected: Kaizen Loop should report the failure and continue safely.'
+        ].join('\n')
+      })
+    }).status).toBe('proceed');
+  });
+
+  it('does not route reports about cross-repository dispatch as live external work', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        title: 'Kaizen Loop dispatches Issue→PR→merge work on another repo to a single-repo builder',
+        body: [
+          'Issue #120 asks the builder to perform these steps:',
+          '- Select an external repository.',
+          '- Run kaizen init there.',
+          'Expected: Kaizen Loop should detect this unsupported scope and route it to a human.'
+        ].join('\n')
+      })
+    }).status).toBe('proceed');
+  });
+
   it('does not treat file paths as upstream repositories', () => {
     expect(evaluateIssueIntake({
       repo: 'kaizen-agents-org/kaizen-loop',

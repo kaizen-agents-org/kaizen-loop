@@ -978,6 +978,75 @@ describe('runKaizen PR flow', () => {
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'list')).toHaveLength(1);
   });
 
+  it('hands live cross-repository workflows to a human before starting the builder', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const externalWorkflow = issue(1, {
+      title: 'Complete a live dogfood run in another repository',
+      body: [
+        'Select a separate Rust repository.',
+        'Run kaizen init there.',
+        'Complete the live Issue→PR→merge workflow.'
+      ].join('\n')
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(externalWorkflow));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, '[]');
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      throw new Error(`builder started unexpectedly: ${command}`);
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues).toEqual([]);
+    expect('issues' in summary && summary.skipped[0]?.reason).toContain('intake needs_human');
+    const commentCall = runner.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'comment');
+    const bodyIndex = commentCall?.[1].indexOf('--body') ?? -1;
+    const commentBody = commentCall?.[1][bodyIndex + 1];
+    expect(commentBody).toContain('<!-- kaizen-loop:intake-decision status=needs_human -->');
+    expect(commentBody).toContain('requires live actions in a repository outside o/r');
+    expect(runner).toHaveBeenCalledWith(
+      'gh',
+      expect.arrayContaining(['issue', 'edit', '1', '--add-label', 'kaizen:needs-human']),
+      expect.any(Object)
+    );
+    expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
+  });
+
   it('does not repost an already-resolved intake comment with an existing marker', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

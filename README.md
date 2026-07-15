@@ -152,7 +152,7 @@ The important contract points are:
 - `commands.verify` is the mechanical gate; every command must pass before PR/direct reflection continues.
 - `builder.command` receives the issue prompt on stdin and writes `builder.resultPath`.
 - `verifier.command` receives a verifier prompt on stdin and writes `verifier.resultPath`.
-- The intake gate treats issues as evidence, not orders: unsupported source-of-truth syncs, guardrail regressions, missing context, and already-covered work are commented and skipped before builder-agent runs.
+- The intake gate treats issues as evidence, not orders: live workflows targeting another repository are handed to a human, while unsupported source-of-truth syncs, guardrail regressions, missing context, and already-covered work are commented and skipped before builder-agent runs.
 - `guardian.command` runs the vendored `pr-guardian` workflow after PR creation; `guardian.mode: async` persists resumable jobs under `~/.kaizen/projects/<slug>/guardian/jobs/`. Durable reconciliation also adopts same-repository generated sync PRs carrying `<!-- kaizen-pr-guardian:managed -->`, runs them in isolated worktrees, and re-observes successful open jobs so a same-head late review reactivates the loop. In repositories that require conversation resolution, outdated unresolved threads still block merging until they are resolved.
 - `safety.minFreeDiskMb` and `safety.envAllowlist` control workspace preflight capacity and the environment exposed to shell, builder, verifier, guardian, and goal commands.
 - `policy.mode`, protected paths, forbidden paths, labels, diff size, and verifier output decide whether the result becomes a PR, a direct commit, or a human handoff.

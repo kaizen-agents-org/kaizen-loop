@@ -84,11 +84,12 @@ gh issue list --label kaizen --state open \
 
 選択後、worktree 作成や builder-agent 実行の前に intake gate を通す。Issue は実装命令ではなく改善候補の証拠として扱う。
 
-gate は構造化 decision を出し、`proceed` 以外は Issue コメントと run summary の skipped reason に記録する。`needs_context` / `upstream_first` / `not_improvement` は `kaizen:needs-human` を付けて人間判断へ戻す。
+gate は構造化 decision を出し、`proceed` 以外は Issue コメントと run summary の skipped reason に記録する。`needs_human` / `needs_context` / `upstream_first` / `not_improvement` は `kaizen:needs-human` を付けて人間判断へ戻す。
 
 | decision | 意味 |
 |---|---|
 | `proceed` | scoped improvement として builder-agent に渡す |
+| `needs_human` | 別リポジトリでの live 操作など、現在の builder workspace / execution authorization の外にある作業 |
 | `needs_context` | 情報不足。Issue に不足情報をコメントする |
 | `upstream_first` | source-of-truth / upstream を先に直すべき |
 | `not_improvement` | safety / verification / review guardrail を弱める可能性が高い |
