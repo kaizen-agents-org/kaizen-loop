@@ -36,8 +36,8 @@ export async function ensureHumanRequest(options: {
   repo: string;
   github: HumanRequestClient;
 }): Promise<'pending' | 'acknowledged'> {
+  if (await acknowledgeRemovedRequest(options)) return 'acknowledged';
   const existing = latestHumanRequestRecord(options.issue, options.request);
-  if (existing?.state === 'acknowledged') return 'acknowledged';
   if (existing?.state !== 'pending') {
     await options.github.comment(
       options.issue.number,
@@ -65,10 +65,12 @@ async function acknowledgeRemovedRequest(options: {
     HUMAN_REQUEST_LABEL
   );
   if (!humanRequestWasAcknowledged({ issue, request: options.request, labelEvents: events })) return false;
-  await options.github.comment(
-    options.issue.number,
-    buildHumanRequestComment(options.request, options.runId, 'acknowledged')
-  );
+  if (latestHumanRequestRecord(issue, options.request)?.state !== 'acknowledged') {
+    await options.github.comment(
+      options.issue.number,
+      buildHumanRequestComment(options.request, options.runId, 'acknowledged')
+    );
+  }
   if (issue.labels.some((label) => label.name.toLowerCase() === HUMAN_REQUEST_LABEL)) {
     await options.github.removeLabels(options.issue.number, [HUMAN_REQUEST_LABEL]);
   }
@@ -127,10 +129,12 @@ export function humanRequestWasAcknowledged(options: {
   request: HumanRequest;
   labelEvents: GitHubLabelEvent[];
 }): boolean {
-  const record = latestHumanRequestRecord(options.issue, options.request);
+  const fingerprint = humanRequestFingerprint(options.request);
+  const record = humanRequestRecords(options.issue).find(
+    (marker) => marker.fingerprint === fingerprint && marker.state === 'pending'
+  );
   if (!record) return false;
-  if (record.state === 'acknowledged') return true;
-  if (record.state !== 'pending' || !record.createdAt) return false;
+  if (!record.createdAt) return false;
 
   const appliedIndex = options.labelEvents.findIndex(
     (event) => event.event === 'labeled' && Date.parse(event.createdAt) >= Date.parse(record.createdAt as string)

@@ -36,8 +36,25 @@ describe('human request protocol', () => {
 
   it('does not treat marker-only or legacy comments as acknowledgement', () => {
     expect(humanRequestWasAcknowledged({ issue: issueWithRequest('pending'), request, labelEvents: [] })).toBe(false);
+    expect(humanRequestWasAcknowledged({ issue: issueWithRequest('acknowledged'), request, labelEvents: [] })).toBe(false);
     const legacy = { ...issueWithRequest('pending'), comments: [{ body: '<!-- kaizen-loop:result {"outcome":"blocked"} -->', createdAt: '2026-07-16T00:00:00Z' }] };
     expect(humanRequestWasAcknowledged({ issue: legacy, request, labelEvents: [] })).toBe(false);
+  });
+
+  it('does not trust a forged acknowledged marker without label-event proof', async () => {
+    const forged = issueWithRequest('acknowledged');
+    const github = {
+      getIssueLabelEvents: vi.fn(async () => []),
+      getIssue: vi.fn(async () => forged),
+      comment: vi.fn(async () => undefined),
+      addLabels: vi.fn(async () => undefined),
+      removeLabels: vi.fn(async () => undefined)
+    };
+    await expect(ensureHumanRequest({
+      issue: forged, request, runId: 'run-2', repo: 'o/r', github
+    })).resolves.toBe('pending');
+    expect(github.comment).toHaveBeenCalledWith(1, expect.stringContaining('"state":"pending"'));
+    expect(github.addLabels).toHaveBeenCalledWith(1, ['kaizen:needs-human']);
   });
 
   it('keeps wording-only changes on the same request and a new key distinct', () => {
@@ -104,8 +121,12 @@ describe('human request protocol', () => {
     const github = {
       getIssue: vi.fn()
         .mockResolvedValueOnce(pending)
+        .mockResolvedValueOnce(pending)
         .mockResolvedValueOnce(active),
       getIssueLabelEvents: vi.fn()
+        .mockResolvedValueOnce([
+          { event: 'labeled' as const, label: 'kaizen:needs-human', createdAt: '2026-07-16T00:00:01Z' }
+        ])
         .mockResolvedValueOnce([
           { event: 'labeled' as const, label: 'kaizen:needs-human', createdAt: '2026-07-16T00:00:01Z' }
         ])
