@@ -1,6 +1,6 @@
 import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
-import { countAttempts, hasPendingPullRequest } from '../report/comments.js';
+import { hasPendingPullRequest } from '../report/comments.js';
 import { TERMINAL_DISPOSITION_LABELS } from './disposition.js';
 
 export interface IssueSelection {
@@ -65,12 +65,6 @@ export function selectIssues(options: {
 
     if (!options.explicit && hasPendingPullRequest(issue.comments ?? [], options.openPullRequests)) {
       skipped.push({ number: issue.number, reason: 'pending pull request' });
-      return false;
-    }
-
-    const attempts = countAttempts(issue.comments ?? []);
-    if (attempts >= options.config.run.maxAttemptsPerIssue) {
-      skipped.push({ number: issue.number, reason: 'max attempts reached' });
       return false;
     }
 

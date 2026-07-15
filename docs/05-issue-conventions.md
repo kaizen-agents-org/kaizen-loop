@@ -57,7 +57,7 @@ primary disposition は次のうち最大 1 つだけを付ける。`kaizen:need
 | `kaizen:blocked` | オーケストレータ | 自動処理が技術的・状態的理由で続行不能。人間への質問を意味しない。原因を解消して再試行する場合はこのラベルを外す |
 | `kaizen:upstream-first` | オーケストレータ | source-of-truth / upstream の変更が先。上流対応完了後、再評価する場合に外す |
 | `kaizen:not-actionable` | オーケストレータ | 現在の Issue は安全な改善として実行不能。内容を実質的に修正して再評価する場合に外す |
-| `kaizen:attempts-exhausted` | オーケストレータ | 自動試行 budget 枯渇。原因と retry 方針を確認し、明示的に再試行する場合に外す |
+| `kaizen:attempts-exhausted` | オーケストレータ | 自動試行 budget 枯渇。原因と retry 方針を確認し、明示的に 1 回再試行する場合に外す。過去の attempt 履歴だけでは再選択を妨げず、再失敗時はラベルを再付与する |
 
 `kaizen:in-progress` は primary disposition ではなく実行中を示す lifecycle ラベルである。処理開始時に既存 disposition をクリアし、終了時に結果に対応する disposition へ遷移する。24h 超で stale 扱いとする。
 

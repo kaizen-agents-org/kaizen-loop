@@ -154,6 +154,7 @@ describe('result comments', () => {
       { body: currentRetryable }
     ])).toBe(1);
     expect(hasRetryableExternalBlock([{ body: humanWithRetryableEvidence }])).toBe(false);
+    expect(countAttempts([{ body: humanWithRetryableEvidence }])).toBe(1);
   });
 
   it('uses the latest result when deciding whether a blocked issue is retryable', () => {

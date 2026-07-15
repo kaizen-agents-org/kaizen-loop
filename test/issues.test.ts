@@ -42,7 +42,7 @@ describe('selectIssues', () => {
       issues: [
         issue(1, 'needs human', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:needs-human']),
         {
-          ...issue(2, 'exhausted', '2026-06-12T02:00:00Z', ['kaizen']),
+          ...issue(2, 'exhausted', '2026-06-12T02:00:00Z', ['kaizen', 'kaizen:attempts-exhausted']),
           comments: [
             { body: '<!-- kaizen-loop:result {"attempt":1} -->' },
             { body: '<!-- kaizen-loop:result {"attempt":2} -->' }
@@ -55,8 +55,25 @@ describe('selectIssues', () => {
     expect(selection.selected.map((item) => item.number)).toEqual([3]);
     expect(selection.skipped).toEqual([
       { number: 1, reason: 'needs-human' },
-      { number: 2, reason: 'max attempts reached' }
+      { number: 2, reason: 'terminal disposition: kaizen:attempts-exhausted' }
     ]);
+  });
+
+  it('allows one new attempt after an operator removes attempts-exhausted', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [{
+        ...issue(1, 'retry approved', '2026-06-12T01:00:00Z', ['kaizen']),
+        comments: [
+          { body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"failed"} -->' },
+          { body: '<!-- kaizen-loop:result {"attempt":2,"outcome":"failed"} -->' }
+        ]
+      }]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
   });
 
   it('does not retry a reopened issue while its unanswered needs-human label remains active', () => {

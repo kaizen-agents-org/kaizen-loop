@@ -81,7 +81,9 @@ PR created (${options.prUrl}); monitoring CI and review feedback with pr-guardia
 export function countAttempts(comments: Array<{ body: string }>): number {
   return comments.filter((comment) => {
     const marker = parseKaizenMarker(comment.body, 'result');
-    return marker !== undefined && !marker.retryableExternal && !hasRetryableExternalEvidence(comment.body);
+    if (!marker) return false;
+    if (marker.humanConfirmationRequired === true) return true;
+    return !marker.retryableExternal && !hasRetryableExternalEvidence(comment.body);
   }).length;
 }
 
