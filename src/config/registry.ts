@@ -122,6 +122,13 @@ async function withRegistryLock<T>(filePath: string, action: () => Promise<T>): 
 }
 
 async function removeStaleLock(lockPath: string): Promise<boolean> {
+  let observedStats;
+  try {
+    observedStats = await fs.stat(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
   try {
     const owner = JSON.parse(await fs.readFile(path.join(lockPath, 'owner.json'), 'utf8')) as { pid?: number; createdAt?: number };
     if (owner.pid) {
@@ -132,14 +139,25 @@ async function removeStaleLock(lockPath: string): Promise<boolean> {
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
-    let stats;
-    try {
-      stats = await fs.stat(lockPath);
-    } catch (statError) {
-      if ((statError as NodeJS.ErrnoException).code === 'ENOENT') return true;
-      throw statError;
-    }
-    if (Date.now() - stats.mtimeMs < 5_000) return false;
+    if (Date.now() - observedStats.mtimeMs < 5_000) return false;
+  }
+
+  const reaperPath = path.join(lockPath, '.reaper');
+  try {
+    await fs.writeFile(reaperPath, String(process.pid), { flag: 'wx' });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return true;
+    if (code === 'EEXIST') return false;
+    throw error;
+  }
+
+  try {
+    const currentStats = await fs.stat(lockPath);
+    if (currentStats.dev !== observedStats.dev || currentStats.ino !== observedStats.ino) return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
   }
   await fs.rm(lockPath, { recursive: true, force: true });
   return true;

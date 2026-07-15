@@ -114,6 +114,52 @@ describe('registry', () => {
     expect(removedBeforeRelease).toBe(false);
     await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
   });
+
+  it('allows only one contender to reap the same stale lock', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    const reaper = path.join(lock, '.reaper');
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+
+    const originalWriteFile = fs.writeFile.bind(fs);
+    let releaseReaper: (() => void) | undefined;
+    const reaperHeld = new Promise<void>((resolve) => {
+      releaseReaper = resolve;
+    });
+    let firstReaperClaimed: (() => void) | undefined;
+    const firstClaim = new Promise<void>((resolve) => {
+      firstReaperClaimed = resolve;
+    });
+    let reaperAttempts = 0;
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (target, data, options) => {
+      const result = await originalWriteFile(target, data, options);
+      if (String(target) === reaper) {
+        reaperAttempts += 1;
+        if (reaperAttempts === 1) {
+          firstReaperClaimed?.();
+          await reaperHeld;
+        }
+      }
+      return result;
+    });
+
+    const first = updateRegistry((registry) => {
+      registry.projects.first = { ...project(), repo: 'owner/first' };
+    }, file);
+    await firstClaim;
+    const second = updateRegistry((registry) => {
+      registry.projects.second = { ...project(), repo: 'owner/second' };
+    }, file);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    releaseReaper?.();
+    await Promise.all([first, second]);
+
+    const loaded = await loadRegistry(file);
+    expect(Object.keys(loaded.projects).sort()).toEqual(['first', 'second']);
+    expect(reaperAttempts).toBe(1);
+  });
 });
 
 describe('registry project slugs', () => {
