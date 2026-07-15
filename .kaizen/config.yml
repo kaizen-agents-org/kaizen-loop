@@ -16,10 +16,6 @@ run:
   maxOpenPullRequests: 3
   latestStartHour: 7
 
-safety:
-  # Trusted self-organization dogfood keeps the existing label-selection behavior.
-  operationMode: dogfood
-
 scheduler:
   jobs:
     maintenance:
