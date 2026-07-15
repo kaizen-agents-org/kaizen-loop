@@ -160,6 +160,20 @@ describe('registry', () => {
     expect(Object.keys(loaded.projects).sort()).toEqual(['first', 'second']);
     expect(reaperAttempts).toBe(1);
   });
+
+  it('recovers a stale lock whose reaper process also died', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+    await fs.writeFile(path.join(lock, '.reaper'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe('registry project slugs', () => {

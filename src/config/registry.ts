@@ -144,11 +144,14 @@ async function removeStaleLock(lockPath: string): Promise<boolean> {
 
   const reaperPath = path.join(lockPath, '.reaper');
   try {
-    await fs.writeFile(reaperPath, String(process.pid), { flag: 'wx' });
+    await fs.writeFile(reaperPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), { flag: 'wx' });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return true;
-    if (code === 'EEXIST') return false;
+    if (code === 'EEXIST') {
+      await removeStaleReaper(reaperPath);
+      return false;
+    }
     throw error;
   }
 
@@ -161,6 +164,29 @@ async function removeStaleLock(lockPath: string): Promise<boolean> {
   }
   await fs.rm(lockPath, { recursive: true, force: true });
   return true;
+}
+
+async function removeStaleReaper(reaperPath: string): Promise<void> {
+  let observedStats;
+  try {
+    observedStats = await fs.stat(reaperPath);
+    const reaper = JSON.parse(await fs.readFile(reaperPath, 'utf8')) as { pid?: number; createdAt?: number };
+    const recent = typeof reaper.createdAt === 'number' && Date.now() - reaper.createdAt < 5_000;
+    if (recent && reaper.pid && isPidAlive(reaper.pid)) return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (!(error instanceof SyntaxError)) throw error;
+    observedStats ??= await fs.stat(reaperPath);
+    if (Date.now() - observedStats.mtimeMs < 5_000) return;
+  }
+
+  try {
+    const currentStats = await fs.stat(reaperPath);
+    if (currentStats.dev !== observedStats.dev || currentStats.ino !== observedStats.ino) return;
+    await fs.rm(reaperPath, { force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
 }
 
 function isPidAlive(pid: number): boolean {
