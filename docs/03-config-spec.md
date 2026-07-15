@@ -32,7 +32,7 @@ run:
   issueTimeoutMinutes: 120   # 1 Issue あたりのエージェント実行タイムアウト
   runTimeoutMinutes: 240     # 実行全体のタイムアウト(超過時は残 Issue をスキップして終了処理)
   maxVerifyRetries: 2        # 検証失敗時、エラーを添えてエージェントに再修正させる回数
-  maxAttemptsPerIssue: 3     # 夜をまたいだ累計試行回数。超えたら kaizen:attempts-exhausted へ
+  maxAttemptsPerIssue: 3     # 夜をまたいだ累計試行回数。上限に達したら kaizen:attempts-exhausted へ
   maxOpenPullRequests: 1     # 自動実行で新規 PR 作成を許可する repo 別 open PR 上限
   latestStartHour: 7         # scheduled 実行がこの時刻を過ぎて開始したらスキップ
 
