@@ -84,11 +84,12 @@ gh issue list --label kaizen --state open \
 
 選択後、worktree 作成や builder-agent 実行の前に intake gate を通す。Issue は実装命令ではなく改善候補の証拠として扱う。
 
-gate は構造化 decision を出し、`proceed` 以外は Issue コメントと run summary の skipped reason に記録する。`needs_context` / `upstream_first` / `not_improvement` は `kaizen:needs-human` を付けて人間判断へ戻す。
+gate は構造化 decision を出し、`proceed` 以外は Issue コメントと run summary の skipped reason に記録する。`needs_human` / `needs_context` / `upstream_first` / `not_improvement` は `kaizen:needs-human` を付けて人間判断へ戻す。
 
 | decision | 意味 |
 |---|---|
 | `proceed` | scoped improvement として builder-agent に渡す |
+| `needs_human` | 別リポジトリでの live 操作など、現在の builder workspace / execution authorization の外にある作業 |
 | `needs_context` | 情報不足。Issue に不足情報をコメントする |
 | `upstream_first` | source-of-truth / upstream を先に直すべき |
 | `not_improvement` | safety / verification / review guardrail を弱める可能性が高い |
@@ -248,7 +249,7 @@ codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 - さらに `## Evidence strength` セクションで、builder-agent の自己申告は `reported`、Kaizen Loop が実行した verify / verifier は `executed`、未設定の verify / verifier は `unverified`、git diff 由来の変更ファイル・行数は `static` として証拠強度を要約する
 - PR 作成直後、Kaizen Loop は Issue に PR リンクと「monitoring CI and review feedback」をコメントする
 - `guardian.mode: sync` では、Kaizen Loop は vendored `skills/pr-guardian/SKILL.md` を設定済みの `guardian.command` で実行する。CI 監視、`gh run watch`、未解決の actionable review feedback 対応、mergeable 判定は `pr-guardian` skill の責務。TypeScript 側は各 pass 後に未解決・非 outdated の review thread を確認し、残っていれば `guardian.maxAttempts` まで再実行する。approval 不足は branch protection が明示要求している場合だけ blocker として扱う
-- `guardian.mode: async` では、PR 作成後に `~/.kaizen/projects/<slug>/guardian/jobs/` へ job を保存して foreground run を終了する。job は repo、PR 番号、URL、branch、base branch、head SHA、retry budget、attempt count、status、last checked time、last blocker を持つ。`kaizen guardian watch` が pending job を再開し、`kaizen guardian run <pr>` は head SHA が変わっていれば新しい job として実行する
+- `guardian.mode: async` では、PR 作成後に `~/.kaizen/projects/<slug>/guardian/jobs/` へ job を保存して foreground run を終了する。job は repo、PR 番号、URL、branch、base branch、head SHA、retry budget、attempt count、status、last checked time、last blocker、late-review reactivation count を持つ。`kaizen guardian watch` は pending/blocked job に加えて successful open job を再観測し、同一 head に新しい blocker が現れた場合だけ再活性化する。既知marker付きの生成sync PRも採用し、利用者のcheckoutを変更しない隔離worktreeで処理する。`kaizen guardian run <pr>` は head SHA が変わっていれば新しい job として実行する
 - guardian 完了後、Issue には最終結果コメントを残す。Issue は**クローズしない**(PR マージ時に `Closes #N` で自動クローズ)
 - `kaizen:in-progress` は剥がす(PR レビュー待ちは人間のフェーズ)
 - checkpoint draft PR から再開した場合は、新規 PR を増やさず同じ PR の description と head を更新し、検証成功後に Ready for review へ昇格する

@@ -147,11 +147,21 @@ export class GitHubClient {
       '--state',
       'open',
       '--json',
-      'number,headRefName,headRepositoryOwner,createdAt,url,isDraft',
+      'number,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
       '--limit',
       String(limit)
     ]);
     return JSON.parse(result.stdout || '[]') as GitHubPullRequest[];
+  }
+
+  async listAllOpenPullRequests(): Promise<GitHubPullRequest[]> {
+    const result = await this.gh([
+      'api',
+      '--paginate',
+      '--slurp',
+      'repos/{owner}/{repo}/pulls?state=open&per_page=100'
+    ]);
+    return parsePaginatedOpenPullRequests(result.stdout);
   }
 
   async searchOpenPullRequestsForOwner(owner: string, limit = 1000): Promise<GitHubPullRequest[]> {
@@ -494,6 +504,41 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
     hasNextPage: Boolean(search?.pageInfo?.hasNextPage),
     endCursor: search?.pageInfo?.endCursor ?? undefined
   };
+}
+
+function parsePaginatedOpenPullRequests(stdout: string): GitHubPullRequest[] {
+  type RestPullRequest = {
+    number?: number;
+    draft?: boolean;
+    body?: string | null;
+    base?: { ref?: string };
+    head?: { ref?: string; sha?: string; repo?: { owner?: { login?: string } } | null };
+    user?: { login?: string; type?: string };
+    created_at?: string;
+    html_url?: string;
+  };
+
+  const payload = JSON.parse(stdout || '[]') as RestPullRequest[] | RestPullRequest[][];
+  const pullRequests = Array.isArray(payload[0])
+    ? (payload as RestPullRequest[][]).flat()
+    : (payload as RestPullRequest[]);
+
+  return pullRequests
+    .filter((pullRequest): pullRequest is RestPullRequest & { number: number; html_url: string } =>
+      Boolean(pullRequest.number && pullRequest.html_url)
+    )
+    .map((pullRequest) => ({
+      number: pullRequest.number,
+      isDraft: pullRequest.draft,
+      body: pullRequest.body ?? undefined,
+      baseRefName: pullRequest.base?.ref,
+      headRefName: pullRequest.head?.ref,
+      headRefOid: pullRequest.head?.sha,
+      headRepositoryOwner: pullRequest.head?.repo?.owner,
+      author: pullRequest.user,
+      createdAt: pullRequest.created_at,
+      url: pullRequest.html_url
+    }));
 }
 
 export class CreatedPullRequestValidationError extends Error {

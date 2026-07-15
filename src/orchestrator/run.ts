@@ -26,7 +26,13 @@ import {
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues, type IssueSelection } from './issues.js';
 import { RunLock } from './lock.js';
-import { enqueuePrGuardianJob, runPrGuardianSkill, type PrGuardianSkillResult } from './prGuardian.js';
+import {
+  enqueueManagedPrGuardianJobs,
+  enqueuePrGuardianJob,
+  runPendingPrGuardianJobs,
+  runPrGuardianSkill,
+  type PrGuardianSkillResult
+} from './prGuardian.js';
 import {
   buildIssueIntakeComment,
   evaluateIssueIntake,
@@ -262,6 +268,25 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     let runFailed = false;
     try {
       let selection = await selectRunIssues();
+      if (options.scheduled && config.guardian.enabled) {
+        try {
+          await enqueueManagedPrGuardianJobs({
+            stateDir,
+            config,
+            repo: resolved.project.repo,
+            pullRequests: selection.openPullRequests
+          });
+          await runPendingPrGuardianJobs({
+            stateDir,
+            config,
+            workspaceDir: resolved.project.workspacePath,
+            runCommand,
+            isolateWorktree: true
+          });
+        } catch (error) {
+          console.warn(`Scheduled PR Guardian reconciliation failed without blocking issue intake: ${String(error)}`);
+        }
+      }
       summary.skipped = selection.skipped;
       if (selection.selected.length > 0) {
         selection = await applyIssueIntakeGate({
