@@ -63,6 +63,29 @@ describe('registry', () => {
     await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
     await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('retries when a contended registry lock disappears during inspection', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    const originalStat = fs.stat.bind(fs);
+    let intercepted = false;
+    vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+      if (!intercepted && String(target) === lock) {
+        intercepted = true;
+        await fs.rm(lock, { recursive: true, force: true });
+        throw Object.assign(new Error('lock disappeared'), { code: 'ENOENT' });
+      }
+      return originalStat(target);
+    });
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    expect(intercepted).toBe(true);
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe('registry project slugs', () => {
