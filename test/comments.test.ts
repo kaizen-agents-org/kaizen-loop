@@ -121,6 +121,30 @@ describe('result comments', () => {
     expect(countConsecutiveRetryableBlocks([{ body: retryable }, { body: blocked }])).toBe(0);
   });
 
+  it('counts legacy retryable evidence toward the consecutive retry budget', () => {
+    const legacyRetryable = [
+      'failureClass=timeout; fallbackReason=rate_limited',
+      '<!-- kaizen-loop:result {"attempt":1,"outcome":"blocked"} -->'
+    ].join('\n');
+    const currentRetryable = buildResultComment({
+      runId: 'run', issue: 1, attempt: 2, outcome: 'blocked', agent: 'codex', summary: 'retry',
+      blockDisposition: 'retryable', maxAttempts: 3
+    });
+    const blocked = buildResultComment({
+      runId: 'run', issue: 1, attempt: 3, outcome: 'blocked', agent: 'codex', summary: 'blocked',
+      blockDisposition: 'blocked', maxAttempts: 3
+    });
+
+    expect(countConsecutiveRetryableBlocks([
+      { body: legacyRetryable },
+      { body: currentRetryable }
+    ])).toBe(2);
+    expect(countConsecutiveRetryableBlocks([
+      { body: legacyRetryable },
+      { body: blocked }
+    ])).toBe(0);
+  });
+
   it('uses the latest result when deciding whether a blocked issue is retryable', () => {
     const retryable = buildResultComment({
       runId: '2026-06-12T02-00-00Z',

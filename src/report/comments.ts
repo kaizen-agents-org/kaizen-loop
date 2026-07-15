@@ -101,7 +101,10 @@ export function countConsecutiveRetryableBlocks(comments: Array<{ body: string }
   for (const comment of [...comments].reverse()) {
     const marker = parseKaizenMarker(comment.body, 'result');
     if (!marker) continue;
-    if (marker.outcome === 'blocked' && marker.retryableExternal === true) {
+    if (
+      marker.outcome === 'blocked' &&
+      (marker.retryableExternal === true || hasRetryableExternalEvidence(comment.body))
+    ) {
       count += 1;
       continue;
     }
