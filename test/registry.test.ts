@@ -86,6 +86,34 @@ describe('registry', () => {
     await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
     await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('does not remove a young lock with partially written owner metadata', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), '{');
+    const originalRm = fs.rm.bind(fs);
+    let holderReleased = false;
+    let removedBeforeRelease = false;
+    vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (String(target) === lock && !holderReleased) removedBeforeRelease = true;
+      return originalRm(target, options);
+    });
+    const release = setTimeout(() => {
+      holderReleased = true;
+      void originalRm(lock, { recursive: true, force: true });
+    }, 100);
+
+    try {
+      await saveRegistry({ version: 1, projects: {} }, file);
+    } finally {
+      clearTimeout(release);
+    }
+
+    expect(removedBeforeRelease).toBe(false);
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+  });
 });
 
 describe('registry project slugs', () => {

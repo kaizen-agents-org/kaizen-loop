@@ -131,16 +131,15 @@ async function removeStaleLock(lockPath: string): Promise<boolean> {
       if (!expired) return false;
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      let stats;
-      try {
-        stats = await fs.stat(lockPath);
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') return true;
-        throw statError;
-      }
-      if (Date.now() - stats.mtimeMs < 5_000) return false;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    let stats;
+    try {
+      stats = await fs.stat(lockPath);
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code === 'ENOENT') return true;
+      throw statError;
     }
+    if (Date.now() - stats.mtimeMs < 5_000) return false;
   }
   await fs.rm(lockPath, { recursive: true, force: true });
   return true;
