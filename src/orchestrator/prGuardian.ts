@@ -226,14 +226,26 @@ export async function runPendingPrGuardianJobs(options: {
   let jobs = await listPrGuardianJobs(options.stateDir);
   for (const job of jobs.filter((candidate) => candidate.status === 'success')) {
     const gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
-    if (gate.state !== 'OPEN' || gate.headRefOid !== job.headSha || gate.isReady) {
+    if (gate.state !== 'OPEN') {
       if (job.lastObservedFingerprint !== gate.activityFingerprint) {
         await writeGuardianJob(options.stateDir, { ...job, lastObservedFingerprint: gate.activityFingerprint });
       }
       continue;
     }
+    const observedJob = gate.headRefOid && gate.headRefOid !== job.headSha
+      ? { ...job, headSha: gate.headRefOid }
+      : job;
+    if (gate.isReady) {
+      if (observedJob !== job || job.lastObservedFingerprint !== gate.activityFingerprint) {
+        await writeGuardianJob(options.stateDir, {
+          ...observedJob,
+          lastObservedFingerprint: gate.activityFingerprint
+        });
+      }
+      continue;
+    }
     await writeGuardianJob(options.stateDir, {
-      ...job,
+      ...observedJob,
       status: 'pending',
       reactivationCount: (job.reactivationCount ?? 0) + 1,
       lastObservedFingerprint: gate.activityFingerprint,
