@@ -45,6 +45,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
       })
     : undefined;
   const stateDir = projectStateDir(resolved.slug);
+  const lastRun = await readLastRun(stateDir);
   const lastSummary = await readLatestSummary(stateDir);
   const guardianJobs = await listPrGuardianJobs(stateDir);
   const implementationStates = await listImplementationStates(stateDir);
@@ -54,7 +55,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
     repo: resolved.project.repo,
     enabled: resolved.project.enabled,
     schedule: resolved.project.schedule,
-    lastRun: resolved.project.lastRun ?? lastSummary,
+    lastRun: lastRun ?? resolved.project.lastRun ?? lastSummary,
     issues: {
       open: issues.length,
       selectionMode: config.issues.selection.mode,
@@ -122,6 +123,14 @@ async function readLatestSummary(stateDir: string) {
     const latest = runs.at(-1);
     if (!latest) return undefined;
     return JSON.parse(await fs.readFile(path.join(runsDir, latest, 'summary.json'), 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLastRun(stateDir: string) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(stateDir, 'last-run.json'), 'utf8'));
   } catch {
     return undefined;
   }

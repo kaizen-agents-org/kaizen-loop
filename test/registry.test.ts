@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadRegistry, resolveProject, saveRegistry, upsertProject } from '../src/config/registry.js';
+import { loadRegistry, resolveProject, saveRegistry, updateRegistry, upsertProject } from '../src/config/registry.js';
 import type { RegistryProject } from '../src/config/schema.js';
 
 afterEach(() => {
@@ -33,6 +33,35 @@ describe('registry', () => {
 
     const loaded = await loadRegistry(file);
     expect(loaded.projects['owner-repo'].repo).toBe('owner/repo');
+  });
+
+  it('serializes concurrent read-modify-write updates without losing projects', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+
+    await Promise.all(Array.from({ length: 12 }, (_, index) => updateRegistry((registry) => {
+      registry.projects[`owner-repo-${index}`] = {
+        ...project(),
+        repo: `owner/repo-${index}`
+      };
+    }, file)));
+
+    const loaded = await loadRegistry(file);
+    expect(Object.keys(loaded.projects)).toHaveLength(12);
+    await expect(fs.readdir(dir)).resolves.toEqual(['registry.json']);
+  });
+
+  it('recovers a registry lock left by a dead process', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

@@ -861,8 +861,8 @@ describe('runKaizen PR flow', () => {
       expect(runIds).toHaveLength(1);
       const persisted = JSON.parse(await fs.readFile(path.join(runsDir, runIds[0], 'summary.json'), 'utf8'));
       expect(persisted.skipped).toEqual([{ number: 0, reason: 'latestStartHour(0) passed' }]);
-      const registry = JSON.parse(await fs.readFile(path.join(home, 'registry.json'), 'utf8'));
-      expect(registry.projects['o-r'].lastRun).toMatchObject({
+      const lastRun = JSON.parse(await fs.readFile(path.join(home, 'projects', 'o-r', 'last-run.json'), 'utf8'));
+      expect(lastRun).toMatchObject({
         result: 'success',
         processed: 0,
         fixed: 0,
