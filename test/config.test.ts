@@ -26,10 +26,14 @@ describe('configSchema', () => {
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.run.maxOpenPullRequests).toBe(1);
     expect(config.safety.minFreeDiskMb).toBe(1024);
+    expect(config.safety.operationMode).toBe('external');
     expect(config.safety.wipLimit).toBe(5);
     expect(config.safety.envAllowlist).toContain('PATH');
     expect(config.safety.envAllowlist).toContain('KAIZEN_TMPDIR');
     expect(config.safety.envAllowlist).not.toContain('SECRET_TOKEN');
+    expect(config.safety.envAllowlist).not.toContain('GH_CONFIG_DIR');
+    expect(config.safety.envAllowlist).not.toContain('SSH_AUTH_SOCK');
+    expect(config.safety.envAllowlist).not.toContain('GIT_SSH_COMMAND');
     expect(config.scheduler.jobs?.maintenance).toEqual({
       enabled: true,
       schedule: { type: 'daily', time: '02:00' },
@@ -41,6 +45,13 @@ describe('configSchema', () => {
       run: { mode: 'watch', skipIfRunning: true }
     });
     expect(config.policy.mode).toBe('pr-only');
+    expect(config.policy.protectedPaths).toContain('.github/**');
+    expect(config.policy.protectedPaths).toContain('**/*release*/**');
+    expect(config.policy.forbiddenPaths).toContain('**/.ssh/**');
+    expect(config.issues.executionAuthorization).toEqual({
+      label: 'kaizen:authorized',
+      minimumPermission: 'triage'
+    });
     expect(config.issues.priorityOrder).toEqual(['kaizen:P0', 'kaizen:P1', 'kaizen:P2']);
   });
 
@@ -65,6 +76,49 @@ describe('configSchema', () => {
     const config = configSchema.parse({ version: 1, safety: { wipLimit: 7 } });
 
     expect(config.safety.wipLimit).toBe(7);
+  });
+
+  it('keeps the audited external-repository path safety defaults', () => {
+    const config = configSchema.parse({ version: 1 });
+
+    expect(config.policy.protectedPaths).toEqual([
+      '.github/**',
+      '.gitlab-ci.yml',
+      '.circleci/**',
+      'azure-pipelines.yml',
+      'Jenkinsfile',
+      '**/.env*',
+      '**/secrets/**',
+      '**/*migration*/**',
+      '**/*release*/**',
+      '**/*publish*/**',
+      '.npmrc',
+      '.pypirc',
+      'Dockerfile',
+      '.kaizen/**'
+    ]);
+    expect(config.policy.forbiddenPaths).toEqual([
+      '**/.git/**',
+      '**/.ssh/**',
+      '**/.gnupg/**',
+      '**/*credential*/**',
+      '**/*.pem',
+      '**/*.key'
+    ]);
+  });
+
+  it('tests mandatory verifier coverage for auth, secrets, billing, and migration in external mode', () => {
+    expect(() => configSchema.parse({ version: 1, verifier: { enabled: false } })).toThrow(
+      'verifier.enabled cannot be false when safety.operationMode is external'
+    );
+    expect(() => configSchema.parse({ version: 1, verifier: { command: 'true' } })).toThrow(
+      'verifier.command must be verifier when safety.operationMode is external'
+    );
+    expect(configSchema.parse({
+      version: 1,
+      safety: { operationMode: 'dogfood' },
+      verifier: { enabled: false, command: 'custom-verifier' }
+    }).verifier).toMatchObject({ enabled: false, command: 'custom-verifier' });
   });
 
   it('accepts scheduler jobs', () => {
@@ -110,6 +164,7 @@ commands:
     const configSpec = fs.readFileSync('docs/03-config-spec.md', 'utf8');
 
     expect(repoConfig.agent.default).toBe('codex');
+    expect(repoConfig.safety.operationMode).toBe('dogfood');
     expect(cliSpec).toMatch(/agent\.default:\s*codex/);
     expect(cliSpec).toMatch(/生成時のデフォルト:\s*claude/);
     expect(configSpec).toMatch(/agent\.default:\s*codex/);

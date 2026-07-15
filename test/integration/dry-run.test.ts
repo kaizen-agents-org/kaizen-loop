@@ -11,6 +11,106 @@ import { loadImplementationState, saveImplementationState } from '../../src/orch
 import type { CommandRunner } from '../../src/utils/command.js';
 
 describe('runKaizen dry-run', () => {
+  it('skips issues without execution authorization in the external default mode', async () => {
+    const repo = await setupExternalDryRunProject();
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1)]));
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const selection = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in selection && selection.selected).toEqual([]);
+    expect('selected' in selection && selection.skipped).toEqual([
+      { number: 1, reason: 'missing execution authorization label: kaizen:authorized' }
+    ]);
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects an issue only after checking the active authorization event and actor permission', async () => {
+    const repo = await setupExternalDryRunProject();
+    const authorizedIssue = issue(1, {
+      labels: [{ name: 'kaizen' }, { name: 'Kaizen:Authorized' }]
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([authorizedIssue]));
+      }
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(authorizedIssue));
+      }
+      if (args.at(-1) === 'repos/o/r/issues/1/events') {
+        return result(command, args, repo, JSON.stringify([
+          [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' } }]
+        ]));
+      }
+      if (args.at(-1) === 'repos/o/r/collaborators/maintainer/permission') {
+        return result(command, args, repo, JSON.stringify({ role_name: 'triage' }));
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const selection = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in selection && selection.selected.map(({ number }) => number)).toEqual([1]);
+    expect('selected' in selection && selection.skipped).toEqual([]);
+    expect(runner.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([
+      ['issue', 'list'],
+      ['issue', 'view'],
+      ['api', '--paginate'],
+      ['api', 'repos/o/r/collaborators/maintainer/permission']
+    ]);
+  });
+
+  it('fails closed when authorization event history cannot be read', async () => {
+    const repo = await setupExternalDryRunProject();
+    const authorizedIssue = issue(1, {
+      labels: [{ name: 'kaizen' }, { name: 'kaizen:authorized' }]
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([authorizedIssue]));
+      }
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(authorizedIssue));
+      }
+      if (args.at(-1) === 'repos/o/r/issues/1/events') {
+        throw new Error('GitHub API returned 403');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const selection = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in selection && selection.selected).toEqual([]);
+    expect('selected' in selection && selection.skipped).toEqual([
+      { number: 1, reason: 'execution authorization could not be verified: GitHub API returned 403' }
+    ]);
+  });
+
   it('applies the implementation budget after intake-rejected candidates are removed', () => {
     const actionable = [issue(3), issue(4), issue(5)];
     const selection = applyImplementationBudget({
@@ -2451,7 +2551,15 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
           status: verifierRuns === 1 ? 'block_pr' : 'open_pr',
           summary: verifierRuns === 1 ? '不足あり' : '確認した',
-          notes: verifierRuns === 1 ? 'テストを追加してください' : '',
+          notes: verifierRuns === 1 ? 'テストを追加してください' : 'Legacy verifier detail.',
+          must_fix: verifierRuns === 1
+            ? [{ source: 'verify_logs', message: 'Add regression coverage', evidence: 'No focused test was reported' }]
+            : [],
+          should_fix: verifierRuns === 1
+            ? []
+            : [{ source: 'diff', message: 'Review the generated evidence' }],
+          confidence: verifierRuns === 1 ? 55 : 91,
+          risk: verifierRuns === 1 ? 'high' : 'low',
           evidence_grade: 'executed'
         });
         return result(command, args, workspace, 'verified');
@@ -2479,6 +2587,7 @@ describe('runKaizen PR flow', () => {
     expect(builderRuns).toBe(2);
     expect(verifierRuns).toBe(2);
     expect(builderPrompts[1]).toContain('Verifier blocked PR');
+    expect(builderPrompts[1]).toContain('must_fix: [verify_logs] Add regression coverage');
     expect(verifierPrompts[0]).toContain('diff --git a/src/file.ts b/src/file.ts');
     expect(verifierPrompts[0]).toContain('+const evidence = true;');
     expect(verifierPrompts[0]).toContain('PASS integration evidence');
@@ -2488,11 +2597,19 @@ describe('runKaizen PR flow', () => {
     expect(prBodies[0]).toContain('verifier: open_pr');
     expect(prBodies[0]).toContain('summary: 確認した');
     expect(prBodies[0]).toContain('evidence: executed');
+    expect(prBodies[0]).toContain('should_fix: [diff] Review the generated evidence');
+    expect(prBodies[0]).toContain('confidence: 91/100');
+    expect(prBodies[0]).toContain('risk: low');
+    expect(prBodies[0]).toContain('notes: Legacy verifier detail.');
     expect(prBodies[0]).toContain('## Evidence strength');
     expect(prBodies[0]).toContain('reported: builder summary and builder notes come from the builder-agent self-report');
     expect(prBodies[0]).toContain('executed: Kaizen Loop ran the verification commands listed above');
     expect(prBodies[0]).toContain('executed: Kaizen Loop ran verifier and verifier reported executed evidence');
     expect(prBodies[0]).toContain('static: changed file and line counts come from git diff metadata');
+    const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('should_fix: [diff] Review the generated evidence');
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('confidence: 91/100');
+    expect(String(comments.at(-1)?.[1].at(-1))).toContain('risk: low');
   });
 
   it('surfaces open_pr_with_warning verifier status in generated PR bodies', async () => {
@@ -2539,7 +2656,10 @@ describe('runKaizen PR flow', () => {
           status: 'open_pr_with_warning',
           summary: '確認したが注意あり',
           reason: 'low confidence',
-          notes: 'human should double-check docs',
+          notes: 'risk=high\nconfidence=68\nshould_fix=human should double-check docs\nKeep the manual rollout check.',
+          should_fix: [{ source: 'builder_report', message: 'human should double-check docs' }],
+          confidence: 68,
+          risk: 'high',
           evidence_grade: 'reported'
         });
         return result(command, args, workspace, 'verified');
@@ -2567,7 +2687,11 @@ describe('runKaizen PR flow', () => {
     expect(prBody).toContain('summary: 確認したが注意あり');
     expect(prBody).toContain('evidence: reported (未実行の可能性あり)');
     expect(prBody).toContain('reason: low confidence');
-    expect(prBody).toContain('notes: human should double-check docs');
+    expect(prBody).toContain('should_fix: [builder_report] human should double-check docs');
+    expect(prBody).toContain('confidence: 68/100');
+    expect(prBody).toContain('risk: high');
+    expect(prBody).toContain('notes: Keep the manual rollout check.');
+    expect(prBody).not.toContain('notes: risk=high');
     expect(prBody).toContain('warning: この判定は実行証拠ではなくテキスト報告に基づく');
     expect(prBody).toContain('## Evidence strength');
     expect(prBody).toContain('reported: builder summary and builder notes come from the builder-agent self-report');
@@ -2985,6 +3109,32 @@ function issue(number = 1, overrides: Partial<GitHubIssue> = {}) {
   };
 }
 
+async function setupExternalDryRunProject(): Promise<string> {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+  vi.stubEnv('KAIZEN_HOME', home);
+  await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+  await fs.writeFile(
+    path.join(repo, '.kaizen', 'config.yml'),
+    buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+  );
+  await saveRegistry({
+    version: 1,
+    projects: {
+      'o-r': {
+        repo: 'o/r',
+        localPath: repo,
+        workspacePath: workspace,
+        schedule: '02:00',
+        enabled: false,
+        createdAt: '2026-06-12T00:00:00Z'
+      }
+    }
+  });
+  return repo;
+}
+
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
   return {
     command,
@@ -3080,7 +3230,7 @@ function defaultConfigWith(
 
 function defaultConfigYaml(options: { agent: 'claude' | 'codex'; setup: string | null; verify: string[] }): string {
   const config = parse(buildDefaultConfigYaml(options)) as Record<string, unknown>;
-  mergeConfig(config, { guardian: { reviewSettleSeconds: 0 } });
+  mergeConfig(config, { safety: { operationMode: 'dogfood' }, guardian: { reviewSettleSeconds: 0 } });
   return stringify(config);
 }
 

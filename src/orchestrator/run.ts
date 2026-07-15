@@ -24,7 +24,7 @@ import {
   type DiffStats
 } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
-import { labelNames, priorityLabel, selectIssues } from './issues.js';
+import { labelNames, priorityLabel, selectIssues, type IssueSelection } from './issues.js';
 import { RunLock } from './lock.js';
 import {
   enqueueManagedPrGuardianJobs,
@@ -139,12 +139,20 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const selection = selectIssues({
       issues: selectableIssues,
       config,
-      maxIssues: automatic && !options.dryRun ? Number.MAX_SAFE_INTEGER : maxIssues,
+      maxIssues: config.safety.operationMode === 'external' || (automatic && !options.dryRun)
+        ? Number.MAX_SAFE_INTEGER
+        : maxIssues,
       explicit: requestedIssues !== undefined,
       openPullRequests
     });
+    const authorizedSelection = config.safety.operationMode === 'external'
+      ? await applyExecutionAuthorizationGate({ selection, config, repo: resolved.project.repo, github })
+      : selection;
+    const budgetedSelection = config.safety.operationMode === 'external' && (!automatic || options.dryRun)
+      ? applyImplementationBudget({ ...authorizedSelection, openPullRequests }, maxIssues)
+      : authorizedSelection;
     const implementationStates = await listImplementationStates(stateDir);
-    const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
+    const selectedIssueNumbers = new Set(budgetedSelection.selected.map((issue) => issue.number));
     const selectedResumableStates = implementationStates.filter(
       (state) => selectedIssueNumbers.has(state.issue) && isResumableImplementationState(state)
     );
@@ -153,11 +161,11 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
     const resumeBranchByIssue = new Map(openCheckpoints.map((state) => [state.issue, state.branch]));
     if (automatic && !options.dryRun) {
-      return { ...selection, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
+      return { ...budgetedSelection, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
     }
     const limited = await applyOpenPullRequestLimit({
       config,
-      selection,
+      selection: budgetedSelection,
       automatic,
       openPullRequests,
       resumableIssueNumbers,
@@ -467,6 +475,41 @@ export function applyImplementationBudget(selection: RunIssueSelection, maxIssue
       ...selection.selected.slice(maxIssues).map((issue) => ({ number: issue.number, reason: 'maxIssuesPerNight reached' }))
     ]
   };
+}
+
+async function applyExecutionAuthorizationGate(options: {
+  selection: IssueSelection;
+  config: KaizenConfig;
+  repo: string;
+  github: GitHubClient;
+}): Promise<IssueSelection> {
+  const selected: GitHubIssue[] = [];
+  const skipped = [...options.selection.skipped];
+  const authorization = options.config.issues.executionAuthorization;
+
+  for (const issue of options.selection.selected) {
+    if (!labelNames(issue).some((label) => label.toLowerCase() === authorization.label.toLowerCase())) {
+      skipped.push({ number: issue.number, reason: `missing execution authorization label: ${authorization.label}` });
+      continue;
+    }
+    try {
+      const decision = await options.github.checkExecutionAuthorization({
+        repo: options.repo,
+        issue: issue.number,
+        label: authorization.label,
+        minimumPermission: authorization.minimumPermission
+      });
+      if (decision.authorized) selected.push(issue);
+      else skipped.push({ number: issue.number, reason: decision.reason });
+    } catch (error) {
+      skipped.push({
+        number: issue.number,
+        reason: `execution authorization could not be verified: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  }
+
+  return { selected, skipped };
 }
 
 function assertJobEnabled(config: KaizenConfig, jobName: string | undefined): void {
@@ -1839,11 +1882,40 @@ function verifierPrBodyLines(verifierResult: VerifierResult): string[] {
     `evidence: ${formatVerifierEvidenceGrade(verifierResult)}`
   ];
   if (verifierResult.reason) lines.push(`reason: ${verifierResult.reason}`);
-  if (verifierResult.notes.trim()) lines.push(`notes: ${verifierResult.notes.trim()}`);
+  lines.push(...verifierStructuredEvidenceLines(verifierResult));
+  const notes = verifierNotesWithoutStructuredDuplicates(verifierResult);
+  if (notes) lines.push(`notes: ${notes}`);
   if (verifierResult.evidenceGrade === 'reported') {
     lines.push('warning: この判定は実行証拠ではなくテキスト報告に基づくため、未実行の可能性があります。');
   }
   return lines;
+}
+
+function verifierStructuredEvidenceLines(result: VerifierResult): string[] {
+  const lines: string[] = [];
+  for (const finding of result.mustFix ?? []) lines.push(`must_fix: ${formatVerifierFinding(finding)}`);
+  for (const finding of result.shouldFix ?? []) lines.push(`should_fix: ${formatVerifierFinding(finding)}`);
+  if (result.confidence !== undefined) lines.push(`confidence: ${result.confidence}/100`);
+  if (result.risk !== undefined) lines.push(`risk: ${result.risk}`);
+  return lines;
+}
+
+function formatVerifierFinding(finding: NonNullable<VerifierResult['mustFix']>[number]): string {
+  const evidence = finding.evidence ? ` — evidence: ${finding.evidence}` : '';
+  return `[${finding.source}] ${finding.message}${evidence}`;
+}
+
+function verifierNotesWithoutStructuredDuplicates(result: VerifierResult): string {
+  const duplicateLines = new Set<string>();
+  if (result.risk !== undefined) duplicateLines.add(`risk=${result.risk}`);
+  if (result.confidence !== undefined) duplicateLines.add(`confidence=${result.confidence}`);
+  if (result.mustFix?.length) duplicateLines.add(`must_fix=${result.mustFix.map((finding) => finding.message).join('; ')}`);
+  if (result.shouldFix?.length) duplicateLines.add(`should_fix=${result.shouldFix.map((finding) => finding.message).join('; ')}`);
+  return result.notes
+    .split('\n')
+    .filter((line) => !duplicateLines.has(line.trim()))
+    .join('\n')
+    .trim();
 }
 
 function formatVerifierEvidenceGrade(verifierResult: VerifierResult): string {
@@ -2045,16 +2117,23 @@ function withGuardianNotes(notes: string | undefined, guardian: PrGuardianSkillR
 
 function verifierPrReason(result: VerifierResult): string {
   const detail = result.reason || result.summary;
-  return result.status === 'open_pr_with_warning'
+  const reason = result.status === 'open_pr_with_warning'
     ? `Verifier cleared PR with warning: ${detail}`
     : `Verifier cleared PR: ${detail}`;
+  return appendVerifierStructuredEvidence(reason, result);
 }
 
 function verifierBlockedReason(result: VerifierResult): string {
   const detail = result.reason || result.summary;
-  return result.status === 'needs_context'
+  const reason = result.status === 'needs_context'
     ? `Verifier needs context: ${detail}`
     : `Verifier blocked PR: ${detail}`;
+  return appendVerifierStructuredEvidence(reason, result);
+}
+
+function appendVerifierStructuredEvidence(reason: string, result: VerifierResult): string {
+  const evidence = verifierStructuredEvidenceLines(result);
+  return evidence.length ? `${reason}\n${evidence.join('\n')}` : reason;
 }
 
 function withDiscoveredFollowups(

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildAllowlistedEnv, githubCliEnv, runCommand, withRunDeadline, type CommandRunner } from '../src/utils/command.js';
+import { buildAllowlistedEnv, gitCliEnv, githubCliEnv, runCommand, withRunDeadline, type CommandRunner } from '../src/utils/command.js';
 
 describe('buildAllowlistedEnv', () => {
   it('copies only allowlisted variables plus explicit extras', () => {
@@ -32,6 +32,8 @@ describe('githubCliEnv', () => {
       GITHUB_TOKEN: 'github-token',
       GH_ENTERPRISE_TOKEN: 'enterprise-token',
       GITHUB_ENTERPRISE_TOKEN: 'github-enterprise-token',
+      GH_CONFIG_DIR: '/gh-config',
+      SSH_AUTH_SOCK: '/ssh-agent',
       SECRET_TOKEN: 'secret'
     });
 
@@ -40,7 +42,23 @@ describe('githubCliEnv', () => {
       GH_TOKEN: 'gh-token',
       GITHUB_TOKEN: 'github-token',
       GH_ENTERPRISE_TOKEN: 'enterprise-token',
-      GITHUB_ENTERPRISE_TOKEN: 'github-enterprise-token'
+      GITHUB_ENTERPRISE_TOKEN: 'github-enterprise-token',
+      GH_CONFIG_DIR: '/gh-config'
+    });
+  });
+});
+
+describe('gitCliEnv', () => {
+  it('preserves Git SSH auth only for git commands', () => {
+    expect(gitCliEnv({
+      PATH: '/bin',
+      SSH_AUTH_SOCK: '/ssh-agent',
+      GIT_SSH_COMMAND: 'ssh -i key',
+      GH_TOKEN: 'do-not-pass'
+    })).toEqual({
+      PATH: '/bin',
+      SSH_AUTH_SOCK: '/ssh-agent',
+      GIT_SSH_COMMAND: 'ssh -i key'
     });
   });
 });

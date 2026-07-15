@@ -171,6 +171,7 @@ async function setupProject(options: { guardianMode?: 'sync' | 'async' } = {}) {
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
   let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] });
+  config = config.replace('operationMode: external', 'operationMode: dogfood');
   if (options.guardianMode === 'async') {
     config = config.replace('  mode: sync', '  mode: async');
   } else {

@@ -226,6 +226,36 @@ describe('runPrGuardianSkill', () => {
     expect(result.status).toBe('success');
   });
 
+  it('treats the GitHub CLI no-required-checks response as an empty check set', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: command === 'gh' && isRequiredChecks(args) ? 1 : 0,
+      stdout: command === 'gh' && isRequiredChecks(args) ? '' : command === 'gh' ? ghResponse(args, []) : 'done',
+      stderr: command === 'gh' && isRequiredChecks(args)
+        ? "no required checks reported on the 'branch' branch"
+        : '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+  });
+
   it('stabilizes a ready retry preflight before returning without another guardian pass', async () => {
     const config = configSchema.parse({
       version: 1,
@@ -521,6 +551,69 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
+  it('reactivates a successful job after a guardian fix advances the head', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'old-head'
+    });
+    let headRefOid = 'old-head';
+    let lateThread = false;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') lateThread = false;
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh'
+          ? isReviewApi(args)
+            ? JSON.stringify([])
+            : ghResponse(
+              args,
+              lateThread ? [{ path: 'src/file.ts', line: 12, author: 'codex', body: 'Late finding.' }] : [],
+              { headRefOid, mergeStateStatus: lateThread ? 'BLOCKED' : 'CLEAN' }
+            )
+          : 'done',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const first = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+    expect(first[0]).toMatchObject({ status: 'success', headSha: 'old-head' });
+
+    headRefOid = 'new-head';
+    lateThread = true;
+    const second = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ status: 'success', headSha: 'new-head', reactivationCount: 1 });
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 

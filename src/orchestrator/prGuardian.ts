@@ -219,14 +219,26 @@ export async function runPendingPrGuardianJobs(options: {
   let jobs = await listPrGuardianJobs(options.stateDir);
   for (const job of jobs.filter((candidate) => candidate.status === 'success')) {
     const gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
-    if (gate.state !== 'OPEN' || gate.headRefOid !== job.headSha || gate.isReady) {
+    if (gate.state !== 'OPEN') {
       if (job.lastObservedFingerprint !== gate.activityFingerprint) {
         await writeGuardianJob(options.stateDir, { ...job, lastObservedFingerprint: gate.activityFingerprint });
       }
       continue;
     }
+    const observedJob = gate.headRefOid && gate.headRefOid !== job.headSha
+      ? { ...job, headSha: gate.headRefOid }
+      : job;
+    if (gate.isReady) {
+      if (observedJob !== job || job.lastObservedFingerprint !== gate.activityFingerprint) {
+        await writeGuardianJob(options.stateDir, {
+          ...observedJob,
+          lastObservedFingerprint: gate.activityFingerprint
+        });
+      }
+      continue;
+    }
     await writeGuardianJob(options.stateDir, {
-      ...job,
+      ...observedJob,
       status: 'pending',
       reactivationCount: (job.reactivationCount ?? 0) + 1,
       lastObservedFingerprint: gate.activityFingerprint,
@@ -693,6 +705,7 @@ async function listRequiredChecks(runCommand: CommandRunner, req: PrGuardianSkil
   });
   if (!result.stdout.trim()) {
     if (result.exitCode === 0) return [];
+    if (/no required checks reported/i.test(result.stderr)) return [];
     throw new Error(`Could not inspect required PR checks: ${result.stderr || `exit ${result.exitCode}`}`);
   }
   const checks = JSON.parse(result.stdout) as Array<{ name?: string; state?: string; bucket?: string }>;
