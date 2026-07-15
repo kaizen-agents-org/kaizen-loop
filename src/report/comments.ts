@@ -92,6 +92,7 @@ export function hasRetryableExternalBlock(comments: Array<{ body: string }>): bo
     .find((candidate) => candidate.marker !== undefined);
   return Boolean(
     marker?.marker?.outcome === 'blocked' &&
+      marker.marker.humanConfirmationRequired !== true &&
       (marker.marker.retryableExternal === true || hasRetryableExternalEvidence(marker.comment.body))
   );
 }
@@ -103,6 +104,7 @@ export function countConsecutiveRetryableBlocks(comments: Array<{ body: string }
     if (!marker) continue;
     if (
       marker.outcome === 'blocked' &&
+      marker.humanConfirmationRequired !== true &&
       (marker.retryableExternal === true || hasRetryableExternalEvidence(comment.body))
     ) {
       count += 1;

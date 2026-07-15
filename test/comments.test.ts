@@ -134,6 +134,11 @@ describe('result comments', () => {
       runId: 'run', issue: 1, attempt: 3, outcome: 'blocked', agent: 'codex', summary: 'blocked',
       blockDisposition: 'blocked', maxAttempts: 3
     });
+    const humanWithRetryableEvidence = buildResultComment({
+      runId: 'run', issue: 1, attempt: 3, outcome: 'blocked', agent: 'codex',
+      summary: 'Approval required after failureClass=timeout',
+      blockDisposition: 'human-input-required', maxAttempts: 3
+    });
 
     expect(countConsecutiveRetryableBlocks([
       { body: legacyRetryable },
@@ -143,6 +148,12 @@ describe('result comments', () => {
       { body: legacyRetryable },
       { body: blocked }
     ])).toBe(0);
+    expect(countConsecutiveRetryableBlocks([
+      { body: legacyRetryable },
+      { body: humanWithRetryableEvidence },
+      { body: currentRetryable }
+    ])).toBe(1);
+    expect(hasRetryableExternalBlock([{ body: humanWithRetryableEvidence }])).toBe(false);
   });
 
   it('uses the latest result when deciding whether a blocked issue is retryable', () => {
