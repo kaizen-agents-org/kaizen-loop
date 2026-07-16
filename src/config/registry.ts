@@ -129,19 +129,37 @@ async function withRegistryLock<T>(filePath: string, action: () => Promise<T>): 
       continue;
     }
     const createdAt = Date.now();
-    await fs.writeFile(ownerPath, JSON.stringify({ pid: process.pid, createdAt, heartbeatAt: createdAt }));
+    await writeLockOwner(ownerPath, { pid: process.pid, createdAt, heartbeatAt: createdAt });
+    let heartbeatWrite = Promise.resolve();
     const heartbeat = setInterval(() => {
-      void fs.writeFile(ownerPath, JSON.stringify({ pid: process.pid, createdAt, heartbeatAt: Date.now() })).catch(() => {});
+      heartbeatWrite = heartbeatWrite
+        .then(() => writeLockOwner(ownerPath, { pid: process.pid, createdAt, heartbeatAt: Date.now() }))
+        .catch(() => {});
     }, 30_000);
     heartbeat.unref();
     try {
       return await action();
     } finally {
       clearInterval(heartbeat);
+      await heartbeatWrite;
       await fs.rm(lockPath, { recursive: true, force: true });
     }
   }
   throw new ConfigError(`Timed out waiting for registry lock: ${lockPath}`);
+}
+
+async function writeLockOwner(
+  ownerPath: string,
+  owner: { pid: number; createdAt: number; heartbeatAt: number }
+): Promise<void> {
+  const temporaryPath = `${ownerPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, JSON.stringify(owner), { flag: 'wx' });
+    await fs.rename(temporaryPath, ownerPath);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true });
+    throw error;
+  }
 }
 
 async function removeStaleLock(lockPath: string): Promise<boolean> {
