@@ -440,22 +440,27 @@ describe('syncFleet', () => {
     vi.stubEnv('KAIZEN_HOME', home);
     vi.stubEnv('HOME', home);
 
+    const firstRepoDir = path.join(root, 'builder-agent');
     const repoDir = path.join(root, 'verifier');
+    await fs.mkdir(path.join(firstRepoDir, '.git'), { recursive: true });
+    await fs.mkdir(path.join(firstRepoDir, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(repoDir, '.git'), { recursive: true });
     await fs.mkdir(path.join(repoDir, '.kaizen'), { recursive: true });
     const config = parse(defaultConfigYaml({ agent: 'claude', setup: 'pnpm install --frozen-lockfile', verify: ['pnpm test'] }));
+    await fs.writeFile(path.join(firstRepoDir, '.kaizen', 'config.yml'), stringify(config));
     await fs.writeFile(path.join(repoDir, '.kaizen', 'config.yml'), stringify(config));
     await saveRegistry({ version: 1, projects: { stale: fleetRegistryProject('/tmp/stale') } });
     const registryBefore = await fs.readFile(path.join(home, 'registry.json'), 'utf8');
 
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
-        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/verifier.git\n');
+        const repo = options?.cwd === firstRepoDir ? 'builder-agent' : 'verifier';
+        return result(command, args, options?.cwd, `https://github.com/kaizen-agents-org/${repo}.git\n`);
       }
-      if (command === 'sh' && args[1] === 'pnpm install --frozen-lockfile') {
+      if (command === 'sh' && args[1] === 'pnpm install --frozen-lockfile' && options?.cwd?.includes('verifier')) {
         return { ...result(command, args, options?.cwd, 'missing package\n'), exitCode: 1 };
       }
-      if (command === 'sh' && args[1] === 'pnpm test') {
+      if (command === 'sh' && args[1] === 'pnpm test' && options?.cwd?.includes('verifier')) {
         throw new Error('verify should not run after setup failure');
       }
       return result(command, args, options?.cwd, '');
@@ -465,7 +470,7 @@ describe('syncFleet', () => {
       cwd: repoDir,
       root,
       owner: 'kaizen-agents-org',
-      repos: ['verifier'],
+      repos: ['builder-agent', 'verifier'],
       migrateConfig: true,
       ensureWorkspace: true,
       ensureLabels: false,
@@ -477,7 +482,8 @@ describe('syncFleet', () => {
       runCommand: runner
     });
 
-    expect(output.projects[0]).toMatchObject({
+    const failed = output.projects.find((project) => project.slug === 'kaizen-agents-org-verifier');
+    expect(failed).toMatchObject({
       slug: 'kaizen-agents-org-verifier',
       verified: true,
       verifyPassed: false,
@@ -490,9 +496,11 @@ describe('syncFleet', () => {
     });
     expect(fleetHasFailures(output)).toBe(true);
     expect(output.pruned).toEqual([]);
-    expect(output.projects[0].schedulerSynced).toBe(false);
+    expect(output.projects.every((project) => !project.schedulerSynced)).toBe(true);
     expect(runner.mock.calls.some(([command]) => command === 'launchctl')).toBe(false);
-    expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args[1] === 'pnpm test')).toBe(false);
+    expect(runner.mock.calls.some(([command, args, options]) => (
+      command === 'sh' && args[1] === 'pnpm test' && options?.cwd?.includes('verifier')
+    ))).toBe(false);
     await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(registryBefore);
   });
 });

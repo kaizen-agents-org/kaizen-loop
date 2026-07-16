@@ -152,7 +152,25 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     const registry = options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry();
     return (await execute(registry)).value;
   }
-  return registryTransaction(execute, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
+  const result = await registryTransaction(execute, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
+  if (options.syncScheduler && !fleetHasFailures(result)) {
+    for (const projectResult of result.projects) {
+      const project = discovered.find((item) => item.slug === projectResult.slug)!;
+      const config = prepared.find((item) => item.project.slug === projectResult.slug)!.config!;
+      try {
+        await enableScheduler({
+          slug: project.slug,
+          project: projectRegistryEntry(project, config, true),
+          config,
+          runCommand: options.runCommand
+        });
+        projectResult.schedulerSynced = true;
+      } catch (error) {
+        projectResult.error = error instanceof Error ? error.message : String(error);
+      }
+    }
+  }
+  return result;
 }
 
 export function fleetHasFailures(result: FleetSyncResult): boolean {
@@ -246,17 +264,7 @@ async function syncFleetProject(options: FleetSyncOptions & {
       }
     }
 
-    if (options.syncScheduler) {
-      result.schedulerSynced = true;
-      if (!options.dryRun) {
-        await enableScheduler({
-          slug: options.project.slug,
-          project: registryProject,
-          config,
-          runCommand: options.runCommand
-        });
-      }
-    }
+    if (options.syncScheduler && options.dryRun) result.schedulerSynced = true;
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
   }
