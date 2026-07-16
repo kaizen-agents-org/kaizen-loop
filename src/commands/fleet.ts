@@ -141,7 +141,11 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     }
 
     const value = { root, owner, dryRun: options.dryRun, projects, pruned };
-    return { registry: fleetHasFailures(value) ? undefined : candidate, value };
+    const failed = fleetHasFailures(value);
+    return {
+      registry: failed ? undefined : candidate,
+      value: failed && !options.dryRun ? { ...value, pruned: [] } : value
+    };
   };
 
   if (options.dryRun) return (await execute(await loadRegistry())).value;

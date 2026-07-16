@@ -392,6 +392,8 @@ describe('syncFleet', () => {
     await fs.mkdir(path.join(repoDir, '.kaizen'), { recursive: true });
     const config = parse(defaultConfigYaml({ agent: 'claude', setup: 'pnpm install --frozen-lockfile', verify: ['pnpm test'] }));
     await fs.writeFile(path.join(repoDir, '.kaizen', 'config.yml'), stringify(config));
+    await saveRegistry({ version: 1, projects: { stale: fleetRegistryProject('/tmp/stale') } });
+    const registryBefore = await fs.readFile(path.join(home, 'registry.json'), 'utf8');
 
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
@@ -410,13 +412,14 @@ describe('syncFleet', () => {
       cwd: repoDir,
       root,
       owner: 'kaizen-agents-org',
+      repos: ['verifier'],
       migrateConfig: true,
       ensureWorkspace: true,
       ensureLabels: false,
       syncScheduler: false,
       repairLocks: false,
       verify: true,
-      prune: false,
+      prune: true,
       dryRun: false,
       runCommand: runner
     });
@@ -433,8 +436,9 @@ describe('syncFleet', () => {
       verifyResults: []
     });
     expect(fleetHasFailures(output)).toBe(true);
+    expect(output.pruned).toEqual([]);
     expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args[1] === 'pnpm test')).toBe(false);
-    await expect(fs.access(path.join(home, 'registry.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(registryBefore);
   });
 });
 
