@@ -119,7 +119,7 @@ async function withRegistryLock<T>(filePath: string, action: () => Promise<T>): 
   const lockPath = `${filePath}.lock`;
   const ownerPath = path.join(lockPath, 'owner.json');
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 18_000; attempt += 1) {
     try {
       await fs.mkdir(lockPath);
     } catch (error) {

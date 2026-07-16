@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { requiredLabels } from './doctor.js';
@@ -108,8 +109,6 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   const baselineRegistry = options.prune || options.syncScheduler
     ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
     : undefined;
-  const pruneBaseline = new Set(Object.keys(baselineRegistry?.projects ?? {}));
-
   const staged: Registry = { version: 1, projects: {} };
   const projects: FleetProjectResult[] = [];
   for (const project of discovered) {
@@ -146,9 +145,8 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
 
     const pruned: string[] = [];
     if (options.prune) {
-      for (const slug of pruneBaseline) {
+      for (const slug of Object.keys(candidate.projects)) {
         if (seen.has(slug)) continue;
-        if (!Object.hasOwn(candidate.projects, slug)) continue;
         pruned.push(slug);
         delete candidate.projects[slug];
       }
@@ -161,6 +159,9 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     return { ...value, pruned: applyTopology(registry).pruned };
   }
   const result = await registryTransaction(async (registry) => {
+    if (options.prune && !isDeepStrictEqual(registry.projects, baselineRegistry!.projects)) {
+      throw new KaizenError('Registry changed during fleet operation; rerun fleet before pruning.');
+    }
     const applied = applyTopology(registry);
     return { registry: applied.registry, value: { ...value, pruned: applied.pruned } };
   }, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });

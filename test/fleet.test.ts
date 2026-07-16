@@ -285,10 +285,10 @@ describe('syncFleet', () => {
     } finally {
       releaseVerification?.();
     }
-    await fleet;
+    await expect(fleet).rejects.toThrow('Registry changed during fleet operation');
 
     const registry = await loadRegistry();
-    expect(Object.keys(registry.projects).sort()).toEqual(['concurrent', 'kaizen-agents-org-builder-agent']);
+    expect(Object.keys(registry.projects)).toEqual(['concurrent']);
   });
 
   it('recovers registry topology from an authoritative manifest without using existing paths', async () => {
