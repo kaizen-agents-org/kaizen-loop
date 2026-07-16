@@ -14,7 +14,7 @@ import { reportIssue, reportIssueNow } from './commands/report.js';
 import { listQueuedIssues, queueIssues, unqueueIssues } from './commands/queue.js';
 import { planImprove, runImprove } from './commands/improve.js';
 import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './commands/goal.js';
-import { statusProject } from './commands/status.js';
+import { listProjects, statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { listGuardianJobs, runGuardianForPullRequest, watchGuardianJobs } from './commands/guardian.js';
 import { doctorProject } from './commands/doctor.js';
@@ -91,8 +91,7 @@ program
   .option('--json', 'print machine-readable output')
   .action(async (options) => {
     const globals = program.opts<{ json?: boolean }>();
-    const registry = await loadRegistry();
-    print(registry, Boolean(options.json ?? globals.json));
+    print(await listProjects(), Boolean(options.json ?? globals.json));
   });
 
 const fleet = program

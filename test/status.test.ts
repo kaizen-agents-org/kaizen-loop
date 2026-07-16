@@ -2,13 +2,48 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { statusProject } from '../src/commands/status.js';
+import { listProjects, statusProject } from '../src/commands/status.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe('listProjects', () => {
+  it('merges per-project last-run telemetry into registry topology', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'owner-repo': {
+          repo: 'owner/repo',
+          localPath: '/tmp/repo',
+          workspacePath: '/tmp/workspace',
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-07-01T00:00:00.000Z'
+        }
+      }
+    });
+    const lastRun = {
+      startedAt: '2026-07-15T00:00:00.000Z',
+      finishedAt: '2026-07-15T00:01:00.000Z',
+      result: 'success',
+      processed: 1,
+      fixed: 1,
+      prCreated: 1,
+      failed: 0
+    };
+    await fs.mkdir(path.join(home, 'projects', 'owner-repo'), { recursive: true });
+    await fs.writeFile(path.join(home, 'projects', 'owner-repo', 'last-run.json'), JSON.stringify(lastRun));
+
+    const registry = await listProjects();
+
+    expect(registry.projects['owner-repo'].lastRun).toEqual(lastRun);
+  });
 });
 
 describe('statusProject', () => {

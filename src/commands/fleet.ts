@@ -149,7 +149,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   };
 
   if (options.dryRun) return (await execute(await loadRegistry())).value;
-  return registryTransaction(execute);
+  return registryTransaction(execute, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
 }
 
 export function fleetHasFailures(result: FleetSyncResult): boolean {

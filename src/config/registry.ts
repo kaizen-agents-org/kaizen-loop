@@ -34,14 +34,30 @@ export async function updateRegistry(
 
 export async function registryTransaction<T>(
   transact: (registry: Registry) => Promise<{ registry?: Registry; value: T }>,
-  filePath = registryPath()
+  filePath = registryPath(),
+  options: { recoverInvalid?: boolean } = {}
 ): Promise<T> {
   return withRegistryLock(filePath, async () => {
-    const current = await loadRegistry(filePath);
+    const current = options.recoverInvalid ? await loadRegistryForRecovery(filePath) : await loadRegistry(filePath);
     const transaction = await transact(current);
     if (transaction.registry) await writeRegistryAtomically(transaction.registry, filePath);
     return transaction.value;
   });
+}
+
+async function loadRegistryForRecovery(filePath: string): Promise<Registry> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, projects: {} };
+    throw new ConfigError(`Invalid registry at ${filePath}: ${String(error)}`);
+  }
+  try {
+    return registrySchema.parse(JSON.parse(raw));
+  } catch {
+    return { version: 1, projects: {} };
+  }
 }
 
 export async function upsertProject(slug: string, project: RegistryProject): Promise<Registry> {

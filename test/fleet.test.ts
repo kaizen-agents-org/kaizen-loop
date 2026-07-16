@@ -230,6 +230,42 @@ describe('syncFleet', () => {
     expect(registry.projects['kaizen-agents-org-builder-agent'].localPath).toBe(repoDir);
   });
 
+  it('rebuilds a corrupt registry from an authoritative manifest', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    await writeFleetRepo(repoDir);
+    const manifestPath = path.join(root, 'fleet.yml');
+    await fs.writeFile(manifestPath, [
+      'version: 1',
+      'owner: kaizen-agents-org',
+      'projects:',
+      '  - repo: builder-agent',
+      '    localPath: ./builder-agent',
+      ''
+    ].join('\n'));
+    await fs.mkdir(home, { recursive: true });
+    await fs.writeFile(path.join(home, 'registry.json'), '{invalid');
+
+    await syncFleet({
+      cwd: root,
+      manifestPath,
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      prune: true,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    const registry = JSON.parse(await fs.readFile(path.join(home, 'registry.json'), 'utf8'));
+    expect(registry.projects['kaizen-agents-org-builder-agent'].localPath).toBe(repoDir);
+  });
+
   it('rebuilds registry entries from repo checkouts and migrates legacy configs', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));

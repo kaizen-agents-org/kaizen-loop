@@ -113,7 +113,12 @@ function isImplementationNeedsAttention(state: ImplementationState): boolean {
 }
 
 export async function listProjects() {
-  return loadRegistry();
+  const registry = await loadRegistry();
+  const projects = await Promise.all(Object.entries(registry.projects).map(async ([slug, project]) => [
+    slug,
+    { ...project, lastRun: await readLastRun(projectStateDir(slug)) ?? project.lastRun }
+  ] as const));
+  return { ...registry, projects: Object.fromEntries(projects) };
 }
 
 async function readLatestSummary(stateDir: string) {
