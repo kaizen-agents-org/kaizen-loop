@@ -248,6 +248,23 @@ describe('syncFleet', () => {
     await fs.mkdir(home, { recursive: true });
     await fs.writeFile(path.join(home, 'registry.json'), '{invalid');
 
+    const planned = await syncFleet({
+      cwd: root,
+      manifestPath,
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      prune: true,
+      dryRun: true,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(planned.projects).toHaveLength(1);
+    await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe('{invalid');
+
     await syncFleet({
       cwd: root,
       manifestPath,
@@ -452,7 +469,7 @@ describe('syncFleet', () => {
       migrateConfig: true,
       ensureWorkspace: true,
       ensureLabels: false,
-      syncScheduler: false,
+      syncScheduler: true,
       repairLocks: false,
       verify: true,
       prune: true,
@@ -473,6 +490,8 @@ describe('syncFleet', () => {
     });
     expect(fleetHasFailures(output)).toBe(true);
     expect(output.pruned).toEqual([]);
+    expect(output.projects[0].schedulerSynced).toBe(false);
+    expect(runner.mock.calls.some(([command]) => command === 'launchctl')).toBe(false);
     expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args[1] === 'pnpm test')).toBe(false);
     await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(registryBefore);
   });

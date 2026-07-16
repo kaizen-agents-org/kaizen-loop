@@ -4,7 +4,7 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { requiredLabels } from './doctor.js';
 import { loadConfig } from '../config/config.js';
-import { loadRegistry, registryTransaction, resolveProject } from '../config/registry.js';
+import { loadRegistry, loadRegistryForRecovery, registryTransaction, resolveProject } from '../config/registry.js';
 import { configSchema, type KaizenConfig, type Registry, type RegistryProject } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import { RunLock } from '../orchestrator/lock.js';
@@ -148,7 +148,10 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     };
   };
 
-  if (options.dryRun) return (await execute(await loadRegistry())).value;
+  if (options.dryRun) {
+    const registry = options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry();
+    return (await execute(registry)).value;
+  }
   return registryTransaction(execute, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
 }
 
@@ -222,18 +225,6 @@ async function syncFleetProject(options: FleetSyncOptions & {
       }
     }
 
-    if (options.syncScheduler) {
-      result.schedulerSynced = true;
-      if (!options.dryRun) {
-        await enableScheduler({
-          slug: options.project.slug,
-          project: registryProject,
-          config,
-          runCommand: options.runCommand
-        });
-      }
-    }
-
     if (options.verify) {
       result.verified = true;
       if (!options.dryRun) {
@@ -252,6 +243,18 @@ async function syncFleetProject(options: FleetSyncOptions & {
         const verifyResults = await workspace.runVerify(config);
         result.verifyResults = verifyResults;
         result.verifyPassed = verifyResults.every((item) => item.ok);
+      }
+    }
+
+    if (options.syncScheduler) {
+      result.schedulerSynced = true;
+      if (!options.dryRun) {
+        await enableScheduler({
+          slug: options.project.slug,
+          project: registryProject,
+          config,
+          runCommand: options.runCommand
+        });
       }
     }
   } catch (error) {

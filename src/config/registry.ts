@@ -45,7 +45,7 @@ export async function registryTransaction<T>(
   });
 }
 
-async function loadRegistryForRecovery(filePath: string): Promise<Registry> {
+export async function loadRegistryForRecovery(filePath = registryPath()): Promise<Registry> {
   let raw: string;
   try {
     raw = await fs.readFile(filePath, 'utf8');
