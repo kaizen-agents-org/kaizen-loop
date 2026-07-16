@@ -5,7 +5,7 @@ import { parse, stringify } from 'yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fleetHasFailures, migrateLegacySchedulerConfig, refreshFleet, syncFleet, type FleetProjectResult } from '../src/commands/fleet.js';
 import { defaultConfigYaml } from '../src/config/config.js';
-import { saveRegistry } from '../src/config/registry.js';
+import { loadRegistry, saveRegistry, updateRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 afterEach(() => {
@@ -191,6 +191,65 @@ describe('syncFleet', () => {
     expect(output.projects[0].error).toBeTruthy();
     expect(runner.mock.calls.every(([command]) => command === 'git')).toBe(true);
     await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(before);
+  });
+
+  it('does not hold the registry lock during fleet verification', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    await writeFleetRepo(repoDir, defaultConfigYaml({ agent: 'claude', setup: 'hold', verify: [] }));
+    let verificationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    let releaseVerification: (() => void) | undefined;
+    const released = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
+        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/builder-agent.git\n');
+      }
+      if (command === 'sh' && args[1] === 'hold') {
+        verificationStarted?.();
+        await released;
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const fleet = syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: true,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: true,
+      prune: false,
+      dryRun: false,
+      runCommand: runner
+    });
+    await started;
+    try {
+      const update = updateRegistry((registry) => {
+        registry.projects.concurrent = fleetRegistryProject('/tmp/concurrent');
+      });
+      const outcome = await Promise.race([
+        update.then(() => 'updated'),
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000))
+      ]);
+      expect(outcome).toBe('updated');
+    } finally {
+      releaseVerification?.();
+    }
+    await fleet;
+
+    const registry = await loadRegistry();
+    expect(Object.keys(registry.projects).sort()).toEqual(['concurrent', 'kaizen-agents-org-builder-agent']);
   });
 
   it('recovers registry topology from an authoritative manifest without using existing paths', async () => {

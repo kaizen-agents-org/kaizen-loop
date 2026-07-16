@@ -99,8 +99,31 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     : await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
   assertExactRequestedSet(discovered, owner, options.repos);
   const prepared = await prepareFleetProjects(discovered);
+  const preflightFailures = prepared
+    .filter((item) => item.error)
+    .map((item) => fleetProjectError(item.project, item.error!));
+  if (preflightFailures.length > 0) {
+    return { root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
+  }
 
-  const execute = async (registry: Registry): Promise<{ registry?: Registry; value: FleetSyncResult }> => {
+  const staged: Registry = { version: 1, projects: {} };
+  const projects: FleetProjectResult[] = [];
+  for (const project of discovered) {
+    const item = prepared.find((entry) => entry.project.slug === project.slug)!;
+    projects.push(await syncFleetProject({
+      ...options,
+      registry: staged,
+      project,
+      config: item.config!,
+      migrated: item.migrated!,
+      migratedContent: item.migratedContent
+    }));
+  }
+
+  const value = { root, owner, dryRun: options.dryRun, projects, pruned: [] as string[] };
+  if (fleetHasFailures(value)) return value;
+  const seen = new Set(discovered.map((project) => project.slug));
+  const applyTopology = (registry: Registry): { registry: Registry; pruned: string[] } => {
     const candidate = structuredClone(registry);
     const projectCount = Object.keys(registry.projects).length;
     if (options.prune && discovered.length === 0 && projectCount > 0) {
@@ -108,28 +131,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
         `Refusing to prune ${projectCount} registered project(s) because fleet discovery under ${root} found no projects.`
       );
     }
-    const preflightFailures = prepared
-      .filter((item) => item.error)
-      .map((item) => fleetProjectError(item.project, item.error!));
-    if (preflightFailures.length > 0) {
-      return { value: { root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] } };
-    }
-
-    const projects: FleetProjectResult[] = [];
-    const seen = new Set<string>();
-
-    for (const project of discovered) {
-      seen.add(project.slug);
-      const item = prepared.find((entry) => entry.project.slug === project.slug)!;
-      projects.push(await syncFleetProject({
-        ...options,
-        registry: candidate,
-        project,
-        config: item.config!,
-        migrated: item.migrated!,
-        migratedContent: item.migratedContent
-      }));
-    }
+    for (const [slug, project] of Object.entries(staged.projects)) candidate.projects[slug] = project;
 
     const pruned: string[] = [];
     if (options.prune) {
@@ -139,20 +141,17 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
         delete candidate.projects[slug];
       }
     }
-
-    const value = { root, owner, dryRun: options.dryRun, projects, pruned };
-    const failed = fleetHasFailures(value);
-    return {
-      registry: failed ? undefined : candidate,
-      value: failed && !options.dryRun ? { ...value, pruned: [] } : value
-    };
+    return { registry: candidate, pruned };
   };
 
   if (options.dryRun) {
     const registry = options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry();
-    return (await execute(registry)).value;
+    return { ...value, pruned: applyTopology(registry).pruned };
   }
-  const result = await registryTransaction(execute, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
+  const result = await registryTransaction(async (registry) => {
+    const applied = applyTopology(registry);
+    return { registry: applied.registry, value: { ...value, pruned: applied.pruned } };
+  }, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
   if (options.syncScheduler && !fleetHasFailures(result)) {
     for (const projectResult of result.projects) {
       const project = discovered.find((item) => item.slug === projectResult.slug)!;
