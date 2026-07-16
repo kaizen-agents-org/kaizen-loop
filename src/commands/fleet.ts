@@ -105,8 +105,8 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   if (preflightFailures.length > 0) {
     return { root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
   }
-  const baselineRegistry = options.prune
-    ? (options.manifestPath ? await loadRegistryForRecovery() : await loadRegistry())
+  const baselineRegistry = options.prune || options.syncScheduler
+    ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
     : undefined;
   const pruneBaseline = new Set(Object.keys(baselineRegistry?.projects ?? {}));
 
@@ -114,14 +114,20 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   const projects: FleetProjectResult[] = [];
   for (const project of discovered) {
     const item = prepared.find((entry) => entry.project.slug === project.slug)!;
-    projects.push(await syncFleetProject({
+    const projectResult = await syncFleetProject({
       ...options,
       registry: staged,
       project,
       config: item.config!,
       migrated: item.migrated!,
       migratedContent: item.migratedContent
-    }));
+    });
+    if (options.syncScheduler && !options.dryRun) {
+      const previouslyEnabled = baselineRegistry?.projects[project.slug]?.enabled ?? false;
+      staged.projects[project.slug].enabled = previouslyEnabled;
+      projectResult.enabled = previouslyEnabled;
+    }
+    projects.push(projectResult);
   }
 
   const value = { root, owner, dryRun: options.dryRun, projects, pruned: [] as string[] };

@@ -459,16 +459,25 @@ describe('syncFleet', () => {
     expect(runner.mock.calls.some(([command]) => command === 'gh')).toBe(true);
   });
 
-  it('keeps a project disabled when scheduler activation fails', async () => {
+  it('preserves prior enabled state when scheduler activation fails', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
     vi.stubEnv('KAIZEN_HOME', home);
     vi.stubEnv('HOME', home);
     const repoDir = path.join(root, 'builder-agent');
+    const newRepoDir = path.join(root, 'verifier');
     await writeFleetRepo(repoDir);
+    await writeFleetRepo(newRepoDir);
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'kaizen-agents-org-builder-agent': { ...fleetRegistryProject(repoDir), enabled: true }
+      }
+    });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
-        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/builder-agent.git\n');
+        const repo = options?.cwd === repoDir ? 'builder-agent' : 'verifier';
+        return result(command, args, options?.cwd, `https://github.com/kaizen-agents-org/${repo}.git\n`);
       }
       if (command === 'launchctl' || command === 'crontab') throw new Error('scheduler unavailable');
       return result(command, args, options?.cwd, '');
@@ -478,7 +487,7 @@ describe('syncFleet', () => {
       cwd: repoDir,
       root,
       owner: 'kaizen-agents-org',
-      repos: ['builder-agent'],
+      repos: ['builder-agent', 'verifier'],
       migrateConfig: true,
       ensureWorkspace: false,
       ensureLabels: false,
@@ -490,9 +499,19 @@ describe('syncFleet', () => {
       runCommand: runner
     });
 
-    expect(output.projects[0]).toMatchObject({ enabled: false, schedulerSynced: false, error: 'scheduler unavailable' });
+    expect(output.projects.find((project) => project.slug === 'kaizen-agents-org-builder-agent')).toMatchObject({
+      enabled: true,
+      schedulerSynced: false,
+      error: 'scheduler unavailable'
+    });
+    expect(output.projects.find((project) => project.slug === 'kaizen-agents-org-verifier')).toMatchObject({
+      enabled: false,
+      schedulerSynced: false,
+      error: 'scheduler unavailable'
+    });
     const registry = await loadRegistry();
-    expect(registry.projects['kaizen-agents-org-builder-agent'].enabled).toBe(false);
+    expect(registry.projects['kaizen-agents-org-builder-agent'].enabled).toBe(true);
+    expect(registry.projects['kaizen-agents-org-verifier'].enabled).toBe(false);
   });
 
   it('reports fleet failures when a project errors or verify fails', () => {
