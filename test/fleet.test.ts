@@ -229,7 +229,7 @@ describe('syncFleet', () => {
       syncScheduler: false,
       repairLocks: false,
       verify: true,
-      prune: false,
+      prune: true,
       dryRun: false,
       runCommand: runner
     });
@@ -457,6 +457,42 @@ describe('syncFleet', () => {
     expect(migrated.scheduler.nightly).toBeUndefined();
     expect(runner.mock.calls.some(([command]) => command === 'launchctl' || command === 'crontab')).toBe(true);
     expect(runner.mock.calls.some(([command]) => command === 'gh')).toBe(true);
+  });
+
+  it('keeps a project disabled when scheduler activation fails', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    await writeFleetRepo(repoDir);
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
+        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/builder-agent.git\n');
+      }
+      if (command === 'launchctl' || command === 'crontab') throw new Error('scheduler unavailable');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const output = await syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      dryRun: false,
+      runCommand: runner
+    });
+
+    expect(output.projects[0]).toMatchObject({ enabled: false, schedulerSynced: false, error: 'scheduler unavailable' });
+    const registry = await loadRegistry();
+    expect(registry.projects['kaizen-agents-org-builder-agent'].enabled).toBe(false);
   });
 
   it('reports fleet failures when a project errors or verify fails', () => {

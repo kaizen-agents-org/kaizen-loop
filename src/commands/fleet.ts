@@ -4,7 +4,7 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { requiredLabels } from './doctor.js';
 import { loadConfig } from '../config/config.js';
-import { loadRegistry, loadRegistryForRecovery, registryTransaction, resolveProject } from '../config/registry.js';
+import { loadRegistry, loadRegistryForRecovery, registryTransaction, resolveProject, updateRegistry } from '../config/registry.js';
 import { configSchema, type KaizenConfig, type Registry, type RegistryProject } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import { RunLock } from '../orchestrator/lock.js';
@@ -105,6 +105,10 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   if (preflightFailures.length > 0) {
     return { root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
   }
+  const baselineRegistry = options.prune
+    ? (options.manifestPath ? await loadRegistryForRecovery() : await loadRegistry())
+    : undefined;
+  const pruneBaseline = new Set(Object.keys(baselineRegistry?.projects ?? {}));
 
   const staged: Registry = { version: 1, projects: {} };
   const projects: FleetProjectResult[] = [];
@@ -135,8 +139,9 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
 
     const pruned: string[] = [];
     if (options.prune) {
-      for (const slug of Object.keys(candidate.projects)) {
+      for (const slug of pruneBaseline) {
         if (seen.has(slug)) continue;
+        if (!Object.hasOwn(candidate.projects, slug)) continue;
         pruned.push(slug);
         delete candidate.projects[slug];
       }
@@ -145,7 +150,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   };
 
   if (options.dryRun) {
-    const registry = options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry();
+    const registry = baselineRegistry ?? await loadRegistry();
     return { ...value, pruned: applyTopology(registry).pruned };
   }
   const result = await registryTransaction(async (registry) => {
@@ -163,7 +168,12 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
           config,
           runCommand: options.runCommand
         });
+        await updateRegistry((registry) => {
+          const registered = registry.projects[project.slug];
+          if (registered) registered.enabled = true;
+        });
         projectResult.schedulerSynced = true;
+        projectResult.enabled = true;
       } catch (error) {
         projectResult.error = error instanceof Error ? error.message : String(error);
       }
@@ -211,7 +221,7 @@ async function syncFleetProject(options: FleetSyncOptions & {
     schedulerSynced: false,
     lockRepaired: false,
     verified: false,
-    enabled: options.syncScheduler
+    enabled: options.syncScheduler && options.dryRun
   };
 
   try {
@@ -221,7 +231,7 @@ async function syncFleetProject(options: FleetSyncOptions & {
       await fs.writeFile(path.join(options.project.localPath, '.kaizen', 'config.yml'), options.migratedContent!);
     }
 
-    const registryProject = projectRegistryEntry(options.project, config, options.syncScheduler);
+    const registryProject = projectRegistryEntry(options.project, config, options.syncScheduler && options.dryRun);
     if (!options.dryRun) options.registry.projects[options.project.slug] = registryProject;
 
     if (options.repairLocks) {
