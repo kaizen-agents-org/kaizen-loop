@@ -2,11 +2,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadRegistry, resolveProject, saveRegistry, updateRegistry, upsertProject } from '../src/config/registry.js';
+import { loadRegistry, registryTransaction, resolveProject, saveRegistry, updateRegistry, upsertProject } from '../src/config/registry.js';
 import type { RegistryProject } from '../src/config/schema.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('registry', () => {
@@ -78,6 +79,25 @@ describe('registry', () => {
 
     await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
     await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refreshes the lease while a registry transaction is active', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const ownerPath = `${file}.lock/owner.json`;
+    const originalSetInterval = global.setInterval.bind(global);
+    vi.spyOn(global, 'setInterval').mockImplementation(((callback: TimerHandler, _delay?: number, ...args: unknown[]) => (
+      originalSetInterval(callback, 5, ...args)
+    )) as typeof setInterval);
+    let owner: { createdAt: number; heartbeatAt: number } | undefined;
+
+    await registryTransaction(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      owner = JSON.parse(await fs.readFile(ownerPath, 'utf8'));
+      return { value: undefined };
+    }, file);
+
+    expect(owner!.heartbeatAt).toBeGreaterThan(owner!.createdAt);
   });
 
   it('retries when a contended registry lock disappears during inspection', async () => {

@@ -117,6 +117,7 @@ async function writeRegistryAtomically(registry: Registry, filePath: string): Pr
 
 async function withRegistryLock<T>(filePath: string, action: () => Promise<T>): Promise<T> {
   const lockPath = `${filePath}.lock`;
+  const ownerPath = path.join(lockPath, 'owner.json');
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
@@ -127,10 +128,16 @@ async function withRegistryLock<T>(filePath: string, action: () => Promise<T>): 
       await new Promise((resolve) => setTimeout(resolve, 50));
       continue;
     }
-    await fs.writeFile(path.join(lockPath, 'owner.json'), JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+    const createdAt = Date.now();
+    await fs.writeFile(ownerPath, JSON.stringify({ pid: process.pid, createdAt, heartbeatAt: createdAt }));
+    const heartbeat = setInterval(() => {
+      void fs.writeFile(ownerPath, JSON.stringify({ pid: process.pid, createdAt, heartbeatAt: Date.now() })).catch(() => {});
+    }, 30_000);
+    heartbeat.unref();
     try {
       return await action();
     } finally {
+      clearInterval(heartbeat);
       await fs.rm(lockPath, { recursive: true, force: true });
     }
   }
@@ -146,9 +153,14 @@ async function removeStaleLock(lockPath: string): Promise<boolean> {
     throw error;
   }
   try {
-    const owner = JSON.parse(await fs.readFile(path.join(lockPath, 'owner.json'), 'utf8')) as { pid?: number; createdAt?: number };
+    const owner = JSON.parse(await fs.readFile(path.join(lockPath, 'owner.json'), 'utf8')) as {
+      pid?: number;
+      createdAt?: number;
+      heartbeatAt?: number;
+    };
     if (owner.pid) {
-      const expired = typeof owner.createdAt !== 'number' || Date.now() - owner.createdAt > 10 * 60 * 1000;
+      const leaseTimestamp = owner.heartbeatAt ?? owner.createdAt;
+      const expired = typeof leaseTimestamp !== 'number' || Date.now() - leaseTimestamp > 10 * 60 * 1000;
       if (isPidAlive(owner.pid) && !expired) return false;
     } else {
       const expired = typeof owner.createdAt !== 'number' || Date.now() - owner.createdAt > 10 * 60 * 1000;
