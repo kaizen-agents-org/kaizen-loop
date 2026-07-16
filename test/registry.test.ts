@@ -64,6 +64,22 @@ describe('registry', () => {
     await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('recovers an expired registry lock whose pid was reused', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({
+      pid: process.pid,
+      createdAt: Date.now() - 11 * 60 * 1000
+    }));
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('retries when a contended registry lock disappears during inspection', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
     const file = path.join(dir, 'registry.json');

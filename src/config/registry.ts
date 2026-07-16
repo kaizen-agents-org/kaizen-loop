@@ -148,7 +148,8 @@ async function removeStaleLock(lockPath: string): Promise<boolean> {
   try {
     const owner = JSON.parse(await fs.readFile(path.join(lockPath, 'owner.json'), 'utf8')) as { pid?: number; createdAt?: number };
     if (owner.pid) {
-      if (isPidAlive(owner.pid)) return false;
+      const expired = typeof owner.createdAt !== 'number' || Date.now() - owner.createdAt > 10 * 60 * 1000;
+      if (isPidAlive(owner.pid) && !expired) return false;
     } else {
       const expired = typeof owner.createdAt !== 'number' || Date.now() - owner.createdAt > 10 * 60 * 1000;
       if (!expired) return false;

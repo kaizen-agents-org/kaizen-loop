@@ -193,6 +193,45 @@ describe('syncFleet', () => {
     await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(before);
   });
 
+  it('preserves a project error when migrated config cannot be written', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    const legacy = parse(defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+    legacy.scheduler = {
+      nightly: { enabled: true, time: '02:00' },
+      afternoon: { enabled: false, time: '14:00' },
+      poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
+    };
+    await writeFleetRepo(repoDir, stringify(legacy));
+    const configPath = path.join(repoDir, '.kaizen', 'config.yml');
+    const originalWriteFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (target, data, options) => {
+      if (String(target) === configPath) throw new Error('read-only checkout');
+      return originalWriteFile(target, data, options);
+    });
+
+    const output = await syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(output.projects[0]).toMatchObject({ error: 'read-only checkout', enabled: false });
+    await expect(fs.access(path.join(home, 'registry.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('does not hold the registry lock during fleet verification', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));

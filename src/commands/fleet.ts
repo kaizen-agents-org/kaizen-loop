@@ -124,7 +124,8 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     });
     if (options.syncScheduler && !options.dryRun) {
       const previouslyEnabled = baselineRegistry?.projects[project.slug]?.enabled ?? false;
-      staged.projects[project.slug].enabled = previouslyEnabled;
+      const stagedProject = staged.projects[project.slug];
+      if (stagedProject) stagedProject.enabled = previouslyEnabled;
       projectResult.enabled = previouslyEnabled;
     }
     projects.push(projectResult);
