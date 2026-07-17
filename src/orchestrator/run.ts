@@ -896,12 +896,13 @@ async function processIssue(options: {
         }
       }
     }
+    const resumeAtVerifier = previousState?.phase === 'infrastructure-failure';
     await saveImplementationState(options.stateDir, {
       issue: options.issue.number,
       branch: options.branch,
-      phase: 'implementing',
+      phase: resumeAtVerifier ? 'verifying' : 'implementing',
       attempt: attempts,
-      lastFailure: previousState?.lastFailure,
+      lastFailure: resumeAtVerifier ? undefined : previousState?.lastFailure,
       pr: previousState?.pr,
       prUrl: previousState?.prUrl
     });
@@ -911,50 +912,64 @@ async function processIssue(options: {
       await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
       return withDiscoveredFollowups(await finishFailed(options, agent, attempts, reason, started, [setupResult]), discoveredFollowups);
     }
-    agent = await selectAgent(options.config, options.runCommand);
+    if (!resumeAtVerifier) agent = await selectAgent(options.config, options.runCommand);
     const branch = options.branch;
 
-    let agentResult: AgentResult | undefined;
+    let agentResult: AgentResult | undefined = resumeAtVerifier
+      ? {
+          status: 'fixed',
+          summary: 'Resumed the preserved implementation checkpoint at verifier.',
+          notes: 'Builder execution was skipped because the previous run stopped on verifier infrastructure.',
+          discoveredIssues: [],
+          raw: '',
+          durationMs: 0
+        }
+      : undefined;
     let verifierResult: VerifierResult | undefined;
     let verifyResults: Array<{ command: string; ok: boolean; output: string }> = [];
     let previousFailure = previousState?.lastFailure;
     const filedDiscoveredIssues = new Set<string>();
 
     for (let retry = 0; retry <= options.config.run.maxVerifyRetries; retry += 1) {
-      const prompt = buildFixPrompt({
-        repo: options.project.repo,
-        issue: options.issue,
-        config: options.config,
-        attempt: attempts,
-        previousFailure
-      });
-      agentResult = await agent.run({
-        workspaceDir: options.project.workspacePath,
-        prompt,
-        timeoutMs: boundedTimeoutMs(options.config.run.issueTimeoutMinutes * 60_000, options.runDeadlineAt),
-        model: modelFor(options.config, primaryBackend),
-        preferredBackends
-      });
-      await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
-      discoveredFollowups.push(
-        ...await fileDiscoveredIssues({
-          sourceIssue: options.issue,
-          projectRepo: options.project.repo,
-          github: options.github,
-          runId: options.runId,
-          issueDir,
-          discoveredIssues: agentResult.discoveredIssues,
-          filedKeys: filedDiscoveredIssues
-        })
-      );
+      const skipBuilder = resumeAtVerifier && retry === 0;
+      if (!skipBuilder) {
+        if (resumeAtVerifier && retry === 1) agent = await selectAgent(options.config, options.runCommand);
+        const prompt = buildFixPrompt({
+          repo: options.project.repo,
+          issue: options.issue,
+          config: options.config,
+          attempt: attempts,
+          previousFailure
+        });
+        agentResult = await agent.run({
+          workspaceDir: options.project.workspacePath,
+          prompt,
+          timeoutMs: boundedTimeoutMs(options.config.run.issueTimeoutMinutes * 60_000, options.runDeadlineAt),
+          model: modelFor(options.config, primaryBackend),
+          preferredBackends
+        });
+        await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
+        discoveredFollowups.push(
+          ...await fileDiscoveredIssues({
+            sourceIssue: options.issue,
+            projectRepo: options.project.repo,
+            github: options.github,
+            runId: options.runId,
+            issueDir,
+            discoveredIssues: agentResult.discoveredIssues,
+            filedKeys: filedDiscoveredIssues
+          })
+        );
 
-      if (agentResult.status === 'blocked') {
-        return withDiscoveredFollowups(await finishBlocked(options, agent, attempts, agentResult, started), discoveredFollowups);
-      }
-      if (agentResult.status === 'error' || agentResult.status === 'timeout') {
-        return withDiscoveredFollowups(await finishFailed(options, agent, attempts, agentResult.summary, started), discoveredFollowups);
+        if (agentResult.status === 'blocked') {
+          return withDiscoveredFollowups(await finishBlocked(options, agent, attempts, agentResult, started), discoveredFollowups);
+        }
+        if (agentResult.status === 'error' || agentResult.status === 'timeout') {
+          return withDiscoveredFollowups(await finishFailed(options, agent, attempts, agentResult.summary, started), discoveredFollowups);
+        }
       }
 
+      if (!agentResult) throw new Error('Agent did not produce a result.');
       await commitLeftovers(workspace, options.issue, agentResult);
       const diff = await workspace.collectDiffStats(options.config);
       if (diff.changedFiles === 0) {

@@ -2725,6 +2725,7 @@ describe('runKaizen PR flow', () => {
 
     let draftBody = '';
     let resultComment = '';
+    let verifierRuns = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue()]));
@@ -2738,6 +2739,17 @@ describe('runKaizen PR flow', () => {
         resultComment = String(args[args.indexOf('--body') + 1]);
         return result(command, args, repo, '');
       }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          state: 'OPEN',
+          number: 4,
+          url: 'https://github.com/o/r/pull/4',
+          headRefName: 'kaizen/issue-1-fix-bug',
+          baseRefName: 'main',
+          headRefOid: 'abc123',
+          isDraft: true
+        }));
+      }
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
@@ -2746,12 +2758,13 @@ describe('runKaizen PR flow', () => {
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
+        verifierRuns += 1;
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
-          status: 'unknown-protocol-status',
-          summary: 'invalid verifier response',
+          status: verifierRuns === 1 ? 'unknown-protocol-status' : 'open_pr',
+          summary: verifierRuns === 1 ? 'invalid verifier response' : 'checkpoint verified',
           notes: ''
         });
-        return result(command, args, workspace, 'invalid verifier response');
+        return result(command, args, workspace, verifierRuns === 1 ? 'invalid verifier response' : 'checkpoint verified');
       }
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
@@ -2785,6 +2798,21 @@ describe('runKaizen PR flow', () => {
       attempt: 1,
       pr: 4
     });
+
+    const builderCallsBeforeResume = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const resumed = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in resumed && resumed.issues[0].outcome).toBe('pr-created');
+    expect(verifierRuns).toBe(2);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(builderCallsBeforeResume);
+    expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args.join(' ') === '-lc npm test')).toBe(true);
   });
 
   it('surfaces open_pr_with_warning verifier status in generated PR bodies', async () => {
