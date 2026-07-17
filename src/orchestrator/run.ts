@@ -1011,7 +1011,7 @@ async function processIssue(options: {
       if (verifierResult.status === 'open_pr' || verifierResult.status === 'open_pr_with_warning') break;
       if (verifierResult.status === 'error' || verifierResult.status === 'timeout') {
         return withDiscoveredFollowups(
-          await finishFailed(options, agent, attempts, `Verifier failed: ${verifierResult.summary}`, started, verifyResults),
+          await finishVerifierInfrastructureFailure(options, attempts, verifierResult, started, verifyResults),
           discoveredFollowups
         );
       }
@@ -1678,6 +1678,75 @@ async function finishFailed(
     agent: agent.name,
     attempt,
     outcome: 'failed',
+    reason: recordedReason,
+    durationMs: Date.now() - started
+  };
+}
+
+async function finishVerifierInfrastructureFailure(
+  options: {
+    issue: GitHubIssue;
+    config: KaizenConfig;
+    runId: string;
+    github: GitHubClient;
+    trigger: RunSummary['trigger'];
+    stateDir: string;
+    project: { workspacePath: string };
+    runCommand: CommandRunner;
+    branch: string;
+  },
+  attempt: number,
+  verifierResult: VerifierResult,
+  started: number,
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>
+): Promise<RunIssueSummary> {
+  const previousState = await loadImplementationState(options.stateDir, options.issue.number);
+  const reason = `Verifier infrastructure failure: ${verifierResult.summary}`;
+  const checkpoint = await checkpointPartialChanges(options, options.issue);
+  const checkpointErrorReason = checkpoint.error ? `${reason}\n\nCheckpoint commit failed: ${checkpoint.error}` : reason;
+  const checkpointReason = checkpoint.forbiddenFiles?.length
+    ? `${checkpointErrorReason}\n\nForbidden changes discarded: ${checkpoint.forbiddenFiles.join(', ')}`
+    : checkpointErrorReason;
+  const draft = checkpoint.forbiddenFiles?.length
+    ? { skipped: 'forbidden changes were discarded before checkpoint publication' }
+    : await publishDraftCheckpoint(options, attempt, checkpointReason, verifyResults);
+  const publicationReason = draft.skipped ? `${checkpointReason}\n\nDraft PR publication skipped: ${draft.skipped}` : checkpointReason;
+  const recordedReason = draft.error ? `${publicationReason}\n\nDraft PR publication failed: ${draft.error}` : publicationReason;
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: options.branch,
+    phase: checkpoint.forbiddenFiles?.length && !checkpoint.restoredCheckpoint ? 'discarded' : 'infrastructure-failure',
+    attempt,
+    lastFailure: recordedReason,
+    pr: draft.pr?.number ?? previousState?.pr,
+    prUrl: draft.pr?.url ?? previousState?.prUrl
+  });
+  await options.github.comment(
+    options.issue.number,
+    buildResultComment({
+      runId: options.runId,
+      issue: options.issue.number,
+      attempt,
+      outcome: 'infrastructure-failure',
+      agent: 'verifier',
+      summary: recordedReason,
+      notes: verifierResult.notes,
+      verifyResults,
+      reason: recordedReason,
+      trigger: options.trigger,
+      maxAttempts: options.config.run.maxAttemptsPerIssue,
+      resumeBranch: options.branch,
+      prUrl: draft.pr?.url ?? previousState?.prUrl,
+      checkpointPublished: Boolean(draft.pr?.url ?? previousState?.prUrl) && (!checkpoint.forbiddenFiles?.length || checkpoint.restoredCheckpoint)
+    })
+  );
+  await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+  return {
+    number: options.issue.number,
+    title: options.issue.title,
+    agent: 'verifier',
+    attempt,
+    outcome: 'infrastructure-failure',
     reason: recordedReason,
     durationMs: Date.now() - started
   };
@@ -2450,7 +2519,8 @@ async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
     processed: summary.issues.length,
     fixed: summary.issues.filter((issue) => issue.outcome === 'direct-commit' || issue.outcome === 'pr-created').length,
     prCreated: summary.issues.filter((issue) => issue.outcome === 'pr-created').length,
-    failed: summary.issues.filter((issue) => issue.outcome === 'failed').length
+    failed: summary.issues.filter((issue) => issue.outcome === 'failed').length,
+    infrastructureFailed: summary.issues.filter((issue) => issue.outcome === 'infrastructure-failure').length
   };
   await fs.writeFile(path.join(projectStateDir(slug), 'last-run.json'), `${JSON.stringify(lastRun, null, 2)}\n`);
 }

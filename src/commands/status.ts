@@ -114,7 +114,7 @@ function isStaleImplementationState(state: ImplementationState): boolean {
 }
 
 function isImplementationNeedsAttention(state: ImplementationState): boolean {
-  return state.phase === 'failed' || state.phase === 'blocked' || Boolean(state.lastFailure);
+  return state.phase === 'failed' || state.phase === 'infrastructure-failure' || state.phase === 'blocked' || Boolean(state.lastFailure);
 }
 
 export async function listProjects() {
@@ -167,6 +167,7 @@ async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestB
       prCreated: cumulative.prCreated,
       directCommit: cumulative.directCommit,
       failed: cumulative.failed,
+      infrastructureFailed: cumulative.infrastructureFailed,
       blocked: cumulative.blocked,
       skipped: cumulative.skipped,
       verificationFailed: cumulative.verificationFailed,
@@ -190,6 +191,7 @@ async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestB
       prCreated: 0,
       directCommit: 0,
       failed: 0,
+      infrastructureFailed: 0,
       blocked: 0,
       skipped: 0,
       verificationFailed: 0,
@@ -227,6 +229,7 @@ function summarizeRunIssues(summaries: RunSummary[]) {
   metrics.prCreated = countOutcome(issues, 'pr-created');
   metrics.directCommit = countOutcome(issues, 'direct-commit');
   metrics.failed = countOutcome(issues, 'failed');
+  metrics.infrastructureFailed = countOutcome(issues, 'infrastructure-failure');
   metrics.blocked = countOutcome(issues, 'blocked');
   metrics.skipped = countOutcome(issues, 'skipped') + topLevelSkipped;
   metrics.verificationFailed = countReasonPrefix(issues, 'Verification failed:');
@@ -250,6 +253,7 @@ function emptyRunMetrics() {
     prCreated: 0,
     directCommit: 0,
     failed: 0,
+    infrastructureFailed: 0,
     blocked: 0,
     skipped: 0,
     verificationFailed: 0,
