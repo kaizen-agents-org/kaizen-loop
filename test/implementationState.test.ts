@@ -88,6 +88,7 @@ describe('implementation state', () => {
       updatedAt: new Date().toISOString()
     };
     expect(isResumableImplementationState({ ...base, phase: 'failed' })).toBe(true);
+    expect(isResumableImplementationState({ ...base, phase: 'infrastructure-failure' })).toBe(true);
     expect(isResumableImplementationState({ ...base, phase: 'blocked' })).toBe(true);
     expect(isResumableImplementationState({ ...base, phase: 'guardian' })).toBe(false);
     expect(isResumableImplementationState({ ...base, phase: 'discarded' })).toBe(false);

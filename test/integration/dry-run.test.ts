@@ -2759,6 +2759,123 @@ describe('runKaizen PR flow', () => {
     expect(String(comments.at(-1)?.[1].at(-1))).toContain('risk: low');
   });
 
+  it('preserves a checkpoint and classifies malformed verifier output as infrastructure failure', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let draftBody = '';
+    let resultComment = '';
+    let verifierRuns = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue()]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        draftBody = String(args[args.indexOf('--body') + 1]);
+        expect(args).toContain('--draft');
+        return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'comment') {
+        resultComment = String(args[args.indexOf('--body') + 1]);
+        return result(command, args, repo, '');
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          state: 'OPEN',
+          number: 4,
+          url: 'https://github.com/o/r/pull/4',
+          headRefName: 'kaizen/issue-1-fix-bug',
+          baseRefName: 'main',
+          headRefOid: 'abc123',
+          isDraft: true
+        }));
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        verifierRuns += 1;
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, {
+          status: verifierRuns === 1 ? 'unknown-protocol-status' : 'open_pr',
+          summary: verifierRuns === 1 ? 'invalid verifier response' : 'checkpoint verified',
+          notes: ''
+        });
+        return result(command, args, workspace, verifierRuns === 1 ? 'invalid verifier response' : 'checkpoint verified');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') return result(command, args, workspace, 'abc123\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0]).toMatchObject({
+      agent: 'verifier',
+      attempt: 1,
+      outcome: 'infrastructure-failure'
+    });
+    expect('issues' in summary && summary.issues[0].reason).toContain('Verifier infrastructure failure:');
+    expect(draftBody).toContain('Verifier infrastructure failure:');
+    expect(resultComment).toContain('Infrastructure failure; implementation checkpoint preserved');
+    expect(resultComment).toContain('"outcome":"infrastructure-failure"');
+    await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
+      phase: 'infrastructure-failure',
+      attempt: 1,
+      pr: 4
+    });
+
+    const builderCallsBeforeResume = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const resumed = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in resumed && resumed.issues[0].outcome).toBe('pr-created');
+    expect(verifierRuns).toBe(2);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(builderCallsBeforeResume);
+    expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args.join(' ') === '-lc npm test')).toBe(true);
+  });
+
   it('surfaces open_pr_with_warning verifier status in generated PR bodies', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
