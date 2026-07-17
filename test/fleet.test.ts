@@ -84,6 +84,50 @@ describe('migrateLegacySchedulerConfig', () => {
 });
 
 describe('syncFleet', () => {
+  it('parses the committed dogfood safety config through the fleet schema path', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('HOME', home);
+
+    const repoDir = path.join(root, 'kaizen-loop');
+    await fs.mkdir(path.join(repoDir, '.git'), { recursive: true });
+    await fs.mkdir(path.join(repoDir, '.kaizen'), { recursive: true });
+    await fs.copyFile('.kaizen/config.yml', path.join(repoDir, '.kaizen', 'config.yml'));
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/kaizen-loop.git\n');
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const output = await syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['kaizen-loop'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      dryRun: true,
+      runCommand: runner
+    });
+
+    expect(output.projects).toMatchObject([
+      {
+        slug: 'kaizen-agents-org-kaizen-loop',
+        repo: 'kaizen-agents-org/kaizen-loop',
+        configMigrated: false
+      }
+    ]);
+    expect(output.projects[0].error).toBeUndefined();
+    expect(fleetHasFailures(output)).toBe(false);
+  });
+
   it('requires an authoritative expected set before pruning', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
