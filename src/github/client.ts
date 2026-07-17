@@ -33,6 +33,7 @@ export const KAIZEN_LABELS = [
   'kaizen:upstream-first',
   'kaizen:not-actionable',
   'kaizen:attempts-exhausted',
+  'kaizen:roadmap',
   'kaizen:goal',
   'kaizen:agent:claude',
   'kaizen:agent:codex'
@@ -768,6 +769,7 @@ function descriptionForLabel(label: string): string {
     'kaizen:upstream-first': 'Upstream or source-of-truth work must complete before retry',
     'kaizen:not-actionable': 'Intake rejected this issue as unsafe or not actionable',
     'kaizen:attempts-exhausted': 'Automatic attempt budget exhausted; remove this label after choosing to retry',
+    'kaizen:roadmap': 'Roadmap placeholder; not an actionable Kaizen Loop backlog issue',
     'kaizen:goal': 'Goal-linked iteration issue',
     'kaizen:agent:claude': 'Prefer Claude through builder-agent for this issue',
     'kaizen:agent:codex': 'Prefer Codex through builder-agent for this issue'
