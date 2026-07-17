@@ -171,6 +171,8 @@ builder-agent adapter([06-agents.md](./06-agents.md))に修正を依頼する。
 
 `verifier.enabled: true` のとき、機械的検証が通ったあとに verifier を呼ぶ。
 
+run 開始時に `verifier --version --json` を実行し、構造化された provenance を run の `verifier-runtime.json` に保存する。リンク先 checkout の commit がビルド時 commit と異なる場合は、builder-agent を起動する前に run を fail-closed で停止する。構造化 version を実装していない旧 verifier は互換モードとして継続し、その出力を同じ診断ファイルに残す。
+
 verifier は「PR を作って良いか」だけを判断する保守的なゲート。マージ承認ではない。
 
 - `open_pr` → PR 作成へ進む

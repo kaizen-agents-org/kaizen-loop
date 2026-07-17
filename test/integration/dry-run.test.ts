@@ -554,6 +554,67 @@ describe('runKaizen dry-run', () => {
 });
 
 describe('runKaizen PR flow', () => {
+  it('stops before builder execution when verifier reports a stale build', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+        .replace('operationMode: external', 'operationMode: dogfood')
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(issue()));
+      }
+      if (command === 'verifier' && args.join(' ') === '--version --json') {
+        return result(command, args, options?.cwd, JSON.stringify({
+          name: 'verifier',
+          version: '0.0.0',
+          status: 'stale',
+          stale: true,
+          build: { commit: 'a'.repeat(40), builtAt: '2026-07-17T00:00:00.000Z', dirty: false },
+          runtime: { commit: 'b'.repeat(40), dirty: false, packageRoot: '/repo/packages/core' }
+        }));
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.result).toBe('failed');
+    expect('issues' in summary && summary.skipped[0]?.reason).toContain('Verifier preflight failed: stale build');
+    expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
+    const runsDir = path.join(home, 'projects', 'o-r', 'runs');
+    const [run] = await fs.readdir(runsDir);
+    const runtime = JSON.parse(await fs.readFile(path.join(runsDir, run, 'verifier-runtime.json'), 'utf8'));
+    expect(runtime).toMatchObject({ protocol: 'structured', status: 'stale', stale: true });
+  });
+
   it('loads run configuration from the synced workspace before selecting issues', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

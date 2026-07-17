@@ -348,6 +348,12 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         summary.skipped = selection.skipped;
       }
       if (selection.selected.length > 0) {
+        const verifierPreflightFailure = await preflightVerifier({ config, runCommand, runDir });
+        if (verifierPreflightFailure) {
+          runFailed = true;
+          summary.skipped.push({ number: 0, reason: verifierPreflightFailure });
+          return summary;
+        }
         const remoteUrl = await new GitClient(runCommand, resolved.project.localPath).remoteUrl('origin');
         const baseWorkspace = new WorkspaceManager(runCommand, resolved.project.workspacePath, remoteUrl);
         const baseline = await prepareBaseWorkspace({
@@ -477,6 +483,37 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     return summary;
   } finally {
     await lock.release();
+  }
+}
+
+async function preflightVerifier(options: {
+  config: KaizenConfig;
+  runCommand: CommandRunner;
+  runDir: string;
+}): Promise<string | undefined> {
+  if (!options.config.verifier.enabled) return undefined;
+  const adapter = new VerifierAgentAdapter(options.runCommand, {
+    ...options.config.verifier,
+    envAllowlist: options.config.safety.envAllowlist
+  });
+  const runtimePath = path.join(options.runDir, 'verifier-runtime.json');
+  try {
+    const runtime = await adapter.inspectRuntime();
+    await fs.writeFile(runtimePath, `${JSON.stringify(runtime, null, 2)}\n`);
+    if (runtime.stale) {
+      return `Verifier preflight failed: stale build (built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Rebuild and relink ${runtime.command}.`;
+    }
+    return undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await fs.writeFile(runtimePath, `${JSON.stringify({
+      protocol: 'unavailable',
+      command: options.config.verifier.command,
+      status: 'unavailable',
+      stale: null,
+      error: message
+    }, null, 2)}\n`);
+    return `Verifier preflight failed: ${message}`;
   }
 }
 

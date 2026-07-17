@@ -71,7 +71,10 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     if (!loaded.verifier.enabled) return;
-    if (!(await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).isAvailable())) throw new Error('unavailable');
+    const runtime = await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).inspectRuntime();
+    if (runtime.stale) {
+      throw new Error(`stale build: built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}`);
+    }
   });
   await check(checks, 'pr guardian skill runner', async () => {
     const loaded = config;

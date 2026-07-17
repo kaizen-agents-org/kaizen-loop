@@ -371,7 +371,7 @@ kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--guardia
 kaizen doctor [--project <slug>] [--repair]
 ```
 
-検査項目: gh 認証、設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。
+検査項目: gh 認証、設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。構造化された `verifier --version --json` を利用できる場合は、ビルド時 commit とリンク先 checkout の commit も比較し、stale build を診断エラーにする。旧 verifier のプレーンな version 出力は互換モードとして受け付ける。
 
 `--repair`: 設定から必要な GitHub ラベルを再作成する。複数 repo の registry 再構築、stale ロック削除、ワークスペース再作成、スケジューラ定義の再生成は `kaizen fleet` を使う。
 

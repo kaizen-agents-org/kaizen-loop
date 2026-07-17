@@ -55,6 +55,36 @@ const verifierPayloadSchema = z
   })
   .passthrough();
 
+const verifierVersionSchema = z.object({
+  name: z.literal('verifier'),
+  version: z.string(),
+  status: z.enum(['current', 'stale', 'unverifiable']),
+  stale: z.boolean().nullable(),
+  build: z.object({
+    commit: z.string().nullable(),
+    builtAt: z.string().nullable(),
+    dirty: z.boolean().nullable()
+  }),
+  runtime: z.object({
+    commit: z.string().nullable(),
+    dirty: z.boolean().nullable(),
+    packageRoot: z.string()
+  })
+}).passthrough().superRefine((value, context) => {
+  const expected = value.status === 'stale' ? true : value.status === 'current' ? false : null;
+  if (value.stale !== expected) {
+    context.addIssue({
+      code: 'custom',
+      path: ['stale'],
+      message: `status ${value.status} requires stale=${String(expected)}`
+    });
+  }
+});
+
+export type VerifierRuntimeInfo =
+  | ({ protocol: 'structured'; command: string; raw: string } & z.infer<typeof verifierVersionSchema>)
+  | { protocol: 'legacy'; command: string; status: 'legacy'; stale: null; raw: string; structuredError?: string };
+
 export interface VerifierAgentOptions {
   command: string;
   resultPath: string;
@@ -92,15 +122,47 @@ export class VerifierAgentAdapter {
 
   async isAvailable(): Promise<boolean> {
     try {
-      await this.runCommand(this.options.command, ['--version'], {
-        rejectOnNonZero: true,
-        timeoutMs: 30_000,
-        env: buildAllowlistedEnv(process.env, this.options.envAllowlist)
-      });
+      await this.inspectRuntime();
       return true;
     } catch {
       return false;
     }
+  }
+
+  async inspectRuntime(): Promise<VerifierRuntimeInfo> {
+    const commandOptions = {
+      rejectOnNonZero: true,
+      timeoutMs: 30_000,
+      env: buildAllowlistedEnv(process.env, this.options.envAllowlist)
+    };
+    let result: Awaited<ReturnType<CommandRunner>>;
+    let structuredError: string | undefined;
+    try {
+      result = await this.runCommand(this.options.command, ['--version', '--json'], commandOptions);
+    } catch (error) {
+      structuredError = error instanceof Error ? error.message : String(error);
+      result = await this.runCommand(this.options.command, ['--version'], commandOptions);
+    }
+    const raw = `${result.stdout}${result.stderr}`.trim();
+    let parsed: unknown;
+    try {
+      parsed = extractLastJsonObject(raw);
+    } catch {
+      return {
+        protocol: 'legacy',
+        command: this.options.command,
+        status: 'legacy',
+        stale: null,
+        raw,
+        ...(structuredError ? { structuredError } : {})
+      };
+    }
+    return {
+      protocol: 'structured',
+      command: this.options.command,
+      raw,
+      ...verifierVersionSchema.parse(parsed)
+    };
   }
 
   async run(req: VerifierRequest): Promise<VerifierResult> {
