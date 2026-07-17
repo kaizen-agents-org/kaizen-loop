@@ -368,6 +368,38 @@ describe('VerifierAgentAdapter', () => {
     });
   });
 
+  it('retries plain version output when a legacy verifier rejects --json', async () => {
+    const calls: string[][] = [];
+    const runner: CommandRunner = async (command, args, options) => {
+      calls.push(args);
+      if (args.includes('--json')) throw new Error('unknown option --json');
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: 'verifier 0.0.0\n',
+        stderr: '',
+        durationMs: 1
+      };
+    };
+    const runtime = await new VerifierAgentAdapter(runner, {
+      command: 'verifier',
+      resultPath: '.kaizen/verifier/verify-result.json',
+      timeoutMinutes: 1,
+      envAllowlist: ['PATH']
+    }).inspectRuntime();
+
+    expect(calls).toEqual([['--version', '--json'], ['--version']]);
+    expect(runtime).toMatchObject({
+      protocol: 'legacy',
+      status: 'legacy',
+      stale: null,
+      raw: 'verifier 0.0.0',
+      structuredError: 'unknown option --json'
+    });
+  });
+
   it('rejects malformed structured verifier provenance instead of downgrading it to legacy', async () => {
     const runner: CommandRunner = async (command, args, options) => ({
       command,

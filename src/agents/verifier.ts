@@ -83,7 +83,7 @@ const verifierVersionSchema = z.object({
 
 export type VerifierRuntimeInfo =
   | ({ protocol: 'structured'; command: string; raw: string } & z.infer<typeof verifierVersionSchema>)
-  | { protocol: 'legacy'; command: string; status: 'legacy'; stale: null; raw: string };
+  | { protocol: 'legacy'; command: string; status: 'legacy'; stale: null; raw: string; structuredError?: string };
 
 export interface VerifierAgentOptions {
   command: string;
@@ -130,11 +130,19 @@ export class VerifierAgentAdapter {
   }
 
   async inspectRuntime(): Promise<VerifierRuntimeInfo> {
-    const result = await this.runCommand(this.options.command, ['--version', '--json'], {
+    const commandOptions = {
       rejectOnNonZero: true,
       timeoutMs: 30_000,
       env: buildAllowlistedEnv(process.env, this.options.envAllowlist)
-    });
+    };
+    let result: Awaited<ReturnType<CommandRunner>>;
+    let structuredError: string | undefined;
+    try {
+      result = await this.runCommand(this.options.command, ['--version', '--json'], commandOptions);
+    } catch (error) {
+      structuredError = error instanceof Error ? error.message : String(error);
+      result = await this.runCommand(this.options.command, ['--version'], commandOptions);
+    }
     const raw = `${result.stdout}${result.stderr}`.trim();
     let parsed: unknown;
     try {
@@ -145,7 +153,8 @@ export class VerifierAgentAdapter {
         command: this.options.command,
         status: 'legacy',
         stale: null,
-        raw
+        raw,
+        ...(structuredError ? { structuredError } : {})
       };
     }
     return {
