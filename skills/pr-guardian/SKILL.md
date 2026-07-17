@@ -9,7 +9,7 @@ Use this workflow by default after opening a pull request in any repository wher
 
 ## Required Behavior
 
-1. Identify the PR number, repository, branch, remote, base branch, and current head SHA. Prefer the durable `kaizen guardian run <pr> --project <slug> --json` runner when the repository is registered; generated sync PRs carrying `<!-- kaizen-pr-guardian:managed -->` are adopted by scheduled reconciliation.
+1. Identify the PR number, repository, branch, remote, base branch, and current head SHA. Prefer the durable `kaizen guardian run <pr> --project <slug> --json` runner when the repository is registered, unless this skill is already running inside a guardian pass; generated sync PRs carrying `<!-- kaizen-pr-guardian:managed -->` are adopted by scheduled reconciliation.
 2. Check the initial PR state:
 
    ```sh
