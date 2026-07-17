@@ -37,6 +37,19 @@ describe('parseAgentResult', () => {
     ]);
     expect(parsed.durationMs).toBe(123);
   });
+
+  it('preserves a structured human request from claude output', () => {
+    const parsed = parseAgentResult(JSON.stringify({
+      result: '```json\n{"status":"blocked","summary":"approval needed","notes":"","blockedReason":"credential approval","humanRequest":{"reasonCode":"credentials","requestKey":"deployment-credential","question":"Provide the credential?"}}\n```'
+    }));
+    expect(parsed.humanRequest).toEqual({ reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide the credential?' });
+  });
+
+  it('rejects a human request on non-blocked claude output', () => {
+    expect(() => parseAgentResult(JSON.stringify({
+      result: '```json\n{"status":"fixed","summary":"done","notes":"","humanRequest":{"reasonCode":"credentials","requestKey":"deployment-credential","question":"Provide the credential?"}}\n```'
+    }))).toThrow(/humanRequest is only valid when status is blocked/);
+  });
 });
 
 describe('ClaudeCodeAdapter', () => {
@@ -128,6 +141,28 @@ describe('BuilderAgentAdapter', () => {
     expect(result.summary).toBe('直した');
     expect(result.discoveredIssues).toEqual([{ title: '別バグ', repo: 'kaizen-loop', body: '見つけた' }]);
     await expect(fs.access(path.join(workspace, '.kaizen', 'builder', 'build-result.json'))).rejects.toThrow();
+  });
+
+  it('preserves a structured human request from builder-agent', async () => {
+    const result = await runBuilderPayload({
+      status: 'blocked',
+      summary: 'approval needed',
+      notes: '',
+      blockedReason: 'credential approval',
+      humanRequest: { reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide the credential?' }
+    });
+    expect(result.humanRequest).toEqual({ reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide the credential?' });
+  });
+
+  it('rejects a human request on non-blocked builder output', async () => {
+    const result = await runBuilderPayload({
+      status: 'fixed',
+      summary: 'done',
+      notes: '',
+      humanRequest: { reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide the credential?' }
+    });
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain('humanRequest is only valid when status is blocked');
   });
 
   it('passes the configured provider fallback order to builder-agent', async () => {

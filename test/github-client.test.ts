@@ -4,6 +4,38 @@ import { buildDiscoveredIssueFingerprint } from '../src/discovered-issue-fingerp
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('GitHubClient', () => {
+  it('returns normalized label transitions for acknowledgement checks', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, JSON.stringify([
+      [
+        {
+          event: 'labeled',
+          label: { name: 'Kaizen:Needs-Human' },
+          actor: { login: 'maintainer' },
+          created_at: '2026-07-16T00:00:00Z'
+        },
+        { event: 'commented', created_at: '2026-07-16T00:00:30Z' }
+      ],
+      [{ event: 'unlabeled', label: { name: 'kaizen:needs-human' }, created_at: '2026-07-16T00:01:00Z' }]
+    ])));
+
+    await expect(new GitHubClient(runner, '/repo').getIssueLabelEvents(
+      'o/r', 1, 'kaizen:needs-human'
+    )).resolves.toEqual([
+      {
+        event: 'labeled',
+        label: 'Kaizen:Needs-Human',
+        actor: 'maintainer',
+        createdAt: '2026-07-16T00:00:00Z'
+      },
+      {
+        event: 'unlabeled',
+        label: 'kaizen:needs-human',
+        actor: undefined,
+        createdAt: '2026-07-16T00:01:00Z'
+      }
+    ]);
+  });
+
   it('accepts an active authorization label applied by a triage maintainer', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'issue') {

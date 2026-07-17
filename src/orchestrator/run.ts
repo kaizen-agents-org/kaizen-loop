@@ -10,7 +10,14 @@ import type { KaizenConfig, Registry } from '../config/schema.js';
 import { buildDiscoveredIssueFingerprint, parseFailureClass } from '../discovered-issue-fingerprint.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestDetails, PullRequestResult } from '../github/types.js';
-import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts, markedPullRequestNumbers } from '../report/comments.js';
+import {
+  agentSummary,
+  buildPrProgressComment,
+  buildResultComment,
+  countAttempts,
+  countConsecutiveRetryableBlocks,
+  markedPullRequestNumbers
+} from '../report/comments.js';
 import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
@@ -25,6 +32,14 @@ import {
 } from '../workspace/manager.js';
 import { GitClient } from '../workspace/git.js';
 import { labelNames, priorityLabel, selectIssues, type IssueSelection } from './issues.js';
+import {
+  applyIssueDisposition,
+  dispositionForBlockedAgent,
+  dispositionForIntake,
+  humanRequestForIntake,
+  type IssueDisposition
+} from './disposition.js';
+import { ensureHumanRequest } from './humanRequest.js';
 import { RunLock } from './lock.js';
 import {
   enqueueManagedPrGuardianJobs,
@@ -111,6 +126,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
   let trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
   const startedAt = new Date();
+  const runId = toRunId(startedAt);
   let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   let github = new GitHubClient(runCommand, resolved.project.localPath);
@@ -250,7 +266,6 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       });
     }
 
-    const runId = toRunId(startedAt);
     const runDir = path.join(stateDir, 'runs', runId);
     await fs.mkdir(runDir, { recursive: true });
 
@@ -395,7 +410,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
                   maxAttempts: config.run.maxAttemptsPerIssue,
                   prUrl: checkpoint.prUrl
                 }));
-                await github.addLabels(issue.number, ['kaizen:needs-human']);
+                await applyIssueDisposition(github, issue.number, 'blocked');
                 await github.removeLabels(issue.number, ['kaizen:in-progress']);
                 summary.issues.push({
                   number: issue.number,
@@ -540,11 +555,27 @@ async function applyIssueIntakeGate(options: {
       continue;
     }
 
+    const request = humanRequestForIntake(decision);
+    if (request) {
+      const humanState = await ensureHumanRequest({
+        issue,
+        request,
+        runId: options.runId,
+        repo: options.repo,
+        github: options.github
+      });
+      if (humanState === 'acknowledged') {
+        selected.push(issue);
+        continue;
+      }
+    }
+
     await recordIntakeSkip({
       issue,
       decision,
       runId: options.runId,
-      github: options.github
+      github: options.github,
+      humanRequestAlreadyRecorded: Boolean(request)
     });
     skipped.push({ number: issue.number, reason: `intake ${decision.status}: ${decision.reason}` });
   }
@@ -608,7 +639,8 @@ async function reconcileMergedPullRequestIssues(options: {
             issue.number,
             `Kaizen Loop reconciled this issue after merged PR ${pr.url} did not leave the issue closed automatically.`
           );
-          await options.github.removeLabels(issue.number, ['kaizen:in-progress', 'kaizen:needs-human']);
+          await options.github.removeLabels(issue.number, ['kaizen:in-progress']);
+          await applyIssueDisposition(options.github, issue.number);
         } catch {
           break;
         }
@@ -625,6 +657,7 @@ async function recordIntakeSkip(options: {
   decision: IssueIntakeDecision;
   runId: string;
   github: GitHubClient;
+  humanRequestAlreadyRecorded?: boolean;
 }): Promise<void> {
   if (
     options.decision.status === 'already_resolved' &&
@@ -633,8 +666,9 @@ async function recordIntakeSkip(options: {
     return;
   }
   await options.github.comment(options.issue.number, buildIssueIntakeComment(options.runId, options.decision));
-  if (options.decision.status !== 'already_resolved') {
-    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  const disposition = dispositionForIntake(options.decision.status);
+  if (disposition && !options.humanRequestAlreadyRecorded) {
+    await applyIssueDisposition(options.github, options.issue.number, disposition);
   }
 }
 
@@ -847,6 +881,7 @@ async function processIssue(options: {
   try {
     assertRunWithinDeadline(options.runDeadlineAt);
     await assertMinFreeDisk(options.project.workspacePath, options.config.safety.minFreeDiskMb);
+    await applyIssueDisposition(options.github, options.issue.number);
     await options.github.addLabels(options.issue.number, ['kaizen:in-progress']);
     const savedState = await loadImplementationState(options.stateDir, options.issue.number);
     const previousState = isResumableImplementationState(savedState) ? savedState : undefined;
@@ -1166,6 +1201,7 @@ async function processIssue(options: {
         );
         await options.github.closeIssue(options.issue.number);
         await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+        await applyIssueDisposition(options.github, options.issue.number);
         await saveImplementationState(options.stateDir, {
           issue: options.issue.number,
           branch,
@@ -1280,9 +1316,7 @@ async function finishPr(
       maxAttempts: options.config.run.maxAttemptsPerIssue
     })
   );
-  if (guardianFailed) {
-    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
-  }
+  await applyIssueDisposition(options.github, options.issue.number, guardianFailed ? 'blocked' : undefined);
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
 
   return {
@@ -1363,7 +1397,7 @@ async function handOffReadyCheckpointPullRequest(
     maxAttempts: options.config.run.maxAttemptsPerIssue,
     prUrl: pullRequest.url
   }));
-  if (guardian.status === 'failed') await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  await applyIssueDisposition(options.github, options.issue.number, guardian.status === 'failed' ? 'blocked' : undefined);
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
   return {
     number: options.issue.number,
@@ -1422,7 +1456,7 @@ async function finishCheckpointPullRequestMismatch(
     maxAttempts: options.config.run.maxAttemptsPerIssue,
     prUrl: checkpoint.prUrl ?? pullRequest.url
   }));
-  await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+  await applyIssueDisposition(options.github, options.issue.number, 'blocked');
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
   return {
     number: options.issue.number,
@@ -1492,7 +1526,7 @@ async function finishBlocked(
     github: GitHubClient;
     trigger: RunSummary['trigger'];
     stateDir: string;
-    project: { workspacePath: string };
+    project: { repo: string; workspacePath: string };
     runCommand: CommandRunner;
     branch: string;
   },
@@ -1501,7 +1535,26 @@ async function finishBlocked(
   agentResult: AgentResult,
   started: number
 ): Promise<RunIssueSummary> {
-  const requiresHuman = requiresHumanForBlockedAgent(agentResult);
+  let disposition: Extract<
+    IssueDisposition,
+    'human-input-required' | 'retryable' | 'blocked' | 'attempts-exhausted'
+  > = dispositionForBlockedAgent(agentResult);
+  if (
+    disposition === 'retryable' &&
+    countConsecutiveRetryableBlocks(options.issue.comments ?? []) + 1 >= options.config.run.maxAttemptsPerIssue
+  ) {
+    disposition = 'attempts-exhausted';
+  }
+  if (disposition === 'human-input-required' && agentResult.humanRequest) {
+    const humanState = await ensureHumanRequest({
+      issue: options.issue,
+      request: agentResult.humanRequest,
+      runId: options.runId,
+      repo: options.project.repo,
+      github: options.github
+    });
+    if (humanState === 'acknowledged') disposition = 'blocked';
+  }
   const reason = agentResult.blockedReason ?? agentResult.summary;
   const previousState = await loadImplementationState(options.stateDir, options.issue.number);
   const checkpoint = await checkpointPartialChanges(options, options.issue);
@@ -1538,16 +1591,14 @@ async function finishBlocked(
       reason: recordedReason,
       trigger: options.trigger,
       maxAttempts: options.config.run.maxAttemptsPerIssue,
-      requiresHuman,
+      blockDisposition: disposition,
       resumeBranch: options.branch,
       prUrl: draft.pr?.url ?? previousState?.prUrl,
       checkpointPublished: Boolean(draft.pr?.url ?? previousState?.prUrl) && (!checkpoint.forbiddenFiles?.length || checkpoint.restoredCheckpoint)
     })
   );
-  if (requiresHuman) {
-    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
-  } else {
-    await options.github.removeLabels(options.issue.number, ['kaizen:needs-human']);
+  if (disposition !== 'human-input-required') {
+    await applyIssueDisposition(options.github, options.issue.number, disposition);
   }
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
   return {
@@ -1559,27 +1610,6 @@ async function finishBlocked(
     reason: recordedReason,
     durationMs: Date.now() - started
   };
-}
-
-export function requiresHumanForBlockedAgent(agentResult: AgentResult): boolean {
-  const text = `${agentResult.blockedReason ?? ''}\n${agentResult.notes}\n${agentResult.raw}`;
-  if (isProviderCapacityBlock(text)) return false;
-  return true;
-}
-
-function isProviderCapacityBlock(text: string): boolean {
-  return [
-    /\bfailureclass\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
-    /\bfallbackreason\s*[:=]\s*(timeout|rate_limited|rate limited)\b/i,
-    /\bapi_error_status["']?\s*[:=]\s*429\b/i,
-    /\b(?:http|status)\s*[:=]\s*429\b/i,
-    /\bagent command timed out after \d+ms\b/i,
-    /["']result["']\s*:\s*["'][^"']*(session limit|rate limit exceeded|too many requests)/i,
-    /\bfailed to initialize in-process app-server client:\s*operation not permitted\b/i,
-    /\bcould not create path aliases:\s*operation not permitted\b/i,
-    /\bfailureclass\s*[:=]\s*(command_missing|auth_failed|authentication_failed|login_required)\b/i,
-    /\bfallbackreason\s*[:=]\s*(command_missing|auth_failed|authentication_failed|login_required)\b/i
-  ].some((pattern) => pattern.test(text));
 }
 
 async function finishFailed(
@@ -1639,7 +1669,7 @@ async function finishFailed(
     })
   );
   if (attempt >= options.config.run.maxAttemptsPerIssue) {
-    await options.github.addLabels(options.issue.number, ['kaizen:needs-human']);
+    await applyIssueDisposition(options.github, options.issue.number, 'attempts-exhausted');
   }
   await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
   return {

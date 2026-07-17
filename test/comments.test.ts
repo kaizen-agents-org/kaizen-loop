@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildResultComment, countAttempts, hasRetryableExternalBlock, markedPullRequestNumbers } from '../src/report/comments.js';
+import {
+  buildResultComment,
+  countAttempts,
+  countConsecutiveRetryableBlocks,
+  hasRetryableExternalBlock,
+  markedPullRequestNumbers
+} from '../src/report/comments.js';
 
 describe('result comments', () => {
   it('includes a machine-readable marker and counts attempts', () => {
@@ -78,7 +84,7 @@ describe('result comments', () => {
       outcome: 'blocked',
       agent: 'codex',
       summary: 'provider capacity exhausted',
-      requiresHuman: false,
+      blockDisposition: 'retryable',
       maxAttempts: 3
     });
     const human = buildResultComment({
@@ -88,6 +94,7 @@ describe('result comments', () => {
       outcome: 'blocked',
       agent: 'codex',
       summary: 'needs credentials',
+      blockDisposition: 'human-input-required',
       maxAttempts: 3
     });
 
@@ -98,6 +105,56 @@ describe('result comments', () => {
     expect(countAttempts([{ body: human }])).toBe(1);
     expect(hasRetryableExternalBlock([{ body: retryable }])).toBe(true);
     expect(hasRetryableExternalBlock([{ body: human }])).toBe(false);
+    expect(human).toContain('"humanConfirmationRequired":true');
+  });
+
+  it('counts only the latest consecutive retryable blocks', () => {
+    const retryable = buildResultComment({
+      runId: 'run', issue: 1, attempt: 1, outcome: 'blocked', agent: 'codex', summary: 'retry',
+      blockDisposition: 'retryable', maxAttempts: 3
+    });
+    const blocked = buildResultComment({
+      runId: 'run', issue: 1, attempt: 1, outcome: 'blocked', agent: 'codex', summary: 'blocked',
+      blockDisposition: 'blocked', maxAttempts: 3
+    });
+    expect(countConsecutiveRetryableBlocks([{ body: blocked }, { body: retryable }, { body: retryable }])).toBe(2);
+    expect(countConsecutiveRetryableBlocks([{ body: retryable }, { body: blocked }])).toBe(0);
+  });
+
+  it('counts legacy retryable evidence toward the consecutive retry budget', () => {
+    const legacyRetryable = [
+      'failureClass=timeout; fallbackReason=rate_limited',
+      '<!-- kaizen-loop:result {"attempt":1,"outcome":"blocked"} -->'
+    ].join('\n');
+    const currentRetryable = buildResultComment({
+      runId: 'run', issue: 1, attempt: 2, outcome: 'blocked', agent: 'codex', summary: 'retry',
+      blockDisposition: 'retryable', maxAttempts: 3
+    });
+    const blocked = buildResultComment({
+      runId: 'run', issue: 1, attempt: 3, outcome: 'blocked', agent: 'codex', summary: 'blocked',
+      blockDisposition: 'blocked', maxAttempts: 3
+    });
+    const humanWithRetryableEvidence = buildResultComment({
+      runId: 'run', issue: 1, attempt: 3, outcome: 'blocked', agent: 'codex',
+      summary: 'Approval required after failureClass=timeout',
+      blockDisposition: 'human-input-required', maxAttempts: 3
+    });
+
+    expect(countConsecutiveRetryableBlocks([
+      { body: legacyRetryable },
+      { body: currentRetryable }
+    ])).toBe(2);
+    expect(countConsecutiveRetryableBlocks([
+      { body: legacyRetryable },
+      { body: blocked }
+    ])).toBe(0);
+    expect(countConsecutiveRetryableBlocks([
+      { body: legacyRetryable },
+      { body: humanWithRetryableEvidence },
+      { body: currentRetryable }
+    ])).toBe(1);
+    expect(hasRetryableExternalBlock([{ body: humanWithRetryableEvidence }])).toBe(false);
+    expect(countAttempts([{ body: humanWithRetryableEvidence }])).toBe(1);
   });
 
   it('uses the latest result when deciding whether a blocked issue is retryable', () => {
@@ -108,7 +165,7 @@ describe('result comments', () => {
       outcome: 'blocked',
       agent: 'codex',
       summary: 'provider capacity exhausted',
-      requiresHuman: false,
+      blockDisposition: 'retryable',
       maxAttempts: 3
     });
     const human = buildResultComment({

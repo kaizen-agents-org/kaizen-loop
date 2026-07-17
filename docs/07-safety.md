@@ -27,7 +27,9 @@
 | `kaizen scheduler disable` | スケジューラ解除 + 実行中プロセスに SIGTERM | 即時 |
 | `touch ~/.kaizen/projects/<slug>/PAUSE` | 次回以降の実行をプリフライトで中止(スケジューラ定義は残る)。SSH 越し・スクリプトから止めたいとき用 | 次回実行から |
 | Issue から `kaizen` ラベルを外す | その Issue だけ対象外に | 次回実行から |
-| `kaizen:needs-human` を付ける | その Issue の自動処理を停止し人間に委ねる | 次回実行から |
+| terminal disposition (`kaizen:blocked` など)を付ける | 理由別に自動処理を停止する。原因解消後に該当ラベルを外す | 次回実行から |
+
+`kaizen:needs-human` はキルスイッチではない。構造化された確認 request に対してオーケストレータだけが付与する。運用者が手動で停止する場合は `PAUSE` または `kaizen scheduler disable` を使い、単一 Issue を除外する場合は `kaizen` ラベルを外す。
 
 ### SIGTERM 受信時の挙動(グレースフルシャットダウン)
 

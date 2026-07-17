@@ -21,11 +21,13 @@ Issue creation and loop execution are separate decisions.
 
 For bundled issue-filing skills such as `kaizen-bug-router`:
 
-| User intent | Labels |
+| User intent | Registration |
 |---|---|
 | File or record a bug | `kaizen` plus priority/bug labels when available |
 | Queue for the next loop | `kaizen`, `kaizen:ready` |
 | Run immediately | `kaizen`, `kaizen:ready`, then an explicit immediate command such as `kaizen fix <issue>` |
-| Needs human input first | `kaizen`, `kaizen:needs-human` |
+| Needs human input first | `kaizen` を付け、オーケストレータへ構造化 `humanRequest` を返す。skill が `kaizen:needs-human` を直接付けてはならない |
+
+`kaizen:needs-human` は具体的な未回答 request 専用であり、versioned marker と安定した request identity を保存するオーケストレータだけが付与する。単なる失敗・上流先行・試行上限を表す目的では指定しない。
 
 When `issues.selection.mode: auto`, the base `kaizen` label remains enough for automatic selection. When `issues.selection.mode: manual-only`, scheduled selection does not pick any issue; explicit commands are required.

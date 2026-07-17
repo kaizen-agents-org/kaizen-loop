@@ -42,7 +42,7 @@ describe('selectIssues', () => {
       issues: [
         issue(1, 'needs human', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:needs-human']),
         {
-          ...issue(2, 'exhausted', '2026-06-12T02:00:00Z', ['kaizen']),
+          ...issue(2, 'exhausted', '2026-06-12T02:00:00Z', ['kaizen', 'kaizen:attempts-exhausted']),
           comments: [
             { body: '<!-- kaizen-loop:result {"attempt":1} -->' },
             { body: '<!-- kaizen-loop:result {"attempt":2} -->' }
@@ -55,11 +55,28 @@ describe('selectIssues', () => {
     expect(selection.selected.map((item) => item.number)).toEqual([3]);
     expect(selection.skipped).toEqual([
       { number: 1, reason: 'needs-human' },
-      { number: 2, reason: 'max attempts reached' }
+      { number: 2, reason: 'terminal disposition: kaizen:attempts-exhausted' }
     ]);
   });
 
-  it('retries a needs-human issue after a retryable external block', () => {
+  it('allows one new attempt after an operator removes attempts-exhausted', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [{
+        ...issue(1, 'retry approved', '2026-06-12T01:00:00Z', ['kaizen']),
+        comments: [
+          { body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"failed"} -->' },
+          { body: '<!-- kaizen-loop:result {"attempt":2,"outcome":"failed"} -->' }
+        ]
+      }]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
+  });
+
+  it('does not retry a reopened issue while its unanswered needs-human label remains active', () => {
     const selection = selectIssues({
       config,
       maxIssues: 10,
@@ -75,11 +92,35 @@ describe('selectIssues', () => {
       ]
     });
 
-    expect(selection.selected.map((item) => item.number)).toEqual([1]);
-    expect(selection.skipped).toEqual([]);
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'needs-human' }]);
   });
 
-  it('keeps other excluded labels effective during retryable external recovery', () => {
+  it.each([
+    'kaizen:blocked',
+    'kaizen:upstream-first',
+    'kaizen:not-actionable',
+    'kaizen:attempts-exhausted'
+  ])('excludes terminal disposition %s from scheduled selection', (label) => {
+    const result = selectIssues({
+      issues: [issue(1, 'terminal', '2026-06-12T01:00:00Z', ['kaizen', label])],
+      config,
+      maxIssues: 1
+    });
+    expect(result.selected).toEqual([]);
+    expect(result.skipped).toEqual([{ number: 1, reason: `terminal disposition: ${label}` }]);
+  });
+
+  it('keeps retryable disposition eligible', () => {
+    const result = selectIssues({
+      issues: [issue(1, 'retryable', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:retryable'])],
+      config,
+      maxIssues: 1
+    });
+    expect(result.selected.map((item) => item.number)).toEqual([1]);
+  });
+
+  it('treats needs-human as authoritative when another excluded label is active', () => {
     const selection = selectIssues({
       config: configSchema.parse({
         version: 1,
@@ -95,7 +136,7 @@ describe('selectIssues', () => {
     });
 
     expect(selection.selected).toEqual([]);
-    expect(selection.skipped).toEqual([{ number: 1, reason: 'excluded label: do-not-run' }]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'needs-human' }]);
   });
 
   it('skips issues that already have a pending pull request in automatic selection', () => {

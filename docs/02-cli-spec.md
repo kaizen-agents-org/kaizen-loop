@@ -54,7 +54,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 3. **ファイル生成**(リポジトリ内 → 要コミット):
    - `.kaizen/config.yml`(→ [03-config-spec.md](./03-config-spec.md))
    - `.github/ISSUE_TEMPLATE/kaizen.yml`(→ [05-issue-conventions.md](./05-issue-conventions.md))
-4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, `kaizen:needs-human`, `kaizen:goal`, `kaizen:agent:claude`, `kaizen:agent:codex`
+4. **GitHub ラベル作成**(冪等): `kaizen`, `kaizen:P0/P1/P2`, `kaizen:direct`, `kaizen:pr-only`, `kaizen:in-progress`, primary disposition (`kaizen:needs-human`, `kaizen:retryable`, `kaizen:blocked`, `kaizen:upstream-first`, `kaizen:not-actionable`, `kaizen:attempts-exhausted`), `kaizen:goal`, `kaizen:agent:claude`, `kaizen:agent:codex`
 5. **ローカル登録**: `~/.kaizen/registry.json` にプロジェクト追加、専用クローン作成(`~/.kaizen/workspaces/<slug>/`)
 6. 完了サマリと「次のステップ」(生成ファイルのコミット、`kaizen scheduler sync` によるスケジューラ登録、最初の Issue 登録方法)を表示
 

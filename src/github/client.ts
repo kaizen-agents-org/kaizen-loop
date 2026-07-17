@@ -9,6 +9,7 @@ import {
 } from '../discovered-issue-fingerprint.js';
 import type {
   GitHubIssue,
+  GitHubLabelEvent,
   GitHubPullRequest,
   GitHubPullRequestDetails,
   GitHubPullRequestLinkage,
@@ -27,6 +28,11 @@ export const KAIZEN_LABELS = [
   'kaizen:pr-only',
   'kaizen:in-progress',
   'kaizen:needs-human',
+  'kaizen:retryable',
+  'kaizen:blocked',
+  'kaizen:upstream-first',
+  'kaizen:not-actionable',
+  'kaizen:attempts-exhausted',
   'kaizen:goal',
   'kaizen:agent:claude',
   'kaizen:agent:codex'
@@ -85,6 +91,35 @@ export class GitHubClient {
       'number,title,body,labels,createdAt,comments,url'
     ]);
     return JSON.parse(result.stdout) as GitHubIssue;
+  }
+
+  async getIssueLabelEvents(repo: string, issue: number, label: string): Promise<GitHubLabelEvent[]> {
+    const result = await this.gh([
+      'api',
+      '--paginate',
+      '--slurp',
+      `repos/${repo}/issues/${issue}/events`
+    ]);
+    const pages = JSON.parse(result.stdout || '[]') as Array<Array<{
+      event?: string;
+      actor?: { login?: string };
+      label?: { name?: string };
+      created_at?: string;
+    }>>;
+    const normalizedLabel = label.toLowerCase();
+    return pages.flat().flatMap((item) => {
+      if (
+        (item.event !== 'labeled' && item.event !== 'unlabeled') ||
+        item.label?.name?.toLowerCase() !== normalizedLabel ||
+        !item.created_at
+      ) return [];
+      return [{
+        event: item.event,
+        label: item.label.name,
+        actor: item.actor?.login,
+        createdAt: item.created_at
+      }];
+    });
   }
 
   async checkExecutionAuthorization(options: {
@@ -708,6 +743,10 @@ function colorForLabel(label: string): string {
   if (label.includes(':P2')) return 'fbca04';
   if (label.includes('ready')) return '0e8a16';
   if (label.includes('needs-human')) return '5319e7';
+  if (label.includes('blocked') || label.includes('attempts-exhausted')) return 'b60205';
+  if (label.includes('retryable')) return 'fbca04';
+  if (label.includes('upstream-first')) return '1d76db';
+  if (label.includes('not-actionable')) return '6a737d';
   if (label.includes('in-progress')) return '1d76db';
   return '0e8a16';
 }
@@ -723,7 +762,12 @@ function descriptionForLabel(label: string): string {
     'kaizen:direct': 'Allow direct commit when policy permits',
     'kaizen:pr-only': 'Force pull request reflection',
     'kaizen:in-progress': 'Currently being processed by Kaizen Loop',
-    'kaizen:needs-human': 'Needs human input before retry',
+    'kaizen:needs-human': 'A concrete human question is waiting for an answer; removal acknowledges it',
+    'kaizen:retryable': 'Transient external failure; Kaizen Loop will retry automatically',
+    'kaizen:blocked': 'Automation cannot proceed; remove this label after resolving the blocker to retry',
+    'kaizen:upstream-first': 'Upstream or source-of-truth work must complete before retry',
+    'kaizen:not-actionable': 'Intake rejected this issue as unsafe or not actionable',
+    'kaizen:attempts-exhausted': 'Automatic attempt budget exhausted; remove this label after choosing to retry',
     'kaizen:goal': 'Goal-linked iteration issue',
     'kaizen:agent:claude': 'Prefer Claude through builder-agent for this issue',
     'kaizen:agent:codex': 'Prefer Codex through builder-agent for this issue'

@@ -29,7 +29,7 @@
 | 2-2 | PR-first 反映 | ready-for-review PR 作成を既定にする。明示 opt-in 用にリスク判定(`decideReflection` 純関数 + 全パターンのユニットテスト)と直接コミット経路(rebase + 再検証 + PR フォールバック)を持つ |
 | 2-3 | 検証リトライ | エラーフィードバック付き再修正(`maxVerifyRetries`) |
 | 2-4 | CodexAdapter | codex exec 対応、フォールバックロジック |
-| 2-5 | 試行回数管理 | 結果コメントの機械可読マーカー、`maxAttemptsPerIssue`、`kaizen:needs-human` エスカレーション |
+| 2-5 | 試行回数管理 | 結果コメントの機械可読マーカー、`maxAttemptsPerIssue`、`kaizen:attempts-exhausted` 遷移 |
 | 2-6 | `kaizen report` | 人間・AI 共用の Issue 登録、`--json` |
 | 2-7 | `kaizen status` / `logs` / `doctor` / `list` | 朝の確認ルーティンと運用コマンド一式 |
 | 2-8 | ベースライン検証 | 修正前 verify による「もともと壊れている」検知(→ [07-safety.md](./07-safety.md) §3) |

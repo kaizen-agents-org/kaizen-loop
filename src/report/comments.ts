@@ -15,7 +15,7 @@ export interface ResultCommentOptions {
   reason?: string;
   trigger?: string;
   maxAttempts: number;
-  requiresHuman?: boolean;
+  blockDisposition?: 'human-input-required' | 'retryable' | 'blocked' | 'attempts-exhausted';
   resumeBranch?: string;
   checkpointPublished?: boolean;
 }
@@ -32,7 +32,8 @@ export function buildResultComment(options: ResultCommentOptions): string {
     trigger: options.trigger,
     commit: options.commit,
     pr: options.prUrl,
-    retryableExternal: options.requiresHuman === false || undefined,
+    retryableExternal: options.blockDisposition === 'retryable' || undefined,
+    humanConfirmationRequired: options.blockDisposition === 'human-input-required' || undefined,
     checkpointBranch: options.checkpointPublished ? options.resumeBranch : undefined
   };
 
@@ -80,7 +81,9 @@ PR created (${options.prUrl}); monitoring CI and review feedback with pr-guardia
 export function countAttempts(comments: Array<{ body: string }>): number {
   return comments.filter((comment) => {
     const marker = parseKaizenMarker(comment.body, 'result');
-    return marker !== undefined && !marker.retryableExternal && !hasRetryableExternalEvidence(comment.body);
+    if (!marker) return false;
+    if (marker.humanConfirmationRequired === true) return true;
+    return !marker.retryableExternal && !hasRetryableExternalEvidence(comment.body);
   }).length;
 }
 
@@ -91,8 +94,27 @@ export function hasRetryableExternalBlock(comments: Array<{ body: string }>): bo
     .find((candidate) => candidate.marker !== undefined);
   return Boolean(
     marker?.marker?.outcome === 'blocked' &&
+      marker.marker.humanConfirmationRequired !== true &&
       (marker.marker.retryableExternal === true || hasRetryableExternalEvidence(marker.comment.body))
   );
+}
+
+export function countConsecutiveRetryableBlocks(comments: Array<{ body: string }>): number {
+  let count = 0;
+  for (const comment of [...comments].reverse()) {
+    const marker = parseKaizenMarker(comment.body, 'result');
+    if (!marker) continue;
+    if (
+      marker.outcome === 'blocked' &&
+      marker.humanConfirmationRequired !== true &&
+      (marker.retryableExternal === true || hasRetryableExternalEvidence(comment.body))
+    ) {
+      count += 1;
+      continue;
+    }
+    break;
+  }
+  return count;
 }
 
 export function hasPendingPullRequest(comments: Array<{ body: string }>, openPullRequests: GitHubPullRequest[] = []): boolean {
@@ -124,11 +146,21 @@ export function agentSummary(result: AgentResult): string {
   return result.summary;
 }
 
-function parseKaizenMarker(body: string, kind: 'result' | 'progress'): { outcome?: string; pr?: string; retryableExternal?: boolean } | undefined {
+function parseKaizenMarker(body: string, kind: 'result' | 'progress'): {
+  outcome?: string;
+  pr?: string;
+  retryableExternal?: boolean;
+  humanConfirmationRequired?: boolean;
+} | undefined {
   const match = body.match(new RegExp(`<!--\\s*kaizen-loop:${kind}\\s+({.*?})\\s*-->`, 's'));
   if (!match) return undefined;
   try {
-    return JSON.parse(match[1]) as { outcome?: string; pr?: string; retryableExternal?: boolean };
+    return JSON.parse(match[1]) as {
+      outcome?: string;
+      pr?: string;
+      retryableExternal?: boolean;
+      humanConfirmationRequired?: boolean;
+    };
   } catch {
     return undefined;
   }
@@ -147,7 +179,12 @@ function pullRequestNumber(value: string): number | undefined {
 function formatOutcome(options: ResultCommentOptions): string {
   if (options.outcome === 'pr-created') return `PR created${options.prUrl ? ` (${options.prUrl})` : ''}`;
   if (options.outcome === 'direct-commit') return `Direct commit${options.commit ? ` (${options.commit})` : ''}`;
-  if (options.outcome === 'blocked') return options.requiresHuman === false ? 'Blocked; retryable external dependency' : 'Blocked; needs human input';
+  if (options.outcome === 'blocked') {
+    if (options.blockDisposition === 'retryable') return 'Blocked; retryable external dependency';
+    if (options.blockDisposition === 'human-input-required') return 'Blocked; needs human input';
+    if (options.blockDisposition === 'attempts-exhausted') return 'Blocked; retry budget exhausted';
+    return 'Blocked; automation cannot proceed';
+  }
   if (options.outcome === 'skipped') return 'Skipped';
   return 'Failed';
 }
