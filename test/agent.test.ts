@@ -311,6 +311,82 @@ describe('VerifierAgentAdapter', () => {
     expect(result.confidence).toBeUndefined();
     expect(result.risk).toBeUndefined();
   });
+
+  it('parses structured verifier build provenance', async () => {
+    const runner: CommandRunner = async (command, args, options) => {
+      expect(args).toEqual(['--version', '--json']);
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: JSON.stringify({
+          name: 'verifier',
+          version: '0.0.0',
+          status: 'stale',
+          stale: true,
+          build: { commit: 'a'.repeat(40), builtAt: '2026-07-17T00:00:00.000Z', dirty: false },
+          runtime: { commit: 'b'.repeat(40), dirty: false, packageRoot: '/repo/packages/core' }
+        }),
+        stderr: '',
+        durationMs: 1
+      };
+    };
+    const runtime = await new VerifierAgentAdapter(runner, {
+      command: 'verifier',
+      resultPath: '.kaizen/verifier/verify-result.json',
+      timeoutMinutes: 1,
+      envAllowlist: ['PATH']
+    }).inspectRuntime();
+
+    expect(runtime).toMatchObject({ protocol: 'structured', status: 'stale', stale: true });
+  });
+
+  it('keeps legacy verifier version output compatible', async () => {
+    const runner: CommandRunner = async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: 'verifier 0.0.0\n',
+      stderr: '',
+      durationMs: 1
+    });
+    const runtime = await new VerifierAgentAdapter(runner, {
+      command: 'verifier',
+      resultPath: '.kaizen/verifier/verify-result.json',
+      timeoutMinutes: 1,
+      envAllowlist: ['PATH']
+    }).inspectRuntime();
+
+    expect(runtime).toEqual({
+      protocol: 'legacy',
+      command: 'verifier',
+      status: 'legacy',
+      stale: null,
+      raw: 'verifier 0.0.0'
+    });
+  });
+
+  it('rejects malformed structured verifier provenance instead of downgrading it to legacy', async () => {
+    const runner: CommandRunner = async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: JSON.stringify({ name: 'verifier', status: 'stale', stale: false }),
+      stderr: '',
+      durationMs: 1
+    });
+    const adapter = new VerifierAgentAdapter(runner, {
+      command: 'verifier',
+      resultPath: '.kaizen/verifier/verify-result.json',
+      timeoutMinutes: 1,
+      envAllowlist: ['PATH']
+    });
+
+    await expect(adapter.inspectRuntime()).rejects.toThrow();
+  });
 });
 
 describe('buildVerifierPrompt', () => {
