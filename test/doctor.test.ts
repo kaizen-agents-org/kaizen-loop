@@ -39,6 +39,7 @@ describe('doctorProject', () => {
       .filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('label create'))
       .map(([, args]) => args[2]);
     expect(createdLabels).toContain('kaizen:needs-human');
+    expect(createdLabels).toContain('kaizen:roadmap');
     expect(createdLabels.filter((label) => label === 'kaizen:needs-human')).toHaveLength(1);
     expect(createdLabels).toEqual(expect.arrayContaining([
       'kaizen:retryable',

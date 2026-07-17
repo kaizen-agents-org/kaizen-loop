@@ -116,6 +116,7 @@ export function requiredLabels(config: KaizenConfig): string[] {
     'kaizen:pr-only',
     'kaizen:in-progress',
     ...Object.values(DISPOSITION_LABELS),
+    'kaizen:roadmap',
     config.goal.issueLabel,
     'kaizen:agent:claude',
     'kaizen:agent:codex'

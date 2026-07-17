@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CreatedPullRequestValidationError, GitHubClient } from '../src/github/client.js';
+import { CreatedPullRequestValidationError, GitHubClient, KAIZEN_LABELS } from '../src/github/client.js';
 import { buildDiscoveredIssueFingerprint } from '../src/discovered-issue-fingerprint.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('GitHubClient', () => {
+  it('includes the roadmap classification in the default label set', () => {
+    expect(KAIZEN_LABELS).toContain('kaizen:roadmap');
+  });
+
   it('returns normalized label transitions for acknowledgement checks', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, JSON.stringify([
       [
