@@ -170,7 +170,7 @@ interface DesiredSchedulerJob {
 既存プロジェクト向けの migration は `kaizen fleet` が担う。repo checkout から registry を再構築しながら、旧 scheduler 設定を `scheduler.jobs` へ書き換える。
 
 ```sh
-kaizen fleet --root /path/to/repos --owner kaizen-agents-org --prune
+kaizen fleet --manifest ~/.kaizen/fleet.yml --prune
 ```
 
 変換例:

@@ -2,11 +2,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadRegistry, resolveProject, saveRegistry, upsertProject } from '../src/config/registry.js';
+import { loadRegistry, registryTransaction, resolveProject, saveRegistry, updateRegistry, upsertProject } from '../src/config/registry.js';
 import type { RegistryProject } from '../src/config/schema.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('registry', () => {
@@ -33,6 +34,181 @@ describe('registry', () => {
 
     const loaded = await loadRegistry(file);
     expect(loaded.projects['owner-repo'].repo).toBe('owner/repo');
+  });
+
+  it('serializes concurrent read-modify-write updates without losing projects', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+
+    await Promise.all(Array.from({ length: 12 }, (_, index) => updateRegistry((registry) => {
+      registry.projects[`owner-repo-${index}`] = {
+        ...project(),
+        repo: `owner/repo-${index}`
+      };
+    }, file)));
+
+    const loaded = await loadRegistry(file);
+    expect(Object.keys(loaded.projects)).toHaveLength(12);
+    await expect(fs.readdir(dir)).resolves.toEqual(['registry.json']);
+  });
+
+  it('recovers a registry lock left by a dead process', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('recovers an expired registry lock whose pid was reused', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({
+      pid: process.pid,
+      createdAt: Date.now() - 11 * 60 * 1000
+    }));
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refreshes the lease while a registry transaction is active', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const ownerPath = `${file}.lock/owner.json`;
+    const originalSetInterval = global.setInterval.bind(global);
+    vi.spyOn(global, 'setInterval').mockImplementation(((callback: TimerHandler, _delay?: number, ...args: unknown[]) => (
+      originalSetInterval(callback, 5, ...args)
+    )) as typeof setInterval);
+    let owner: { createdAt: number; heartbeatAt: number } | undefined;
+
+    await registryTransaction(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      owner = JSON.parse(await fs.readFile(ownerPath, 'utf8'));
+      return { value: undefined };
+    }, file);
+
+    expect(owner!.heartbeatAt).toBeGreaterThan(owner!.createdAt);
+  });
+
+  it('retries when a contended registry lock disappears during inspection', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    const originalStat = fs.stat.bind(fs);
+    let intercepted = false;
+    vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+      if (!intercepted && String(target) === lock) {
+        intercepted = true;
+        await fs.rm(lock, { recursive: true, force: true });
+        throw Object.assign(new Error('lock disappeared'), { code: 'ENOENT' });
+      }
+      return originalStat(target);
+    });
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    expect(intercepted).toBe(true);
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not remove a young lock with partially written owner metadata', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), '{');
+    const originalRm = fs.rm.bind(fs);
+    let holderReleased = false;
+    let removedBeforeRelease = false;
+    vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (String(target) === lock && !holderReleased) removedBeforeRelease = true;
+      return originalRm(target, options);
+    });
+    const release = setTimeout(() => {
+      holderReleased = true;
+      void originalRm(lock, { recursive: true, force: true });
+    }, 100);
+
+    try {
+      await saveRegistry({ version: 1, projects: {} }, file);
+    } finally {
+      clearTimeout(release);
+    }
+
+    expect(removedBeforeRelease).toBe(false);
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+  });
+
+  it('allows only one contender to reap the same stale lock', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    const reaper = path.join(lock, '.reaper');
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+
+    const originalWriteFile = fs.writeFile.bind(fs);
+    let releaseReaper: (() => void) | undefined;
+    const reaperHeld = new Promise<void>((resolve) => {
+      releaseReaper = resolve;
+    });
+    let firstReaperClaimed: (() => void) | undefined;
+    const firstClaim = new Promise<void>((resolve) => {
+      firstReaperClaimed = resolve;
+    });
+    let reaperAttempts = 0;
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (target, data, options) => {
+      const result = await originalWriteFile(target, data, options);
+      if (String(target) === reaper) {
+        reaperAttempts += 1;
+        if (reaperAttempts === 1) {
+          firstReaperClaimed?.();
+          await reaperHeld;
+        }
+      }
+      return result;
+    });
+
+    const first = updateRegistry((registry) => {
+      registry.projects.first = { ...project(), repo: 'owner/first' };
+    }, file);
+    await firstClaim;
+    const second = updateRegistry((registry) => {
+      registry.projects.second = { ...project(), repo: 'owner/second' };
+    }, file);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    releaseReaper?.();
+    await Promise.all([first, second]);
+
+    const loaded = await loadRegistry(file);
+    expect(Object.keys(loaded.projects).sort()).toEqual(['first', 'second']);
+    expect(reaperAttempts).toBe(1);
+  });
+
+  it('recovers a stale lock whose reaper process also died', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-reg-'));
+    const file = path.join(dir, 'registry.json');
+    const lock = `${file}.lock`;
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+    await fs.writeFile(path.join(lock, '.reaper'), JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() }));
+
+    await saveRegistry({ version: 1, projects: {} }, file);
+
+    await expect(loadRegistry(file)).resolves.toEqual({ version: 1, projects: {} });
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

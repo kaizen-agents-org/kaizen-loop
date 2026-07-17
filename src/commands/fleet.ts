@@ -1,9 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { parse, stringify } from 'yaml';
+import { z } from 'zod';
 import { requiredLabels } from './doctor.js';
 import { loadConfig } from '../config/config.js';
-import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
+import { loadRegistry, loadRegistryForRecovery, registryTransaction, resolveProject, updateRegistry } from '../config/registry.js';
 import { configSchema, type KaizenConfig, type Registry, type RegistryProject } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import { RunLock } from '../orchestrator/lock.js';
@@ -18,6 +20,7 @@ import { WorkspaceManager } from '../workspace/manager.js';
 export interface FleetSyncOptions {
   cwd: string;
   root?: string;
+  manifestPath?: string;
   owner?: string;
   repos?: string[];
   migrateConfig: boolean;
@@ -81,35 +84,110 @@ export interface FleetRefreshResult {
 }
 
 export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncResult> {
-  const root = await resolveFleetRoot(options.cwd, options.root, options.runCommand);
-  const owner = options.owner ?? await ownerFromCwd(options.cwd, options.runCommand);
-  const discovered = await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
-  const registry = await loadRegistry();
-  const projectCount = Object.keys(registry.projects).length;
-  if (options.prune && discovered.length === 0 && projectCount > 0) {
-    throw new KaizenError(
-      `Refusing to prune ${projectCount} registered project(s) because fleet discovery under ${root} found no projects.`
-    );
+  if (options.manifestPath && (options.root || options.owner || options.repos?.length)) {
+    throw new KaizenError('--manifest cannot be combined with --root, --owner, or --repo.');
   }
+  if (options.prune && !options.manifestPath && !options.repos?.length) {
+    throw new KaizenError('--prune requires --manifest or an explicit --repo expected set.');
+  }
+  const manifest = options.manifestPath ? await loadFleetManifest(options.manifestPath) : undefined;
+  const root = manifest
+    ? path.dirname(path.resolve(options.manifestPath!))
+    : await resolveFleetRoot(options.cwd, options.root, options.runCommand);
+  const owner = manifest?.owner ?? options.owner ?? await ownerFromCwd(options.cwd, options.runCommand);
+  const discovered = manifest
+    ? await discoverManifestProjects(manifest, options.manifestPath!, options.runCommand)
+    : await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
+  assertExactRequestedSet(discovered, owner, options.repos);
+  const prepared = await prepareFleetProjects(discovered);
+  const preflightFailures = prepared
+    .filter((item) => item.error)
+    .map((item) => fleetProjectError(item.project, item.error!));
+  if (preflightFailures.length > 0) {
+    return { root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
+  }
+  const baselineRegistry = options.prune || options.syncScheduler
+    ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
+    : undefined;
+  const staged: Registry = { version: 1, projects: {} };
   const projects: FleetProjectResult[] = [];
-  const seen = new Set<string>();
-
   for (const project of discovered) {
-    seen.add(project.slug);
-    projects.push(await syncFleetProject({ ...options, registry, project }));
+    const item = prepared.find((entry) => entry.project.slug === project.slug)!;
+    const projectResult = await syncFleetProject({
+      ...options,
+      registry: staged,
+      project,
+      config: item.config!,
+      migrated: item.migrated!,
+      migratedContent: item.migratedContent
+    });
+    if (options.syncScheduler && !options.dryRun) {
+      const previouslyEnabled = baselineRegistry?.projects[project.slug]?.enabled ?? false;
+      const stagedProject = staged.projects[project.slug];
+      if (stagedProject) stagedProject.enabled = previouslyEnabled;
+      projectResult.enabled = previouslyEnabled;
+    }
+    projects.push(projectResult);
   }
 
-  const pruned: string[] = [];
-  if (options.prune) {
-    for (const slug of Object.keys(registry.projects)) {
-      if (seen.has(slug)) continue;
-      pruned.push(slug);
-      if (!options.dryRun) delete registry.projects[slug];
+  const value = { root, owner, dryRun: options.dryRun, projects, pruned: [] as string[] };
+  if (fleetHasFailures(value)) return value;
+  const seen = new Set(discovered.map((project) => project.slug));
+  const applyTopology = (registry: Registry): { registry: Registry; pruned: string[] } => {
+    const candidate = structuredClone(registry);
+    const projectCount = Object.keys(registry.projects).length;
+    if (options.prune && discovered.length === 0 && projectCount > 0) {
+      throw new KaizenError(
+        `Refusing to prune ${projectCount} registered project(s) because fleet discovery under ${root} found no projects.`
+      );
+    }
+    for (const [slug, project] of Object.entries(staged.projects)) candidate.projects[slug] = project;
+
+    const pruned: string[] = [];
+    if (options.prune) {
+      for (const slug of Object.keys(candidate.projects)) {
+        if (seen.has(slug)) continue;
+        pruned.push(slug);
+        delete candidate.projects[slug];
+      }
+    }
+    return { registry: candidate, pruned };
+  };
+
+  if (options.dryRun) {
+    const registry = baselineRegistry ?? await loadRegistry();
+    return { ...value, pruned: applyTopology(registry).pruned };
+  }
+  const result = await registryTransaction(async (registry) => {
+    if (options.prune && !isDeepStrictEqual(registry.projects, baselineRegistry!.projects)) {
+      throw new KaizenError('Registry changed during fleet operation; rerun fleet before pruning.');
+    }
+    const applied = applyTopology(registry);
+    return { registry: applied.registry, value: { ...value, pruned: applied.pruned } };
+  }, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
+  if (options.syncScheduler && !fleetHasFailures(result)) {
+    for (const projectResult of result.projects) {
+      const project = discovered.find((item) => item.slug === projectResult.slug)!;
+      const config = prepared.find((item) => item.project.slug === projectResult.slug)!.config!;
+      try {
+        await enableScheduler({
+          slug: project.slug,
+          project: projectRegistryEntry(project, config, true),
+          config,
+          runCommand: options.runCommand
+        });
+        await updateRegistry((registry) => {
+          const registered = registry.projects[project.slug];
+          if (registered) registered.enabled = true;
+        });
+        projectResult.schedulerSynced = true;
+        projectResult.enabled = true;
+      } catch (error) {
+        projectResult.error = error instanceof Error ? error.message : String(error);
+      }
     }
   }
-
-  if (!options.dryRun) await saveRegistry(registry);
-  return { root, owner, dryRun: options.dryRun, projects, pruned };
+  return result;
 }
 
 export function fleetHasFailures(result: FleetSyncResult): boolean {
@@ -137,6 +215,9 @@ export async function refreshFleet(options: {
 async function syncFleetProject(options: FleetSyncOptions & {
   registry: Registry;
   project: DiscoveredFleetProject;
+  config: KaizenConfig;
+  migrated: boolean;
+  migratedContent?: string;
 }): Promise<FleetProjectResult> {
   const result: FleetProjectResult = {
     slug: options.project.slug,
@@ -148,14 +229,17 @@ async function syncFleetProject(options: FleetSyncOptions & {
     schedulerSynced: false,
     lockRepaired: false,
     verified: false,
-    enabled: options.syncScheduler
+    enabled: options.syncScheduler && options.dryRun
   };
 
   try {
-    const { config, migrated } = await loadFleetConfig(options.project.localPath, options.migrateConfig && !options.dryRun);
-    result.configMigrated = migrated;
+    const config = options.config;
+    result.configMigrated = options.migrated;
+    if (options.migrated && options.migrateConfig && !options.dryRun) {
+      await fs.writeFile(path.join(options.project.localPath, '.kaizen', 'config.yml'), options.migratedContent!);
+    }
 
-    const registryProject = projectRegistryEntry(options.project, config, options.syncScheduler);
+    const registryProject = projectRegistryEntry(options.project, config, options.syncScheduler && options.dryRun);
     if (!options.dryRun) options.registry.projects[options.project.slug] = registryProject;
 
     if (options.repairLocks) {
@@ -173,18 +257,6 @@ async function syncFleetProject(options: FleetSyncOptions & {
       result.labelsEnsured = true;
       if (!options.dryRun) {
         await new GitHubClient(options.runCommand, options.project.localPath).createLabels(requiredLabels(config));
-      }
-    }
-
-    if (options.syncScheduler) {
-      result.schedulerSynced = true;
-      if (!options.dryRun) {
-        await enableScheduler({
-          slug: options.project.slug,
-          project: registryProject,
-          config,
-          runCommand: options.runCommand
-        });
       }
     }
 
@@ -208,6 +280,8 @@ async function syncFleetProject(options: FleetSyncOptions & {
         result.verifyPassed = verifyResults.every((item) => item.ok);
       }
     }
+
+    if (options.syncScheduler && options.dryRun) result.schedulerSynced = true;
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
   }
@@ -379,6 +453,98 @@ interface DiscoveredFleetProject {
   remoteUrl: string;
 }
 
+const fleetManifestSchema = z.object({
+  version: z.literal(1),
+  owner: z.string().min(1),
+  projects: z.array(z.object({
+    repo: z.string().min(1),
+    localPath: z.string().min(1)
+  }).strict()).min(1)
+}).strict();
+
+type FleetManifest = z.infer<typeof fleetManifestSchema>;
+
+interface PreparedFleetProject {
+  project: DiscoveredFleetProject;
+  config?: KaizenConfig;
+  migrated?: boolean;
+  migratedContent?: string;
+  error?: string;
+}
+
+export async function loadFleetManifest(filePath: string): Promise<FleetManifest> {
+  try {
+    return fleetManifestSchema.parse(parse(await fs.readFile(path.resolve(filePath), 'utf8')));
+  } catch (error) {
+    throw new KaizenError(`Invalid fleet manifest at ${path.resolve(filePath)}: ${String(error)}`);
+  }
+}
+
+async function discoverManifestProjects(
+  manifest: FleetManifest,
+  manifestPath: string,
+  runCommand: CommandRunner
+): Promise<DiscoveredFleetProject[]> {
+  const base = path.dirname(path.resolve(manifestPath));
+  const projects: DiscoveredFleetProject[] = [];
+  for (const entry of manifest.projects) {
+    const repo = entry.repo.includes('/') ? entry.repo : `${manifest.owner}/${entry.repo}`;
+    if (!repo.startsWith(`${manifest.owner}/`)) {
+      throw new KaizenError(`Fleet manifest repository ${repo} does not belong to owner ${manifest.owner}.`);
+    }
+    const localPath = path.resolve(base, entry.localPath);
+    if (!await exists(path.join(localPath, '.git')) || !await exists(path.join(localPath, '.kaizen', 'config.yml'))) {
+      throw new KaizenError(`Fleet manifest project ${repo} is missing a checkout or .kaizen/config.yml at ${localPath}.`);
+    }
+    const remoteUrl = await new GitClient(runCommand, localPath).remoteUrl('origin');
+    const remoteRepo = repoFromRemote(remoteUrl);
+    if (remoteRepo !== repo) {
+      throw new KaizenError(`Fleet manifest expected ${repo} at ${localPath}, but origin is ${remoteRepo ?? remoteUrl}.`);
+    }
+    projects.push({ slug: slugFromRepo(repo), repo, localPath, remoteUrl });
+  }
+  const slugs = projects.map((project) => project.slug);
+  if (new Set(slugs).size !== slugs.length) throw new KaizenError('Fleet manifest contains duplicate repositories.');
+  return projects.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+async function prepareFleetProjects(projects: DiscoveredFleetProject[]): Promise<PreparedFleetProject[]> {
+  return Promise.all(projects.map(async (project) => {
+    try {
+      const prepared = await loadFleetConfig(project.localPath);
+      return { project, ...prepared };
+    } catch (error) {
+      return { project, error: error instanceof Error ? error.message : String(error) };
+    }
+  }));
+}
+
+function assertExactRequestedSet(projects: DiscoveredFleetProject[], owner: string | undefined, repos: string[] | undefined): void {
+  if (!repos?.length) return;
+  const requested = new Set(repos.map((repo) => repo.includes('/') ? repo : `${owner ?? ''}/${repo}`));
+  const discovered = new Set(projects.map((project) => project.repo));
+  const missing = [...requested].filter((repo) => !discovered.has(repo));
+  if (missing.length > 0) {
+    throw new KaizenError(`Refusing fleet apply because requested repositories were not discovered: ${missing.join(', ')}.`);
+  }
+}
+
+function fleetProjectError(project: DiscoveredFleetProject, error: string): FleetProjectResult {
+  return {
+    slug: project.slug,
+    repo: project.repo,
+    localPath: project.localPath,
+    configMigrated: false,
+    workspaceEnsured: false,
+    labelsEnsured: false,
+    schedulerSynced: false,
+    lockRepaired: false,
+    verified: false,
+    enabled: false,
+    error
+  };
+}
+
 async function discoverFleetProjects(options: {
   root: string;
   owner?: string;
@@ -420,14 +586,13 @@ function chooseCanonicalCheckouts(candidates: DiscoveredFleetProject[]): Discove
   });
 }
 
-async function loadFleetConfig(repoDir: string, writeMigrated: boolean): Promise<{ config: KaizenConfig; migrated: boolean }> {
+async function loadFleetConfig(repoDir: string): Promise<{ config: KaizenConfig; migrated: boolean; migratedContent?: string }> {
   const configPath = path.join(repoDir, '.kaizen', 'config.yml');
   const raw = await fs.readFile(configPath, 'utf8');
   const parsed = parse(raw) as Record<string, unknown>;
   const migrated = migrateLegacySchedulerConfig(parsed);
   const config = configSchema.parse(parsed);
-  if (migrated && writeMigrated) await fs.writeFile(configPath, stringify(parsed));
-  return { config, migrated };
+  return { config, migrated, migratedContent: migrated ? stringify(parsed) : undefined };
 }
 
 export function migrateLegacySchedulerConfig(config: Record<string, unknown>): boolean {

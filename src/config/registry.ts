@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { registryPath } from '../utils/paths.js';
 import { ConfigError } from '../utils/errors.js';
 import { isProjectSlug } from '../utils/slug.js';
@@ -18,17 +19,52 @@ export async function loadRegistry(filePath = registryPath()): Promise<Registry>
 }
 
 export async function saveRegistry(registry: Registry, filePath = registryPath()): Promise<void> {
-  const parsed = registrySchema.parse(registry);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`);
+  await registryTransaction(async () => ({ registry, value: undefined }), filePath);
+}
+
+export async function updateRegistry(
+  update: (registry: Registry) => void | Promise<void>,
+  filePath = registryPath()
+): Promise<Registry> {
+  return registryTransaction(async (registry) => {
+    await update(registry);
+    return { registry, value: registry };
+  }, filePath);
+}
+
+export async function registryTransaction<T>(
+  transact: (registry: Registry) => Promise<{ registry?: Registry; value: T }>,
+  filePath = registryPath(),
+  options: { recoverInvalid?: boolean } = {}
+): Promise<T> {
+  return withRegistryLock(filePath, async () => {
+    const current = options.recoverInvalid ? await loadRegistryForRecovery(filePath) : await loadRegistry(filePath);
+    const transaction = await transact(current);
+    if (transaction.registry) await writeRegistryAtomically(transaction.registry, filePath);
+    return transaction.value;
+  });
+}
+
+export async function loadRegistryForRecovery(filePath = registryPath()): Promise<Registry> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, projects: {} };
+    throw new ConfigError(`Invalid registry at ${filePath}: ${String(error)}`);
+  }
+  try {
+    return registrySchema.parse(JSON.parse(raw));
+  } catch {
+    return { version: 1, projects: {} };
+  }
 }
 
 export async function upsertProject(slug: string, project: RegistryProject): Promise<Registry> {
   validateProjectSlug(slug);
-  const registry = await loadRegistry();
-  registry.projects[slug] = project;
-  await saveRegistry(registry);
-  return registry;
+  return updateRegistry((registry) => {
+    registry.projects[slug] = project;
+  });
 }
 
 export async function findProjectByCwd(cwd: string): Promise<{ slug: string; project: RegistryProject } | undefined> {
@@ -57,4 +93,154 @@ export async function resolveProject(projectSlug: string | undefined, cwd: strin
 
 function validateProjectSlug(slug: string): void {
   if (!isProjectSlug(slug)) throw new ConfigError(`Invalid Kaizen project slug: ${slug}`);
+}
+
+async function writeRegistryAtomically(registry: Registry, filePath: string): Promise<void> {
+  const parsed = registrySchema.parse(registry);
+  const directory = path.dirname(filePath);
+  const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  await fs.mkdir(directory, { recursive: true });
+  try {
+    const handle = await fs.open(temporaryPath, 'wx', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(parsed, null, 2)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporaryPath, filePath);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+async function withRegistryLock<T>(filePath: string, action: () => Promise<T>): Promise<T> {
+  const lockPath = `${filePath}.lock`;
+  const ownerPath = path.join(lockPath, 'owner.json');
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  for (let attempt = 0; attempt < 18_000; attempt += 1) {
+    try {
+      await fs.mkdir(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (await removeStaleLock(lockPath)) continue;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      continue;
+    }
+    const createdAt = Date.now();
+    await writeLockOwner(ownerPath, { pid: process.pid, createdAt, heartbeatAt: createdAt });
+    let heartbeatWrite = Promise.resolve();
+    const heartbeat = setInterval(() => {
+      heartbeatWrite = heartbeatWrite
+        .then(() => writeLockOwner(ownerPath, { pid: process.pid, createdAt, heartbeatAt: Date.now() }))
+        .catch(() => {});
+    }, 30_000);
+    heartbeat.unref();
+    try {
+      return await action();
+    } finally {
+      clearInterval(heartbeat);
+      await heartbeatWrite;
+      await fs.rm(lockPath, { recursive: true, force: true });
+    }
+  }
+  throw new ConfigError(`Timed out waiting for registry lock: ${lockPath}`);
+}
+
+async function writeLockOwner(
+  ownerPath: string,
+  owner: { pid: number; createdAt: number; heartbeatAt: number }
+): Promise<void> {
+  const temporaryPath = `${ownerPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, JSON.stringify(owner), { flag: 'wx' });
+    await fs.rename(temporaryPath, ownerPath);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+async function removeStaleLock(lockPath: string): Promise<boolean> {
+  let observedStats;
+  try {
+    observedStats = await fs.stat(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  try {
+    const owner = JSON.parse(await fs.readFile(path.join(lockPath, 'owner.json'), 'utf8')) as {
+      pid?: number;
+      createdAt?: number;
+      heartbeatAt?: number;
+    };
+    if (owner.pid) {
+      const leaseTimestamp = owner.heartbeatAt ?? owner.createdAt;
+      const expired = typeof leaseTimestamp !== 'number' || Date.now() - leaseTimestamp > 10 * 60 * 1000;
+      if (isPidAlive(owner.pid) && !expired) return false;
+    } else {
+      const expired = typeof owner.createdAt !== 'number' || Date.now() - owner.createdAt > 10 * 60 * 1000;
+      if (!expired) return false;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    if (Date.now() - observedStats.mtimeMs < 5_000) return false;
+  }
+
+  const reaperPath = path.join(lockPath, '.reaper');
+  try {
+    await fs.writeFile(reaperPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), { flag: 'wx' });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return true;
+    if (code === 'EEXIST') {
+      await removeStaleReaper(reaperPath);
+      return false;
+    }
+    throw error;
+  }
+
+  try {
+    const currentStats = await fs.stat(lockPath);
+    if (currentStats.dev !== observedStats.dev || currentStats.ino !== observedStats.ino) return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  await fs.rm(lockPath, { recursive: true, force: true });
+  return true;
+}
+
+async function removeStaleReaper(reaperPath: string): Promise<void> {
+  let observedStats;
+  try {
+    observedStats = await fs.stat(reaperPath);
+    const reaper = JSON.parse(await fs.readFile(reaperPath, 'utf8')) as { pid?: number; createdAt?: number };
+    const recent = typeof reaper.createdAt === 'number' && Date.now() - reaper.createdAt < 5_000;
+    if (recent && reaper.pid && isPidAlive(reaper.pid)) return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (!(error instanceof SyntaxError)) throw error;
+    observedStats ??= await fs.stat(reaperPath);
+    if (Date.now() - observedStats.mtimeMs < 5_000) return;
+  }
+
+  try {
+    const currentStats = await fs.stat(reaperPath);
+    if (currentStats.dev !== observedStats.dev || currentStats.ino !== observedStats.ino) return;
+    await fs.rm(reaperPath, { force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

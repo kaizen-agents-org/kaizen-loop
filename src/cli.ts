@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import { parse, stringify } from 'yaml';
 import { initProject } from './init/init.js';
 import { type DirectCommitConfirmation, runKaizen } from './orchestrator/run.js';
-import { loadRegistry, resolveProject, saveRegistry } from './config/registry.js';
+import { loadRegistry, resolveProject, updateRegistry } from './config/registry.js';
 import { loadConfig } from './config/config.js';
 import { runCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
@@ -14,7 +14,7 @@ import { reportIssue, reportIssueNow } from './commands/report.js';
 import { listQueuedIssues, queueIssues, unqueueIssues } from './commands/queue.js';
 import { planImprove, runImprove } from './commands/improve.js';
 import { createGoal, goalStatus, listGoals, runGoalCommand, stopGoal } from './commands/goal.js';
-import { statusProject } from './commands/status.js';
+import { listProjects, statusProject } from './commands/status.js';
 import { followLogs, readLogs } from './commands/logs.js';
 import { listGuardianJobs, runGuardianForPullRequest, watchGuardianJobs } from './commands/guardian.js';
 import { doctorProject } from './commands/doctor.js';
@@ -91,13 +91,13 @@ program
   .option('--json', 'print machine-readable output')
   .action(async (options) => {
     const globals = program.opts<{ json?: boolean }>();
-    const registry = await loadRegistry();
-    print(registry, Boolean(options.json ?? globals.json));
+    print(await listProjects(), Boolean(options.json ?? globals.json));
   });
 
 const fleet = program
   .command('fleet')
   .description('rebuild registry, workspaces, labels, and scheduler jobs for a repo fleet')
+  .option('--manifest <path>', 'authoritative fleet manifest used without consulting registry paths')
   .option('--root <path>', 'directory containing target repository checkouts')
   .option('--owner <owner>', 'GitHub owner to include')
   .option('--repo <repo...>', 'repo name or owner/repo to include; repeat for multiple repos')
@@ -115,6 +115,7 @@ const fleet = program
     const result = await syncFleet({
       cwd: process.cwd(),
       root: options.root,
+      manifestPath: options.manifest,
       owner: options.owner,
       repos: options.repo,
       migrateConfig: options.config !== false,
@@ -200,9 +201,12 @@ scheduler
     const config = await loadConfig(project.localPath);
     const schedule = parseSchedule(options.schedule ?? project.schedule);
     const result = await enableScheduler({ slug: resolved.slug, project, config, runCommand });
-    project.enabled = true;
-    project.schedule = schedule;
-    await saveRegistry(registry);
+    await updateRegistry((latest) => {
+      const current = latest.projects[resolved.slug];
+      if (!current) throw new KaizenError(`Unknown Kaizen project: ${resolved.slug}`);
+      current.enabled = true;
+      current.schedule = schedule;
+    });
     print({ slug: resolved.slug, enabled: true, scheduler: result }, Boolean(options.json ?? globals.json));
   });
 
@@ -254,7 +258,12 @@ scheduler
       project.enabled = false;
       results.push({ slug, enabled: false, scheduler: schedulerResult });
     }
-    await saveRegistry(registry);
+    const disabled = new Set(results.map((result) => result.slug));
+    await updateRegistry((latest) => {
+      for (const slug of disabled) {
+        if (latest.projects[slug]) latest.projects[slug].enabled = false;
+      }
+    });
     print(results, Boolean(options.json ?? globals.json));
   });
 
@@ -608,9 +617,12 @@ program
     const config = await loadConfig(project.localPath);
     const schedule = parseSchedule(options.schedule ?? project.schedule);
     const scheduler = await enableScheduler({ slug: resolved.slug, project, config, runCommand });
-    project.enabled = true;
-    project.schedule = schedule;
-    await saveRegistry(registry);
+    await updateRegistry((latest) => {
+      const current = latest.projects[resolved.slug];
+      if (!current) throw new KaizenError(`Unknown Kaizen project: ${resolved.slug}`);
+      current.enabled = true;
+      current.schedule = schedule;
+    });
     print({ slug: resolved.slug, enabled: true, scheduler }, Boolean(options.json ?? globals.json));
   });
 
@@ -633,7 +645,12 @@ program
       project.enabled = false;
       results.push({ slug, enabled: false, scheduler });
     }
-    await saveRegistry(registry);
+    const disabled = new Set(results.map((result) => result.slug));
+    await updateRegistry((latest) => {
+      for (const slug of disabled) {
+        if (latest.projects[slug]) latest.projects[slug].enabled = false;
+      }
+    });
     print(results, Boolean(options.json ?? globals.json));
   });
 

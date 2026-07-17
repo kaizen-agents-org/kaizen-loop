@@ -291,7 +291,7 @@ codex exec --cd <workspace> "... skills/pr-guardian/SKILL.md ..."
 
 ## 9. 終了処理
 
-1. `summary.json` を書き出し、`registry.json` の `lastRun` を更新
+1. `summary.json` と `projects/<slug>/last-run.json` を書き出す。run telemetry は topology を持つ `registry.json` を更新しない
 2. リモートに push 済みでない一時ブランチをワークスペースから削除
 3. `report.notification: true` なら macOS 通知(例: 「kaizen: 3 件処理 — PR 3 / 直接 0 / 失敗 0」)
 4. ロックファイル削除

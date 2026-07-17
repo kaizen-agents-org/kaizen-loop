@@ -302,15 +302,16 @@ kaizen scheduler disable [--project <slug>] [--all]
 Kaizen Loop 自体を更新したあとに、複数 repo のローカル実行環境を desired state へ戻す。`~/.kaizen/registry.json` が消えた、古い scheduler config が残った、launchd / cron が古い `dist/cli.js` を呼んでいる、workspace が欠けている、といった状態をまとめて修復する。
 
 ```
-kaizen fleet [--root <path>] [--owner <owner>] [--repo <name|owner/name>...]
+kaizen fleet [--manifest <path> | --root <path> [--owner <owner>] [--repo <name|owner/name>...]]
              [--verify] [--prune] [--dry-run]
              [--no-config] [--no-workspace] [--no-labels] [--no-scheduler] [--no-lock-repair]
 ```
 
 - `--root`: repo checkout が並ぶディレクトリ。省略時はカレント Git repo の親ディレクトリ
+- `--manifest`: registry に依存しない authoritative inventory。`--root` / `--owner` / `--repo` とは併用しない
 - `--owner`: 対象 GitHub owner。省略時はカレント repo の origin から推定
-- `--repo`: 対象を一部 repo に絞る。省略時は `--root` 直下の `.kaizen/config.yml` を持つ repo を owner で絞って発見する
-- `--prune`: 発見できなかった registry entry を削除する。registry 破損復旧時に使う
+- `--repo`: 対象の完全な期待集合。1件でも発見できなければ変更前に失敗する。省略時は `--root` 直下の `.kaizen/config.yml` を持つ repo を owner で絞って発見する
+- `--prune`: 期待集合にない registry entry を削除する。`--manifest` または明示的な `--repo` 完全集合が必須
 - `--dry-run`: 計画だけ表示し、ファイル・registry・GitHub・scheduler を変更しない
 - `--no-config`: 旧 `scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` から `scheduler.jobs` への移行をしない
 - `--no-workspace`: `~/.kaizen/workspaces/<slug>` を作成・修復しない
@@ -318,6 +319,22 @@ kaizen fleet [--root <path>] [--owner <owner>] [--repo <name|owner/name>...]
 - `--no-scheduler`: launchd / cron を同期しない
 - `--no-lock-repair`: PID が存在しない stale `run.lock` を削除しない
 - `--verify`: 各 fleet workspace を default branch に同期し、`commands.setup` と `commands.verify` を実行してローカル runner のテスト準備状態を確認する
+
+標準の machine-local inventory は `~/.kaizen/fleet.yml` に置く。相対 `localPath` は manifest の親ディレクトリから解決される。
+
+```yaml
+version: 1
+owner: kaizen-agents-org
+projects:
+  - repo: .github
+    localPath: /stable/checkouts/.github
+  - repo: builder-agent
+    localPath: /stable/checkouts/builder-agent
+  - repo: kaizen-loop
+    localPath: /stable/checkouts/kaizen-loop
+  - repo: verifier
+    localPath: /stable/checkouts/verifier
+```
 
 標準の dogfood 復旧手順:
 
@@ -327,7 +344,9 @@ npm run dogfood:verify
 node dist/cli.js run --project kaizen-agents-org-kaizen-loop --dry-run --json
 ```
 
-`fleet` は registry を source of truth として扱わず、repo checkout と `.kaizen/config.yml` から registry を再構築できる。Kaizen Loop の config schema や scheduler 生成物を変更した場合は、リリース後または dogfood 更新後に必ず `fleet` を実行する。
+`fleet` は全対象の checkout・origin・config を preflight してから適用する。設定または verify が1件でも失敗した場合、部分的な registry は commit しない。registry は process lock 内で atomic replace される。通常の scheduled run の `lastRun` telemetry は `~/.kaizen/projects/<slug>/last-run.json` に保存し、topology registry を書き換えない。
+
+破損復旧では registry 内の `localPath` を信用せず、`kaizen fleet --manifest ~/.kaizen/fleet.yml --prune` を使う。Kaizen Loop の config schema や scheduler 生成物を変更した場合も、安定した checkout を指す manifest から `fleet` を実行する。
 
 ---
 

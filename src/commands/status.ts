@@ -45,6 +45,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
       })
     : undefined;
   const stateDir = projectStateDir(resolved.slug);
+  const lastRun = await readLastRun(stateDir);
   const lastSummary = await readLatestSummary(stateDir);
   const guardianJobs = await listPrGuardianJobs(stateDir);
   const implementationStates = await listImplementationStates(stateDir);
@@ -54,7 +55,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
     repo: resolved.project.repo,
     enabled: resolved.project.enabled,
     schedule: resolved.project.schedule,
-    lastRun: resolved.project.lastRun ?? lastSummary,
+    lastRun: lastRun ?? resolved.project.lastRun ?? lastSummary,
     issues: {
       open: issues.length,
       selectionMode: config.issues.selection.mode,
@@ -117,7 +118,12 @@ function isImplementationNeedsAttention(state: ImplementationState): boolean {
 }
 
 export async function listProjects() {
-  return loadRegistry();
+  const registry = await loadRegistry();
+  const projects = await Promise.all(Object.entries(registry.projects).map(async ([slug, project]) => [
+    slug,
+    { ...project, lastRun: await readLastRun(projectStateDir(slug)) ?? project.lastRun }
+  ] as const));
+  return { ...registry, projects: Object.fromEntries(projects) };
 }
 
 async function readLatestSummary(stateDir: string) {
@@ -127,6 +133,14 @@ async function readLatestSummary(stateDir: string) {
     const latest = runs.at(-1);
     if (!latest) return undefined;
     return JSON.parse(await fs.readFile(path.join(runsDir, latest, 'summary.json'), 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLastRun(stateDir: string) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(stateDir, 'last-run.json'), 'utf8'));
   } catch {
     return undefined;
   }

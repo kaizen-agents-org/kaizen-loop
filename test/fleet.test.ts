@@ -5,7 +5,7 @@ import { parse, stringify } from 'yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fleetHasFailures, migrateLegacySchedulerConfig, refreshFleet, syncFleet, type FleetProjectResult } from '../src/commands/fleet.js';
 import { defaultConfigYaml } from '../src/config/config.js';
-import { saveRegistry } from '../src/config/registry.js';
+import { loadRegistry, saveRegistry, updateRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 afterEach(() => {
@@ -84,7 +84,7 @@ describe('migrateLegacySchedulerConfig', () => {
 });
 
 describe('syncFleet', () => {
-  it('preserves a non-empty registry when prune discovery is empty', async () => {
+  it('requires an authoritative expected set before pruning', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
     vi.stubEnv('KAIZEN_HOME', home);
@@ -120,9 +120,265 @@ describe('syncFleet', () => {
       prune: true,
       dryRun: false,
       runCommand: runner
-    })).rejects.toThrow('Refusing to prune 1 registered project(s) because fleet discovery');
+    })).rejects.toThrow('--prune requires --manifest or an explicit --repo expected set');
 
     await expect(fs.readFile(registryPath, 'utf8')).resolves.toBe(before);
+  });
+
+  it('refuses prune when any explicitly requested repository is missing', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    await writeFleetRepo(repoDir);
+    await saveRegistry({ version: 1, projects: { stale: fleetRegistryProject('/tmp/stale') } });
+    const before = await fs.readFile(path.join(home, 'registry.json'), 'utf8');
+    const runner = remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' });
+
+    await expect(syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent', 'verifier'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      prune: true,
+      dryRun: false,
+      runCommand: runner
+    })).rejects.toThrow('requested repositories were not discovered: kaizen-agents-org/verifier');
+
+    await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(before);
+  });
+
+  it('preflights every config before applying any fleet side effects', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const first = path.join(root, 'builder-agent');
+    const second = path.join(root, 'verifier');
+    await writeFleetRepo(first);
+    await writeFleetRepo(second, 'version: 999\n');
+    await saveRegistry({ version: 1, projects: { stale: fleetRegistryProject('/tmp/stale') } });
+    const before = await fs.readFile(path.join(home, 'registry.json'), 'utf8');
+    const runner = remoteRunner({
+      [first]: 'kaizen-agents-org/builder-agent',
+      [second]: 'kaizen-agents-org/verifier'
+    });
+
+    const output = await syncFleet({
+      cwd: first,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent', 'verifier'],
+      migrateConfig: true,
+      ensureWorkspace: true,
+      ensureLabels: true,
+      syncScheduler: true,
+      repairLocks: true,
+      verify: true,
+      prune: true,
+      dryRun: false,
+      runCommand: runner
+    });
+
+    expect(fleetHasFailures(output)).toBe(true);
+    expect(output.projects).toHaveLength(1);
+    expect(output.projects[0]).toMatchObject({ repo: 'kaizen-agents-org/verifier' });
+    expect(output.projects[0].error).toBeTruthy();
+    expect(runner.mock.calls.every(([command]) => command === 'git')).toBe(true);
+    await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(before);
+  });
+
+  it('preserves a project error when migrated config cannot be written', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    const legacy = parse(defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+    legacy.scheduler = {
+      nightly: { enabled: true, time: '02:00' },
+      afternoon: { enabled: false, time: '14:00' },
+      poll: { enabled: false, intervalMinutes: 5, skipIfRunning: true }
+    };
+    await writeFleetRepo(repoDir, stringify(legacy));
+    const configPath = path.join(repoDir, '.kaizen', 'config.yml');
+    const originalWriteFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (target, data, options) => {
+      if (String(target) === configPath) throw new Error('read-only checkout');
+      return originalWriteFile(target, data, options);
+    });
+
+    const output = await syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(output.projects[0]).toMatchObject({ error: 'read-only checkout', enabled: false });
+    await expect(fs.access(path.join(home, 'registry.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not hold the registry lock during fleet verification', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    await writeFleetRepo(repoDir, defaultConfigYaml({ agent: 'claude', setup: 'hold', verify: [] }));
+    let verificationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    let releaseVerification: (() => void) | undefined;
+    const released = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
+        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/builder-agent.git\n');
+      }
+      if (command === 'sh' && args[1] === 'hold') {
+        verificationStarted?.();
+        await released;
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const fleet = syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: true,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: true,
+      prune: true,
+      dryRun: false,
+      runCommand: runner
+    });
+    await started;
+    try {
+      const update = updateRegistry((registry) => {
+        registry.projects.concurrent = fleetRegistryProject('/tmp/concurrent');
+      });
+      const outcome = await Promise.race([
+        update.then(() => 'updated'),
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000))
+      ]);
+      expect(outcome).toBe('updated');
+    } finally {
+      releaseVerification?.();
+    }
+    await expect(fleet).rejects.toThrow('Registry changed during fleet operation');
+
+    const registry = await loadRegistry();
+    expect(Object.keys(registry.projects)).toEqual(['concurrent']);
+  });
+
+  it('recovers registry topology from an authoritative manifest without using existing paths', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'checkouts', 'builder-agent');
+    await writeFleetRepo(repoDir);
+    const manifestPath = path.join(root, 'fleet.yml');
+    await fs.writeFile(manifestPath, [
+      'version: 1',
+      'owner: kaizen-agents-org',
+      'projects:',
+      '  - repo: builder-agent',
+      '    localPath: ./checkouts/builder-agent',
+      ''
+    ].join('\n'));
+    await saveRegistry({ version: 1, projects: { stale: fleetRegistryProject('/deleted/worktree') } });
+    const runner = remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' });
+
+    const output = await syncFleet({
+      cwd: root,
+      manifestPath,
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      prune: true,
+      dryRun: false,
+      runCommand: runner
+    });
+
+    expect(output.pruned).toEqual(['stale']);
+    const registry = JSON.parse(await fs.readFile(path.join(home, 'registry.json'), 'utf8'));
+    expect(registry.projects['kaizen-agents-org-builder-agent'].localPath).toBe(repoDir);
+  });
+
+  it('rebuilds a corrupt registry from an authoritative manifest', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    await writeFleetRepo(repoDir);
+    const manifestPath = path.join(root, 'fleet.yml');
+    await fs.writeFile(manifestPath, [
+      'version: 1',
+      'owner: kaizen-agents-org',
+      'projects:',
+      '  - repo: builder-agent',
+      '    localPath: ./builder-agent',
+      ''
+    ].join('\n'));
+    await fs.mkdir(home, { recursive: true });
+    await fs.writeFile(path.join(home, 'registry.json'), '{invalid');
+
+    const planned = await syncFleet({
+      cwd: root,
+      manifestPath,
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      prune: true,
+      dryRun: true,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(planned.projects).toHaveLength(1);
+    await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe('{invalid');
+
+    await syncFleet({
+      cwd: root,
+      manifestPath,
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      prune: true,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    const registry = JSON.parse(await fs.readFile(path.join(home, 'registry.json'), 'utf8'));
+    expect(registry.projects['kaizen-agents-org-builder-agent'].localPath).toBe(repoDir);
   });
 
   it('rebuilds registry entries from repo checkouts and migrates legacy configs', async () => {
@@ -199,6 +455,7 @@ describe('syncFleet', () => {
       cwd: repoDir,
       root,
       owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
       migrateConfig: true,
       ensureWorkspace: true,
       ensureLabels: true,
@@ -241,6 +498,61 @@ describe('syncFleet', () => {
     expect(runner.mock.calls.some(([command]) => command === 'gh')).toBe(true);
   });
 
+  it('preserves prior enabled state when scheduler activation fails', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    const newRepoDir = path.join(root, 'verifier');
+    await writeFleetRepo(repoDir);
+    await writeFleetRepo(newRepoDir);
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'kaizen-agents-org-builder-agent': { ...fleetRegistryProject(repoDir), enabled: true }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
+        const repo = options?.cwd === repoDir ? 'builder-agent' : 'verifier';
+        return result(command, args, options?.cwd, `https://github.com/kaizen-agents-org/${repo}.git\n`);
+      }
+      if (command === 'launchctl' || command === 'crontab') throw new Error('scheduler unavailable');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const output = await syncFleet({
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent', 'verifier'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      dryRun: false,
+      runCommand: runner
+    });
+
+    expect(output.projects.find((project) => project.slug === 'kaizen-agents-org-builder-agent')).toMatchObject({
+      enabled: true,
+      schedulerSynced: false,
+      error: 'scheduler unavailable'
+    });
+    expect(output.projects.find((project) => project.slug === 'kaizen-agents-org-verifier')).toMatchObject({
+      enabled: false,
+      schedulerSynced: false,
+      error: 'scheduler unavailable'
+    });
+    const registry = await loadRegistry();
+    expect(registry.projects['kaizen-agents-org-builder-agent'].enabled).toBe(true);
+    expect(registry.projects['kaizen-agents-org-verifier'].enabled).toBe(false);
+  });
+
   it('reports fleet failures when a project errors or verify fails', () => {
     expect(fleetHasFailures({
       root: '/tmp/fleet',
@@ -281,20 +593,27 @@ describe('syncFleet', () => {
     vi.stubEnv('KAIZEN_HOME', home);
     vi.stubEnv('HOME', home);
 
+    const firstRepoDir = path.join(root, 'builder-agent');
     const repoDir = path.join(root, 'verifier');
+    await fs.mkdir(path.join(firstRepoDir, '.git'), { recursive: true });
+    await fs.mkdir(path.join(firstRepoDir, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(repoDir, '.git'), { recursive: true });
     await fs.mkdir(path.join(repoDir, '.kaizen'), { recursive: true });
     const config = parse(defaultConfigYaml({ agent: 'claude', setup: 'pnpm install --frozen-lockfile', verify: ['pnpm test'] }));
+    await fs.writeFile(path.join(firstRepoDir, '.kaizen', 'config.yml'), stringify(config));
     await fs.writeFile(path.join(repoDir, '.kaizen', 'config.yml'), stringify(config));
+    await saveRegistry({ version: 1, projects: { stale: fleetRegistryProject('/tmp/stale') } });
+    const registryBefore = await fs.readFile(path.join(home, 'registry.json'), 'utf8');
 
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
-        return result(command, args, options?.cwd, 'https://github.com/kaizen-agents-org/verifier.git\n');
+        const repo = options?.cwd === firstRepoDir ? 'builder-agent' : 'verifier';
+        return result(command, args, options?.cwd, `https://github.com/kaizen-agents-org/${repo}.git\n`);
       }
-      if (command === 'sh' && args[1] === 'pnpm install --frozen-lockfile') {
+      if (command === 'sh' && args[1] === 'pnpm install --frozen-lockfile' && options?.cwd?.includes('verifier')) {
         return { ...result(command, args, options?.cwd, 'missing package\n'), exitCode: 1 };
       }
-      if (command === 'sh' && args[1] === 'pnpm test') {
+      if (command === 'sh' && args[1] === 'pnpm test' && options?.cwd?.includes('verifier')) {
         throw new Error('verify should not run after setup failure');
       }
       return result(command, args, options?.cwd, '');
@@ -304,18 +623,20 @@ describe('syncFleet', () => {
       cwd: repoDir,
       root,
       owner: 'kaizen-agents-org',
+      repos: ['builder-agent', 'verifier'],
       migrateConfig: true,
       ensureWorkspace: true,
       ensureLabels: false,
-      syncScheduler: false,
+      syncScheduler: true,
       repairLocks: false,
       verify: true,
-      prune: false,
+      prune: true,
       dryRun: false,
       runCommand: runner
     });
 
-    expect(output.projects[0]).toMatchObject({
+    const failed = output.projects.find((project) => project.slug === 'kaizen-agents-org-verifier');
+    expect(failed).toMatchObject({
       slug: 'kaizen-agents-org-verifier',
       verified: true,
       verifyPassed: false,
@@ -327,7 +648,13 @@ describe('syncFleet', () => {
       verifyResults: []
     });
     expect(fleetHasFailures(output)).toBe(true);
-    expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args[1] === 'pnpm test')).toBe(false);
+    expect(output.pruned).toEqual([]);
+    expect(output.projects.every((project) => !project.schedulerSynced)).toBe(true);
+    expect(runner.mock.calls.some(([command]) => command === 'launchctl')).toBe(false);
+    expect(runner.mock.calls.some(([command, args, options]) => (
+      command === 'sh' && args[1] === 'pnpm test' && options?.cwd?.includes('verifier')
+    ))).toBe(false);
+    await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(registryBefore);
   });
 });
 
@@ -611,6 +938,34 @@ async function saveFleet(projects: Array<{ slug: string; repo: string; workspace
     projects: Object.fromEntries(entries)
   });
   return home;
+}
+
+async function writeFleetRepo(repoDir: string, config = defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })) {
+  await fs.mkdir(path.join(repoDir, '.git'), { recursive: true });
+  await fs.mkdir(path.join(repoDir, '.kaizen'), { recursive: true });
+  await fs.writeFile(path.join(repoDir, '.kaizen', 'config.yml'), config);
+}
+
+function fleetRegistryProject(localPath: string) {
+  return {
+    repo: 'o/stale',
+    localPath,
+    workspacePath: '/tmp/stale-workspace',
+    schedule: '02:00',
+    enabled: false,
+    createdAt: '2026-06-12T00:00:00Z'
+  };
+}
+
+function remoteRunner(repositories: Record<string, string>) {
+  return vi.fn<CommandRunner>(async (command, args, options) => {
+    if (command !== 'git' || args.join(' ') !== 'remote get-url origin') {
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    }
+    const repo = repositories[options?.cwd ?? ''];
+    if (!repo) throw new Error(`Unexpected checkout: ${options?.cwd}`);
+    return result(command, args, options?.cwd, `https://github.com/${repo}.git\n`);
+  });
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {

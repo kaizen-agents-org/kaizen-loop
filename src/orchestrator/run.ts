@@ -5,7 +5,7 @@ import { VerifierAgentAdapter, type VerifierResult } from '../agents/verifier.js
 import type { AgentAdapter, AgentResult, DiscoveredIssue } from '../agents/types.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
-import { loadRegistry, resolveProject, saveRegistry } from '../config/registry.js';
+import { loadRegistry, resolveProject } from '../config/registry.js';
 import type { KaizenConfig, Registry } from '../config/schema.js';
 import { buildDiscoveredIssueFingerprint, parseFailureClass } from '../discovered-issue-fingerprint.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
@@ -2443,10 +2443,7 @@ async function persistRunSummary(slug: string, summary: RunSummary): Promise<Run
 }
 
 async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
-  const registry = await loadRegistry();
-  const project = registry.projects[slug];
-  if (!project) return;
-  project.lastRun = {
+  const lastRun = {
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt,
     result: summary.result,
@@ -2455,7 +2452,7 @@ async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
     prCreated: summary.issues.filter((issue) => issue.outcome === 'pr-created').length,
     failed: summary.issues.filter((issue) => issue.outcome === 'failed').length
   };
-  await saveRegistry(registry);
+  await fs.writeFile(path.join(projectStateDir(slug), 'last-run.json'), `${JSON.stringify(lastRun, null, 2)}\n`);
 }
 
 async function ensureNotPaused(stateDir: string): Promise<void> {
