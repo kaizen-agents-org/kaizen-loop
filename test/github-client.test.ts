@@ -438,6 +438,72 @@ describe('GitHubClient', () => {
     ]);
   });
 
+  it('searches owner merged pull requests with commit source fields', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: JSON.stringify({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                number: 8,
+                headRefName: 'kaizen/issue-8-x',
+                createdAt: '2026-07-01T00:00:00Z',
+                mergedAt: '2026-07-02T00:00:00Z',
+                author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                repository: { nameWithOwner: 'o/r' },
+                url: 'https://github.com/o/r/pull/8',
+                commits: {
+                  totalCount: 1,
+                  nodes: [{
+                    commit: {
+                      oid: 'abc123',
+                      committedDate: '2026-07-01T01:00:00Z',
+                      author: {
+                        name: 'Maintainer',
+                        email: 'maintainer@example.com',
+                        user: { login: 'maintainer', __typename: 'User' }
+                      }
+                    }
+                  }]
+                }
+              }
+            ]
+          }
+        }
+      }),
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    const prs = await client.searchMergedPullRequestsForOwner('o', '2026-07-01', 5);
+
+    expect(prs[0]).toMatchObject({
+      number: 8,
+      mergedAt: '2026-07-02T00:00:00Z',
+      commitCount: 1,
+      commits: [{
+        oid: 'abc123',
+        committedDate: '2026-07-01T01:00:00Z',
+        author: { login: 'maintainer', type: 'User' }
+      }]
+    });
+    expect(runner.mock.calls[0][1]).toEqual([
+      'api',
+      'graphql',
+      '-f',
+      expect.stringContaining('query='),
+      '-F',
+      'searchQuery=is:pr is:merged owner:o merged:>=2026-07-01',
+      '-F',
+      'limit=5'
+    ]);
+  });
+
   it('preserves the base label when an optional target repo label is missing', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       const labelValue = String(args.at(args.indexOf('--label') + 1));

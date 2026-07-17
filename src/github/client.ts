@@ -216,6 +216,22 @@ export class GitHubClient {
     return pullRequests;
   }
 
+  async searchMergedPullRequestsForOwner(owner: string, mergedSince: string, limit = 1000): Promise<GitHubPullRequest[]> {
+    const pullRequests: GitHubPullRequest[] = [];
+    let cursor: string | undefined;
+
+    while (pullRequests.length < limit) {
+      const pageLimit = Math.min(100, limit - pullRequests.length);
+      const result = await this.gh(searchMergedPullRequestsForOwnerArgs(owner, mergedSince, pageLimit, cursor));
+      const page = parseOwnerPullRequestSearchPage(result.stdout);
+      pullRequests.push(...page.pullRequests);
+      if (!page.hasNextPage || !page.endCursor) break;
+      cursor = page.endCursor;
+    }
+
+    return pullRequests;
+  }
+
   async getPullRequest(number: number): Promise<GitHubPullRequestDetails> {
     const result = await this.gh([
       'pr',
@@ -459,7 +475,7 @@ export class GitHubClient {
   }
 }
 
-const OWNER_PULL_REQUEST_SEARCH_QUERY = `
+const OWNER_OPEN_PULL_REQUEST_SEARCH_QUERY = `
 query($searchQuery: String!, $limit: Int!, $cursor: String) {
   search(query: $searchQuery, type: ISSUE, first: $limit, after: $cursor) {
     pageInfo {
@@ -484,14 +500,72 @@ query($searchQuery: String!, $limit: Int!, $cursor: String) {
   }
 }`;
 
+const OWNER_MERGED_PULL_REQUEST_SEARCH_QUERY = `
+query($searchQuery: String!, $limit: Int!, $cursor: String) {
+  search(query: $searchQuery, type: ISSUE, first: $limit, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        number
+        headRefName
+        createdAt
+        mergedAt
+        url
+        author {
+          login
+          __typename
+        }
+        repository {
+          nameWithOwner
+        }
+        commits(first: 100) {
+          totalCount
+          nodes {
+            commit {
+              oid
+              committedDate
+              author {
+                name
+                email
+                user {
+                  login
+                  __typename
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
 function searchOpenPullRequestsForOwnerArgs(owner: string, limit: number, cursor?: string): string[] {
   const args = [
     'api',
     'graphql',
     '-f',
-    `query=${OWNER_PULL_REQUEST_SEARCH_QUERY}`,
+    `query=${OWNER_OPEN_PULL_REQUEST_SEARCH_QUERY}`,
     '-F',
     `searchQuery=is:pr is:open owner:${owner}`,
+    '-F',
+    `limit=${limit}`
+  ];
+  if (cursor) args.push('-F', `cursor=${cursor}`);
+  return args;
+}
+
+function searchMergedPullRequestsForOwnerArgs(owner: string, mergedSince: string, limit: number, cursor?: string): string[] {
+  const args = [
+    'api',
+    'graphql',
+    '-f',
+    `query=${OWNER_MERGED_PULL_REQUEST_SEARCH_QUERY}`,
+    '-F',
+    `searchQuery=is:pr is:merged owner:${owner} merged:>=${mergedSince}`,
     '-F',
     `limit=${limit}`
   ];
@@ -512,9 +586,24 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
           number?: number;
           headRefName?: string;
           createdAt?: string;
+          mergedAt?: string | null;
           url?: string;
           author?: { login?: string; __typename?: string };
           repository?: { nameWithOwner?: string };
+          commits?: {
+            totalCount?: number;
+            nodes?: Array<{
+              commit?: {
+                oid?: string;
+                committedDate?: string;
+                author?: {
+                  name?: string;
+                  email?: string;
+                  user?: { login?: string; __typename?: string } | null;
+                } | null;
+              };
+            } | null>;
+          };
         } | null>;
       };
     };
@@ -528,6 +617,7 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
           number: node.number as number,
           headRefName: node.headRefName,
           createdAt: node.createdAt,
+          mergedAt: node.mergedAt,
           url: node.url as string,
           author: node.author
             ? {
@@ -535,7 +625,26 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
                 type: node.author.__typename
               }
             : undefined,
-          repository: node.repository
+          repository: node.repository,
+          commits:
+            node.commits?.nodes
+              ?.flatMap((commitNode) => {
+                const commit = commitNode?.commit;
+                if (!commit?.oid) return [];
+                return [{
+                  oid: commit.oid,
+                  committedDate: commit.committedDate,
+                  author: commit.author
+                    ? {
+                        name: commit.author.name,
+                        email: commit.author.email,
+                        login: commit.author.user?.login,
+                        type: commit.author.user?.__typename
+                      }
+                    : undefined
+                }];
+              }) ?? [],
+          commitCount: node.commits?.totalCount
         })) ?? [],
     hasNextPage: Boolean(search?.pageInfo?.hasNextPage),
     endCursor: search?.pageInfo?.endCursor ?? undefined

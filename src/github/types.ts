@@ -41,7 +41,21 @@ export interface GitHubPullRequest {
   author?: { login?: string; type?: string; is_bot?: boolean };
   repository?: { nameWithOwner?: string };
   createdAt?: string;
+  mergedAt?: string | null;
+  commits?: GitHubPullRequestCommit[];
+  commitCount?: number;
   url: string;
+}
+
+export interface GitHubPullRequestCommit {
+  oid: string;
+  committedDate?: string;
+  author?: {
+    name?: string;
+    email?: string;
+    login?: string;
+    type?: string;
+  };
 }
 
 export interface GitHubPullRequestDetails extends GitHubPullRequest {
