@@ -33,7 +33,7 @@ describe('kaizen report CLI', () => {
     const issueCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('issue create'));
     expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P1');
     expect(calls.some((call) => call.command === 'builder-agent')).toBe(false);
-  });
+  }, CLI_TEST_TIMEOUT_MS);
 
   it('creates an issue and produces a PR with report --now --json', async () => {
     const { repo } = await setupProject({ verify: ['npm test'], guardianEnabled: false });
