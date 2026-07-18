@@ -47,6 +47,51 @@ describe('listProjects', () => {
 });
 
 describe('statusProject', () => {
+  it('reconciles merged pull request jobs as terminal and reports workspace config', async () => {
+    const { repo, workspace, home } = await setupProject();
+    await fs.mkdir(path.join(workspace, '.kaizen'), { recursive: true });
+    const workspaceConfig = defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+      .replace('mode: auto', 'mode: opt-in');
+    await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), workspaceConfig);
+    await writeGuardianJob(home, 12, 'blocked');
+    await writeImplementationState(home, {
+      issue: 12,
+      branch: 'kaizen/issue-12-fix',
+      phase: 'guardian',
+      attempt: 2,
+      pr: 12,
+      lastFailure: 'review was not for current head'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, workspace, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, workspace, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view' && args[2] === '12') {
+        return result(command, args, workspace, JSON.stringify({
+          number: 12,
+          url: 'https://github.com/o/r/pull/12',
+          state: 'MERGED',
+          mergedAt: '2026-07-18T00:00:00Z',
+          baseRefName: 'main',
+          closingIssuesReferences: [{ number: 12 }]
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(output.issues.selectionMode).toBe('opt-in');
+    expect(output.pullRequestReconciliation).toEqual({ merged: [12], unknown: [] });
+    expect(output.guardian).toMatchObject({ blocked: 0, success: 1, stale: 0 });
+    expect(output.implementations).toMatchObject({ active: 0, needsAttention: 0, stale: 0 });
+    expect(output.implementations.items[0]).toMatchObject({ phase: 'complete' });
+    expect(output.implementations.items[0].lastFailure).toBeUndefined();
+  });
+
   it('reports pushed remote branches with no open pull request', async () => {
     const { repo, workspace, home } = await setupProject();
     await writeGuardianJob(home, 4, 'pending');
@@ -122,6 +167,7 @@ describe('statusProject', () => {
 
     expect(output.pullRequests.open).toBe(2);
     expect(output.guardian.stale).toBe(1);
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [99] });
     expect(output.implementations).toMatchObject({
       jobs: 1,
       active: 0,
@@ -507,7 +553,7 @@ async function writeSummary(home: string, run: string, summary: unknown) {
 
 async function writeImplementationState(
   home: string,
-  state: { issue: number; branch: string; phase: string; attempt: number; lastFailure?: string }
+  state: { issue: number; branch: string; phase: string; attempt: number; pr?: number; lastFailure?: string }
 ) {
   const dir = path.join(home, 'projects', 'o-r', 'implementations');
   await fs.mkdir(dir, { recursive: true });

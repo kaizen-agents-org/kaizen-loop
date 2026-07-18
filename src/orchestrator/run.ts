@@ -5,6 +5,7 @@ import { VerifierAgentAdapter, type VerifierResult } from '../agents/verifier.js
 import type { AgentAdapter, AgentResult, DiscoveredIssue } from '../agents/types.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
+import { loadOperationalConfig } from '../config/operational.js';
 import { loadRegistry, resolveProject } from '../config/registry.js';
 import type { KaizenConfig, Registry } from '../config/schema.js';
 import { buildDiscoveredIssueFingerprint, parseFailureClass } from '../discovered-issue-fingerprint.js';
@@ -121,7 +122,11 @@ const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
-  let config = await loadConfig(resolved.project.localPath);
+  const initialConfig = await loadOperationalConfig(resolved.project, {
+    preferWorkspace: options.scheduled,
+    requireWorkspace: options.scheduled && options.dryRun && resolved.project.enabled
+  });
+  let config = initialConfig.config;
   assertJobEnabled(config, options.job);
   let scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
   let trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
@@ -129,7 +134,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const runId = toRunId(startedAt);
   let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
-  let github = new GitHubClient(runCommand, resolved.project.localPath);
+  let github = new GitHubClient(runCommand, initialConfig.path);
   const stateDir = projectStateDir(resolved.slug);
   const configuredMaxIssues = (requestedIssueNumbers?: number[]) =>
     options.maxIssues ?? scheduledJob?.config.run.maxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);

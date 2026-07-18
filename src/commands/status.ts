@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadRegistry, resolveProject } from '../config/registry.js';
-import { loadConfig } from '../config/config.js';
+import { loadOperationalConfig } from '../config/operational.js';
 import { GitHubClient } from '../github/client.js';
 import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -85,8 +85,9 @@ interface PullRequestCommitMetric {
 
 export async function statusProject(options: { cwd: string; project?: string; metrics?: boolean; runCommand: CommandRunner }) {
   const resolved = await resolveProject(options.project, options.cwd);
-  const config = await loadConfig(resolved.project.localPath);
-  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+  const operationalConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: true });
+  const config = operationalConfig.config;
+  const github = new GitHubClient(options.runCommand, operationalConfig.path);
   const issues = await github.listIssues(config.issues.label);
   const openPullRequests = await github.listOpenPullRequests();
   const generatedPullRequestMetrics = options.metrics
@@ -103,9 +104,29 @@ export async function statusProject(options: { cwd: string; project?: string; me
   const guardianJobs = await listPrGuardianJobs(stateDir);
   const implementationStates = await listImplementationStates(stateDir);
   const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
+  const pullRequestReconciliation = await reconcilePullRequestStates({
+    guardianJobs,
+    implementationStates,
+    openPullRequestNumbers,
+    github
+  });
+  const reconciledGuardianJobs = guardianJobs.map((job) => pullRequestReconciliation.merged.has(job.prNumber)
+    ? { ...job, status: 'success' as const, lastBlocker: undefined }
+    : job);
+  const reconciledImplementationStates = implementationStates.map((state) => state.pr && pullRequestReconciliation.merged.has(state.pr)
+    ? { ...state, phase: 'complete' as const, lastFailure: undefined }
+    : state);
   return {
     slug: resolved.slug,
     repo: resolved.project.repo,
+    configuration: {
+      source: operationalConfig.source,
+      path: operationalConfig.path
+    },
+    pullRequestReconciliation: {
+      merged: [...pullRequestReconciliation.merged].sort((a, b) => a - b),
+      unknown: [...pullRequestReconciliation.unknown].sort((a, b) => a - b)
+    },
     enabled: resolved.project.enabled,
     schedule: resolved.project.schedule,
     lastRun: lastRun ?? resolved.project.lastRun ?? lastSummary,
@@ -127,22 +148,22 @@ export async function statusProject(options: { cwd: string; project?: string; me
       open: openPullRequests.length
     },
     guardian: {
-      jobs: guardianJobs.length,
-      pending: countJobs(guardianJobs, 'pending'),
-      running: countJobs(guardianJobs, 'running'),
-      success: countJobs(guardianJobs, 'success'),
-      blocked: countJobs(guardianJobs, 'blocked'),
-      skipped: countJobs(guardianJobs, 'skipped'),
-      stale: guardianJobs.filter((job) => isStaleGuardianJob(job, openPullRequestNumbers)).length,
-      latest: guardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
+      jobs: reconciledGuardianJobs.length,
+      pending: countJobs(reconciledGuardianJobs, 'pending'),
+      running: countJobs(reconciledGuardianJobs, 'running'),
+      success: countJobs(reconciledGuardianJobs, 'success'),
+      blocked: countJobs(reconciledGuardianJobs, 'blocked'),
+      skipped: countJobs(reconciledGuardianJobs, 'skipped'),
+      stale: reconciledGuardianJobs.filter((job) => isStaleGuardianJob(job, openPullRequestNumbers)).length,
+      latest: reconciledGuardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
     },
     implementations: {
-      jobs: implementationStates.length,
-      active: implementationStates.filter((state) => ['implementing', 'verifying', 'publishing', 'guardian'].includes(state.phase)).length,
-      needsAttention: implementationStates.filter(isImplementationNeedsAttention).length,
-      stale: implementationStates.filter(isStaleImplementationState).length,
-      latest: [...implementationStates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0),
-      items: implementationStates.sort((a, b) => a.issue - b.issue)
+      jobs: reconciledImplementationStates.length,
+      active: reconciledImplementationStates.filter((state) => ['implementing', 'verifying', 'publishing', 'guardian'].includes(state.phase)).length,
+      needsAttention: reconciledImplementationStates.filter(isImplementationNeedsAttention).length,
+      stale: reconciledImplementationStates.filter(isStaleImplementationState).length,
+      latest: [...reconciledImplementationStates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0),
+      items: reconciledImplementationStates.sort((a, b) => a.issue - b.issue)
     },
     branchHygiene: await collectBranchHygiene({
       runCommand: options.runCommand,
@@ -157,6 +178,38 @@ export async function statusProject(options: { cwd: string; project?: string; me
         }))
     }),
     metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestMetrics) : undefined
+  };
+}
+
+async function reconcilePullRequestStates(options: {
+  guardianJobs: Array<{ prNumber: number; status: string }>;
+  implementationStates: ImplementationState[];
+  openPullRequestNumbers: Set<number>;
+  github: GitHubClient;
+}): Promise<{ merged: Set<number>; unknown: Set<number> }> {
+  const candidates = new Set<number>();
+  for (const job of options.guardianJobs) {
+    if (!options.openPullRequestNumbers.has(job.prNumber) && job.status !== 'success' && job.status !== 'skipped') {
+      candidates.add(job.prNumber);
+    }
+  }
+  for (const state of options.implementationStates) {
+    if (state.pr && state.phase !== 'complete' && !options.openPullRequestNumbers.has(state.pr)) candidates.add(state.pr);
+  }
+  const resolutions = await Promise.all([...candidates].map(async (number) => {
+    try {
+      return { number, resolution: await options.github.getPullRequestResolution(number) };
+    } catch {
+      return { number, resolution: undefined };
+    }
+  }));
+  return {
+    merged: new Set(resolutions
+      .filter(({ resolution }) => resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt))
+      .map(({ number }) => number)),
+    unknown: new Set(resolutions
+      .filter(({ resolution }) => !resolution)
+      .map(({ number }) => number))
   };
 }
 
