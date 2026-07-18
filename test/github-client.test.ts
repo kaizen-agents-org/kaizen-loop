@@ -504,6 +504,91 @@ describe('GitHubClient', () => {
     ]);
   });
 
+  it('paginates merged pull request commits before returning metrics data', async () => {
+    const firstPageCommits = Array.from({ length: 100 }, (_, index) => ({
+      commit: {
+        oid: `generated-${index}`,
+        committedDate: '2026-07-01T00:00:00Z',
+        author: {
+          name: 'github-actions[bot]',
+          email: '41898282+github-actions[bot]@users.noreply.github.com',
+          user: { login: 'github-actions[bot]', __typename: 'Bot' }
+        }
+      }
+    }));
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args.includes('searchQuery=is:pr is:merged owner:o merged:>=2026-07-01')) {
+        return ghResult(command, args, JSON.stringify({
+          data: {
+            search: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{
+                number: 8,
+                headRefName: 'kaizen/issue-8-x',
+                createdAt: '2026-07-01T00:00:00Z',
+                mergedAt: '2026-07-02T00:00:00Z',
+                repository: { nameWithOwner: 'o/r' },
+                url: 'https://github.com/o/r/pull/8',
+                commits: {
+                  totalCount: 101,
+                  pageInfo: { hasNextPage: true, endCursor: 'commit-cursor-100' },
+                  nodes: firstPageCommits
+                }
+              }]
+            }
+          }
+        }));
+      }
+      return ghResult(command, args, JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              commits: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  commit: {
+                    oid: 'human-follow-up',
+                    committedDate: '2026-07-01T01:00:00Z',
+                    author: {
+                      name: 'Maintainer',
+                      email: 'maintainer@example.com',
+                      user: { login: 'maintainer', __typename: 'User' }
+                    }
+                  }
+                }]
+              }
+            }
+          }
+        }
+      }));
+    });
+
+    const [pullRequest] = await new GitHubClient(runner, '/repo')
+      .searchMergedPullRequestsForOwner('o', '2026-07-01', 5);
+
+    expect(pullRequest.commitCount).toBe(101);
+    expect(pullRequest.commits).toHaveLength(101);
+    expect(pullRequest.commits?.at(-1)).toMatchObject({
+      oid: 'human-follow-up',
+      author: { login: 'maintainer', type: 'User' }
+    });
+    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner.mock.calls[1][1]).toEqual([
+      'api',
+      'graphql',
+      '-f',
+      expect.stringContaining('query='),
+      '-F',
+      'owner=o',
+      '-F',
+      'name=r',
+      '-F',
+      'number=8',
+      '-F',
+      'cursor=commit-cursor-100'
+    ]);
+  });
+
   it('preserves the base label when an optional target repo label is missing', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       const labelValue = String(args.at(args.indexOf('--label') + 1));
