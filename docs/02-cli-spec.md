@@ -81,7 +81,7 @@ kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
 | `--agent <agent>` | builder-agent へ渡す希望バックエンドを上書き(`claude` または `codex`) |
 | `--agent` | この実行に限りエージェントを上書き |
 
-`--scheduled` は registry の専用 workspace にある `.kaizen/config.yml` を運用設定として使う。通常の手動実行は開発 checkout の設定を使う。enabled な project の scheduled dry-run で workspace 設定が欠落または不正な場合、開発 checkout へ fallback せず失敗するため、先に `kaizen fleet refresh --sync` で workspace を復旧する。
+`--scheduled` は常に registry の専用 workspace にある `.kaizen/config.yml` を運用設定として使う。通常の手動実行は開発 checkout の設定を使う。scheduled実行ではprojectの有効状態やdry-runの有無にかかわらず、workspace設定が欠落または不正な場合は開発checkoutへfallbackせず失敗するため、先に `kaizen fleet refresh --sync` でworkspaceを復旧する。
 
 ### 終了時の通知(macOS)
 

@@ -83,6 +83,8 @@ interface PullRequestCommitMetric {
   authorType?: string;
 }
 
+const PULL_REQUEST_RECONCILIATION_CONCURRENCY = 4;
+
 export async function statusProject(options: { cwd: string; project?: string; metrics?: boolean; runCommand: CommandRunner }) {
   const resolved = await resolveProject(options.project, options.cwd);
   const operationalConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: true });
@@ -196,13 +198,21 @@ async function reconcilePullRequestStates(options: {
   for (const state of options.implementationStates) {
     if (state.pr && state.phase !== 'complete' && !options.openPullRequestNumbers.has(state.pr)) candidates.add(state.pr);
   }
-  const resolutions = await Promise.all([...candidates].map(async (number) => {
-    try {
-      return { number, resolution: await options.github.getPullRequestResolution(number) };
-    } catch {
-      return { number, resolution: undefined };
-    }
-  }));
+  const resolutions: Array<{
+    number: number;
+    resolution: Awaited<ReturnType<GitHubClient['getPullRequestResolution']>> | undefined;
+  }> = [];
+  const candidateNumbers = [...candidates];
+  for (let offset = 0; offset < candidateNumbers.length; offset += PULL_REQUEST_RECONCILIATION_CONCURRENCY) {
+    const batch = candidateNumbers.slice(offset, offset + PULL_REQUEST_RECONCILIATION_CONCURRENCY);
+    resolutions.push(...await Promise.all(batch.map(async (number) => {
+      try {
+        return { number, resolution: await options.github.getPullRequestResolution(number) };
+      } catch {
+        return { number, resolution: undefined };
+      }
+    })));
+  }
   return {
     merged: new Set(resolutions
       .filter(({ resolution }) => resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt))

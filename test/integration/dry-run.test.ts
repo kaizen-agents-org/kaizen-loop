@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parse, stringify } from 'yaml';
 import { defaultConfigYaml as buildDefaultConfigYaml } from '../../src/config/config.js';
-import { saveRegistry } from '../../src/config/registry.js';
+import { saveRegistry as saveRegistryFile } from '../../src/config/registry.js';
 import type { GitHubIssue } from '../../src/github/types.js';
 import { applyImplementationBudget, runKaizen } from '../../src/orchestrator/run.js';
 import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
@@ -32,7 +32,7 @@ describe('runKaizen dry-run', () => {
         { agent: 'claude', setup: null, verify: [] }
       )
     );
-    await saveRegistry({
+    await saveRegistryFile({
       version: 1,
       projects: {
         'o-r': {
@@ -91,7 +91,11 @@ describe('runKaizen dry-run', () => {
     expect(runner.mock.calls.every(([, , options]) => options?.cwd === repo)).toBe(true);
   });
 
-  it('fails closed when an enabled scheduled dry run has no workspace config', async () => {
+  it.each([
+    { name: 'enabled dry run', enabled: true, dryRun: true },
+    { name: 'enabled real run', enabled: true, dryRun: false },
+    { name: 'disabled dry run', enabled: false, dryRun: true }
+  ])('fails closed without workspace config for a scheduled $name', async ({ enabled, dryRun }) => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -101,7 +105,7 @@ describe('runKaizen dry-run', () => {
       path.join(repo, '.kaizen', 'config.yml'),
       buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
     );
-    await saveRegistry({
+    await saveRegistryFile({
       version: 1,
       projects: {
         'o-r': {
@@ -109,7 +113,7 @@ describe('runKaizen dry-run', () => {
           localPath: repo,
           workspacePath: workspace,
           schedule: '02:00',
-          enabled: true,
+          enabled,
           createdAt: '2026-06-12T00:00:00Z'
         }
       }
@@ -119,7 +123,7 @@ describe('runKaizen dry-run', () => {
       cwd: repo,
       project: 'o-r',
       scheduled: true,
-      dryRun: true,
+      dryRun,
       json: true,
       runCommand: vi.fn<CommandRunner>()
     })).rejects.toThrow(`Missing Kaizen config: ${path.join(workspace, '.kaizen', 'config.yml')}`);
@@ -757,7 +761,7 @@ describe('runKaizen PR flow', () => {
         { agent: 'claude', setup: null, verify: [] }
       )
     );
-    await saveRegistry({
+    await saveRegistryFile({
       version: 1,
       projects: {
         'o-r': {
@@ -822,7 +826,7 @@ describe('runKaizen PR flow', () => {
         path.join(workspace, '.kaizen', 'config.yml'),
         defaultConfigWith({ run: { latestStartHour: 23 } }, { agent: 'claude', setup: null, verify: [] })
       );
-      await saveRegistry({
+      await saveRegistryFile({
         version: 1,
         projects: {
           'o-r': {
@@ -3624,4 +3628,20 @@ function mergeConfig(target: Record<string, unknown>, source: Record<string, unk
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function saveRegistry(registry: Parameters<typeof saveRegistryFile>[0]): Promise<void> {
+  for (const project of Object.values(registry.projects)) {
+    try {
+      await fs.access(project.workspacePath);
+      await fs.mkdir(path.join(project.workspacePath, '.kaizen'), { recursive: true });
+      await fs.copyFile(
+        path.join(project.localPath, '.kaizen', 'config.yml'),
+        path.join(project.workspacePath, '.kaizen', 'config.yml')
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  await saveRegistryFile(registry);
 }

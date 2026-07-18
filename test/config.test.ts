@@ -1,9 +1,33 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { defaultConfigYaml } from '../src/config/config.js';
+import { loadOperationalConfig } from '../src/config/operational.js';
 import { configSchema } from '../src/config/schema.js';
 
 describe('configSchema', () => {
+  it('does not fall back when a workspace config exists but cannot be read', async () => {
+    const localPath = fs.mkdtempSync(path.join(os.tmpdir(), 'kaizen-local-'));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    fs.mkdirSync(path.join(localPath, '.kaizen'), { recursive: true });
+    fs.mkdirSync(path.join(workspacePath, '.kaizen', 'config.yml'), { recursive: true });
+    fs.writeFileSync(
+      path.join(localPath, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+
+    await expect(loadOperationalConfig({
+      repo: 'o/r',
+      localPath,
+      workspacePath,
+      schedule: '02:00',
+      enabled: true,
+      createdAt: '2026-07-18T00:00:00Z'
+    }, { preferWorkspace: true })).rejects.toThrow('Unable to read Kaizen config');
+  });
+
   it('applies defaults for valid minimal config', () => {
     const config = configSchema.parse({ version: 1 });
 

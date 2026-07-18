@@ -124,7 +124,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   const resolved = await resolveProject(options.project, options.cwd);
   const initialConfig = await loadOperationalConfig(resolved.project, {
     preferWorkspace: options.scheduled,
-    requireWorkspace: options.scheduled && options.dryRun && resolved.project.enabled
+    requireWorkspace: options.scheduled
   });
   let config = initialConfig.config;
   assertJobEnabled(config, options.job);

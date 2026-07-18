@@ -11,7 +11,10 @@ export async function loadConfig(repoDir: string): Promise<KaizenConfig> {
   try {
     raw = await fs.readFile(configPath, 'utf8');
   } catch (error) {
-    throw new ConfigError(`Missing Kaizen config: ${configPath}`);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new ConfigError(`Missing Kaizen config: ${configPath}`);
+    }
+    throw new ConfigError(`Unable to read Kaizen config at ${configPath}: ${String(error)}`);
   }
 
   try {

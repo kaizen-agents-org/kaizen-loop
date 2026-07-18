@@ -47,6 +47,42 @@ describe('listProjects', () => {
 });
 
 describe('statusProject', () => {
+  it('bounds concurrent pull request reconciliation lookups', async () => {
+    const { repo, workspace, home } = await setupProject();
+    for (let pr = 20; pr < 26; pr += 1) await writeGuardianJob(home, pr, 'blocked');
+    let active = 0;
+    let maximumActive = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return result(command, args, repo, JSON.stringify({
+          number: Number(args[2]),
+          url: `https://github.com/o/r/pull/${args[2]}`,
+          state: 'CLOSED',
+          mergedAt: null,
+          baseRefName: 'main',
+          closingIssuesReferences: []
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(maximumActive).toBe(4);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'view')).toHaveLength(6);
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+  });
+
   it('reconciles merged pull request jobs as terminal and reports workspace config', async () => {
     const { repo, workspace, home } = await setupProject();
     await fs.mkdir(path.join(workspace, '.kaizen'), { recursive: true });
