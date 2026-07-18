@@ -231,7 +231,7 @@ kaizen status [--project <slug>] [--metrics] [--json]
 - PR guardian job 数。open PR に対応しない非終端 job は `guardian.stale` として表示する
 - Issue 実装 checkpoint の phase、branch、attempt、最終更新、停止理由、draft/ready PR。24 時間以上更新されていない非終端 checkpoint は `implementations.stale` として表示する
 - `origin/main` に未取り込みのコミットがあり、対応するオープン PR がない remote branch
-- `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)と最古の生成 PR の滞留日数を表示する。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
+- `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)と最古の生成 PR の滞留日数を表示する。`generatedPullRequests` には open 生成 PR の作成時刻/滞留日数、review-window 内に merge された生成 PR の merge 時刻、commit source、PR 作成後に追加された人間または非 automation の follow-up commit 分母を含める。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
 
 朝のルーティンは `kaizen status` → `git pull` → 必要なら PR レビュー、を想定する。
 

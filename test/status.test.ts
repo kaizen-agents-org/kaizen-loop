@@ -235,6 +235,105 @@ describe('statusProject', () => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
       if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
+        const searchQuery = args.find((arg) => arg.startsWith('searchQuery='));
+        if (searchQuery?.includes('is:merged')) {
+          const createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+          const initialCommitAt = new Date(Date.parse(createdAt) - 60 * 60 * 1000).toISOString();
+          const followUpCommitAt = new Date(Date.parse(createdAt) + 60 * 60 * 1000).toISOString();
+          return result(
+            command,
+            args,
+            repo,
+            JSON.stringify({
+              data: {
+                search: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      number: 10,
+                      headRefName: 'kaizen/issue-10-x',
+                      createdAt,
+                      mergedAt: recent,
+                      author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                      repository: { nameWithOwner: 'o/r' },
+                      url: 'https://github.com/o/r/pull/10',
+                      commits: {
+                        totalCount: 1,
+                        nodes: [{
+                          commit: {
+                            oid: 'initial-human-authored-generated-commit',
+                            committedDate: initialCommitAt,
+                            author: {
+                              name: 'Maintainer',
+                              email: 'maintainer@example.com',
+                              user: { login: 'maintainer', __typename: 'User' }
+                            }
+                          }
+                        }]
+                      }
+                    },
+                    {
+                      number: 11,
+                      headRefName: 'kaizen/issue-11-x',
+                      createdAt,
+                      mergedAt: recent,
+                      author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                      repository: { nameWithOwner: 'o/r' },
+                      url: 'https://github.com/o/r/pull/11',
+                      commits: {
+                        totalCount: 2,
+                        nodes: [
+                          {
+                            commit: {
+                              oid: 'generated',
+                              committedDate: initialCommitAt,
+                              author: {
+                                name: 'github-actions[bot]',
+                                email: '41898282+github-actions[bot]@users.noreply.github.com',
+                                user: { login: 'github-actions[bot]', __typename: 'Bot' }
+                              }
+                            }
+                          },
+                          {
+                            commit: {
+                              oid: 'humanedit',
+                              committedDate: followUpCommitAt,
+                              author: {
+                                name: 'Maintainer',
+                                email: 'maintainer@example.com',
+                                user: { login: 'maintainer', __typename: 'User' }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      number: 12,
+                      headRefName: 'human/change',
+                      createdAt: recent,
+                      mergedAt: recent,
+                      author: { login: 'human', __typename: 'User' },
+                      repository: { nameWithOwner: 'o/r' },
+                      url: 'https://github.com/o/r/pull/12',
+                      commits: { totalCount: 1, nodes: [] }
+                    },
+                    {
+                      number: 13,
+                      headRefName: 'kaizen/issue-13-x',
+                      createdAt: old,
+                      mergedAt: old,
+                      author: { login: 'github-actions[bot]', __typename: 'Bot' },
+                      repository: { nameWithOwner: 'o/r' },
+                      url: 'https://github.com/o/r/pull/13',
+                      commits: { totalCount: 1, nodes: [] }
+                    }
+                  ]
+                }
+              }
+            })
+          );
+        }
         const oldestGeneratedPullRequestCreatedAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
         return result(
           command,
@@ -324,6 +423,55 @@ describe('statusProject', () => {
       }
     });
     expect(output.metrics?.wipLimit?.oldestGeneratedPullRequestCreatedAt).toBeTypeOf('string');
+    expect(output.metrics?.generatedPullRequests).toMatchObject({
+      open: {
+        count: 2,
+        sourcePullRequests: [
+          {
+            number: 7,
+            url: 'https://github.com/o/r/pull/7',
+            repository: 'o/r',
+            authorLogin: 'github-actions[bot]',
+            authorType: 'Bot'
+          },
+          {
+            number: 8,
+            url: 'https://github.com/o/other/pull/8',
+            repository: 'o/other',
+            authorLogin: 'dependabot[bot]'
+          }
+        ]
+      },
+      reviewWindow: {
+        merged: {
+          count: 2,
+          humanEditFree: 1,
+          humanOrNonAutomationFollowUp: 1,
+          humanOrNonAutomationFollowUpCommits: 1
+        }
+      }
+    });
+    expect(output.metrics?.generatedPullRequests?.open.sourcePullRequests[0].ageDays).toBeTypeOf('number');
+    expect(output.metrics?.generatedPullRequests?.reviewWindow.merged.sourcePullRequests).toMatchObject([
+      {
+        number: 10,
+        mergedAt: recent,
+        commitCount: 1,
+        humanOrNonAutomationFollowUpCommits: []
+      },
+      {
+        number: 11,
+        mergedAt: recent,
+        commitCount: 2,
+        humanOrNonAutomationFollowUpCommits: [
+          {
+            oid: 'humanedit',
+            authorLogin: 'maintainer',
+            authorType: 'User'
+          }
+        ]
+      }
+    ]);
   });
 });
 

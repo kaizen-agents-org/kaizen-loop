@@ -12,8 +12,10 @@ import type { RunIssueSummary, RunSummary } from '../orchestrator/summary.js';
 import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
   type GeneratedPullRequestBacklog,
+  isGeneratedPullRequest,
   summarizeGeneratedPullRequestBacklog
 } from '../orchestrator/wipLimit.js';
+import type { GitHubPullRequest, GitHubPullRequestCommit } from '../github/types.js';
 
 interface UnreviewedRemoteBranch {
   branch: string;
@@ -28,18 +30,69 @@ interface OpenPullRequestHead {
   repositoryOwner?: string;
 }
 
+interface GeneratedPullRequestMetrics {
+  wipLimit: GeneratedPullRequestBacklog;
+  open: {
+    count: number;
+    sourcePullRequests: OpenGeneratedPullRequestMetric[];
+  };
+  reviewWindow: {
+    since: string;
+    until: string;
+    merged: {
+      count: number;
+      humanEditFree: number;
+      humanOrNonAutomationFollowUp: number;
+      humanOrNonAutomationFollowUpCommits: number;
+      sourcePullRequests: MergedGeneratedPullRequestMetric[];
+    };
+  };
+}
+
+interface OpenGeneratedPullRequestMetric {
+  number: number;
+  url: string;
+  repository?: string;
+  headRefName?: string;
+  createdAt?: string;
+  ageDays?: number;
+  authorLogin?: string;
+  authorType?: string;
+}
+
+interface MergedGeneratedPullRequestMetric {
+  number: number;
+  url: string;
+  repository?: string;
+  headRefName?: string;
+  createdAt?: string;
+  mergedAt?: string | null;
+  authorLogin?: string;
+  authorType?: string;
+  commitCount?: number;
+  commits: PullRequestCommitMetric[];
+  humanOrNonAutomationFollowUpCommits: PullRequestCommitMetric[];
+}
+
+interface PullRequestCommitMetric {
+  oid: string;
+  committedDate?: string;
+  authorName?: string;
+  authorEmail?: string;
+  authorLogin?: string;
+  authorType?: string;
+}
+
 export async function statusProject(options: { cwd: string; project?: string; metrics?: boolean; runCommand: CommandRunner }) {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const issues = await github.listIssues(config.issues.label);
   const openPullRequests = await github.listOpenPullRequests();
-  const generatedPullRequestBacklog = options.metrics
-    ? summarizeGeneratedPullRequestBacklog({
-        pullRequests: await github.searchOpenPullRequestsForOwner(
-          resolved.project.repo.split('/')[0],
-          GENERATED_PULL_REQUEST_FETCH_LIMIT
-        ),
+  const generatedPullRequestMetrics = options.metrics
+    ? await collectGeneratedPullRequestMetrics({
+        github,
+        owner: resolved.project.repo.split('/')[0],
         repo: resolved.project.repo,
         wipLimit: config.safety.wipLimit
       })
@@ -103,7 +156,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
           repositoryOwner: pr.headRepositoryOwner?.login?.toLowerCase()
         }))
     }),
-    metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestBacklog) : undefined
+    metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestMetrics) : undefined
   };
 }
 
@@ -146,7 +199,11 @@ async function readLastRun(stateDir: string) {
   }
 }
 
-async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestBacklog) {
+async function collectMetrics(stateDir: string, generatedPullRequests?: GeneratedPullRequestMetrics) {
+  const reviewWindowSince = generatedPullRequests
+    ? new Date(generatedPullRequests.reviewWindow.since)
+    : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const now = generatedPullRequests ? new Date(generatedPullRequests.reviewWindow.until) : new Date();
   try {
     const runsDir = path.join(stateDir, 'runs');
     const runs = await fs.readdir(runsDir);
@@ -154,8 +211,6 @@ async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestB
     const summaries = loaded.flatMap((item) => (item.summary ? [item.summary] : []));
     const unreadableRuns = loaded.filter((item) => !item.summary).length;
     const cumulative = summarizeRunIssues(summaries);
-    const now = new Date();
-    const reviewWindowSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const reviewWindowSummaries = summaries.filter((summary) => {
       const startedAt = Date.parse(summary.startedAt);
       return Number.isFinite(startedAt) && startedAt >= reviewWindowSince.getTime() && startedAt <= now.getTime();
@@ -182,7 +237,13 @@ async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestB
         until: now.toISOString(),
         ...reviewWindow
       },
-      wipLimit
+      wipLimit: generatedPullRequests?.wipLimit,
+      generatedPullRequests: generatedPullRequests
+        ? {
+            open: generatedPullRequests.open,
+            reviewWindow: generatedPullRequests.reviewWindow
+          }
+        : undefined
     };
   } catch {
     return {
@@ -202,13 +263,73 @@ async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestB
       readableRuns: 0,
       unreadableRuns: 0,
       reviewWindow: {
-        since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-        until: new Date().toISOString(),
+        since: reviewWindowSince.toISOString(),
+        until: now.toISOString(),
         ...emptyRunMetrics()
       },
-      wipLimit
+      wipLimit: generatedPullRequests?.wipLimit,
+      generatedPullRequests: generatedPullRequests
+        ? {
+            open: generatedPullRequests.open,
+            reviewWindow: generatedPullRequests.reviewWindow
+          }
+        : undefined
     };
   }
+}
+
+async function collectGeneratedPullRequestMetrics(options: {
+  github: GitHubClient;
+  owner: string;
+  repo: string;
+  wipLimit: number;
+}): Promise<GeneratedPullRequestMetrics> {
+  const now = new Date();
+  const reviewWindowSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const [openPullRequests, mergedPullRequests] = await Promise.all([
+    options.github.searchOpenPullRequestsForOwner(options.owner, GENERATED_PULL_REQUEST_FETCH_LIMIT),
+    options.github.searchMergedPullRequestsForOwner(
+      options.owner,
+      reviewWindowSince.toISOString().slice(0, 10),
+      GENERATED_PULL_REQUEST_FETCH_LIMIT
+    )
+  ]);
+  const openGeneratedPullRequests = openPullRequests.filter(isGeneratedPullRequest);
+  const mergedGeneratedPullRequests = mergedPullRequests.filter((pullRequest) => {
+    if (!isGeneratedPullRequest(pullRequest)) return false;
+    const mergedAt = Date.parse(pullRequest.mergedAt ?? '');
+    return Number.isFinite(mergedAt) && mergedAt >= reviewWindowSince.getTime() && mergedAt <= now.getTime();
+  });
+  const sourcePullRequests = mergedGeneratedPullRequests.map(toMergedGeneratedPullRequestMetric);
+
+  return {
+    wipLimit: summarizeGeneratedPullRequestBacklog({
+      pullRequests: openPullRequests,
+      repo: options.repo,
+      wipLimit: options.wipLimit
+    }),
+    open: {
+      count: openGeneratedPullRequests.length,
+      sourcePullRequests: openGeneratedPullRequests.map(toOpenGeneratedPullRequestMetric)
+    },
+    reviewWindow: {
+      since: reviewWindowSince.toISOString(),
+      until: now.toISOString(),
+      merged: {
+        count: sourcePullRequests.length,
+        humanEditFree: sourcePullRequests.filter((pullRequest) => pullRequest.humanOrNonAutomationFollowUpCommits.length === 0)
+          .length,
+        humanOrNonAutomationFollowUp: sourcePullRequests.filter(
+          (pullRequest) => pullRequest.humanOrNonAutomationFollowUpCommits.length > 0
+        ).length,
+        humanOrNonAutomationFollowUpCommits: sourcePullRequests.reduce(
+          (sum, pullRequest) => sum + pullRequest.humanOrNonAutomationFollowUpCommits.length,
+          0
+        ),
+        sourcePullRequests
+      }
+    }
+  };
 }
 
 async function readRunSummary(runsDir: string, run: string): Promise<{ run: string; summary?: RunSummary }> {
@@ -272,6 +393,68 @@ function emptyGuardianMetrics() {
     queued: 0,
     skipped: 0
   };
+}
+
+function toOpenGeneratedPullRequestMetric(pullRequest: GitHubPullRequest): OpenGeneratedPullRequestMetric {
+  return {
+    number: pullRequest.number,
+    url: pullRequest.url,
+    repository: pullRequest.repository?.nameWithOwner,
+    headRefName: pullRequest.headRefName,
+    createdAt: pullRequest.createdAt,
+    ageDays: pullRequest.createdAt ? elapsedDaysSince(pullRequest.createdAt) : undefined,
+    authorLogin: pullRequest.author?.login,
+    authorType: pullRequest.author?.type
+  };
+}
+
+function toMergedGeneratedPullRequestMetric(pullRequest: GitHubPullRequest): MergedGeneratedPullRequestMetric {
+  const commits = (pullRequest.commits ?? []).map(toCommitMetric);
+  const createdAt = Date.parse(pullRequest.createdAt ?? '');
+  return {
+    number: pullRequest.number,
+    url: pullRequest.url,
+    repository: pullRequest.repository?.nameWithOwner,
+    headRefName: pullRequest.headRefName,
+    createdAt: pullRequest.createdAt,
+    mergedAt: pullRequest.mergedAt,
+    authorLogin: pullRequest.author?.login,
+    authorType: pullRequest.author?.type,
+    commitCount: pullRequest.commitCount,
+    commits,
+    humanOrNonAutomationFollowUpCommits: commits.filter((commit) => {
+      const committedAt = Date.parse(commit.committedDate ?? '');
+      return !isAutomationCommitMetric(commit)
+        && Number.isFinite(createdAt)
+        && Number.isFinite(committedAt)
+        && committedAt > createdAt;
+    })
+  };
+}
+
+function toCommitMetric(commit: GitHubPullRequestCommit): PullRequestCommitMetric {
+  return {
+    oid: commit.oid,
+    committedDate: commit.committedDate,
+    authorName: commit.author?.name,
+    authorEmail: commit.author?.email,
+    authorLogin: commit.author?.login,
+    authorType: commit.author?.type
+  };
+}
+
+function isAutomationCommitMetric(commit: PullRequestCommitMetric): boolean {
+  const login = commit.authorLogin?.toLowerCase();
+  const email = commit.authorEmail?.toLowerCase();
+  return commit.authorType?.toLowerCase() === 'bot'
+    || login?.endsWith('[bot]') === true
+    || email?.includes('[bot]') === true;
+}
+
+function elapsedDaysSince(isoDate: string): number | undefined {
+  const startedAt = Date.parse(isoDate);
+  if (!Number.isFinite(startedAt)) return undefined;
+  return Math.max(0, Math.floor((Date.now() - startedAt) / (24 * 60 * 60 * 1000)));
 }
 
 function countOutcome(issues: RunIssueSummary[], outcome: RunIssueSummary['outcome']): number {
