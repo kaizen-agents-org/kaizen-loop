@@ -927,7 +927,11 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? ghResponse(args, [], { state: 'MERGED' }) : 'done',
+      stdout: command === 'gh' ? ghResponse(args, [], {
+        state: 'MERGED',
+        baseRefName: 'main',
+        closingIssuesReferences: [{ number: 1 }]
+      }) : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -950,6 +954,52 @@ describe('runPrGuardianSkill', () => {
       pr: 4
     });
     expect(implementationState?.lastFailure).toBeUndefined();
+  });
+
+  it.each([
+    ['the pull request was retargeted', { state: 'MERGED', baseRefName: 'release', closingIssuesReferences: [{ number: 1 }] }],
+    ['the pull request no longer closes the issue', { state: 'MERGED', baseRefName: 'main', closingIssuesReferences: [] }]
+  ])('does not reconcile an exhausted guardian job when %s', async (_description, resolution) => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({ ...job, status: 'blocked', attemptCount: 2 }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? ghResponse(args, [], resolution) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toEqual([]);
+    expect((await listPrGuardianJobs(stateDir))[0]).toMatchObject({ status: 'blocked', attemptCount: 2 });
+    expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
   });
 
   it('leaves active running guardian jobs alone', async () => {
@@ -1012,6 +1062,8 @@ function ghResponse(
     statusCheckRollup: Array<Record<string, unknown>>;
     headRefOid: string;
     reviews: Array<Record<string, unknown>>;
+    baseRefName: string;
+    closingIssuesReferences: Array<{ number: number }>;
   }> = {}
 ): string {
   if (isPrView(args)) return mergeablePrResponse(pr);
@@ -1065,6 +1117,8 @@ function mergeablePrResponse(pr: Partial<{
   statusCheckRollup: Array<Record<string, unknown>>;
   headRefOid: string;
   reviews: Array<Record<string, unknown>>;
+  baseRefName: string;
+  closingIssuesReferences: Array<{ number: number }>;
 }> = {}): string {
   return JSON.stringify({
     state: pr.state ?? 'OPEN',
@@ -1073,6 +1127,8 @@ function mergeablePrResponse(pr: Partial<{
     mergeable: pr.mergeable ?? 'MERGEABLE',
     reviewDecision: pr.reviewDecision ?? '',
     headRefOid: pr.headRefOid ?? 'head-sha',
+    baseRefName: pr.baseRefName ?? 'main',
+    closingIssuesReferences: pr.closingIssuesReferences ?? [],
     reviews: pr.reviews ?? [],
     comments: [],
     statusCheckRollup: pr.statusCheckRollup ?? [

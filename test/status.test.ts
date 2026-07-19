@@ -128,6 +128,47 @@ describe('statusProject', () => {
     expect(output.implementations.items[0].lastFailure).toBeUndefined();
   });
 
+  it.each([
+    ['a non-default branch', 'release', [{ number: 12 }]],
+    ['no closing issue reference', 'main', []]
+  ])('does not reconcile a merged pull request targeting %s', async (_description, baseRefName, closingIssuesReferences) => {
+    const { repo, workspace, home } = await setupProject();
+    await writeGuardianJob(home, 12, 'blocked', 12);
+    await writeImplementationState(home, {
+      issue: 12,
+      branch: 'kaizen/issue-12-fix',
+      phase: 'guardian',
+      attempt: 2,
+      pr: 12,
+      lastFailure: 'review was not for current head'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          number: 12,
+          url: 'https://github.com/o/r/pull/12',
+          state: 'MERGED',
+          mergedAt: '2026-07-18T00:00:00Z',
+          baseRefName,
+          closingIssuesReferences
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+    expect(output.guardian).toMatchObject({ blocked: 1, success: 0 });
+    expect(output.implementations).toMatchObject({ active: 1, needsAttention: 1 });
+  });
+
   it('reports pushed remote branches with no open pull request', async () => {
     const { repo, workspace, home } = await setupProject();
     await writeGuardianJob(home, 4, 'pending');
@@ -600,7 +641,7 @@ async function writeImplementationState(
   }, null, 2)}\n`);
 }
 
-async function writeGuardianJob(home: string, prNumber: number, status: string) {
+async function writeGuardianJob(home: string, prNumber: number, status: string, issueNumber?: number) {
   const jobsDir = path.join(home, 'projects', 'o-r', 'guardian', 'jobs');
   await fs.mkdir(jobsDir, { recursive: true });
   const id = `o-r-pr-${prNumber}-abc123456789`;
@@ -612,6 +653,7 @@ async function writeGuardianJob(home: string, prNumber: number, status: string) 
       repo: 'o/r',
       prUrl: `https://github.com/o/r/pull/${prNumber}`,
       prNumber,
+      issueNumber,
       branch: `kaizen/issue-${prNumber}`,
       baseBranch: 'main',
       headSha: 'abc123456789',

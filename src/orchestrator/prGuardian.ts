@@ -53,6 +53,12 @@ export interface PrGuardianSkillResult {
   jobId?: string;
 }
 
+interface PullRequestTerminalState {
+  state?: 'OPEN' | 'CLOSED' | 'MERGED';
+  baseRefName?: string;
+  closingIssuesReferences?: Array<{ number: number }>;
+}
+
 export function guardianJobsDir(stateDir: string): string {
   return path.join(stateDir, 'guardian', 'jobs');
 }
@@ -222,13 +228,17 @@ export async function runPendingPrGuardianJobs(options: {
     (candidate.status === 'blocked' && candidate.attemptCount >= candidate.retryBudget) ||
     (isStaleRunningJob(candidate, options.config.guardian.timeoutMinutes) && candidate.attemptCount >= candidate.retryBudget)
   )) {
-    let state: PrGateSummary['state'];
+    let resolution: PullRequestTerminalState;
     try {
-      state = await inspectPullRequestTerminalState(options.runCommand, requestForJob(options, job));
+      resolution = await inspectPullRequestTerminalState(options.runCommand, requestForJob(options, job));
     } catch {
       continue;
     }
-    if (state !== 'MERGED') continue;
+    if (
+      resolution.state !== 'MERGED' ||
+      resolution.baseRefName !== job.baseBranch ||
+      (job.issueNumber && !resolution.closingIssuesReferences?.some((issue) => issue.number === job.issueNumber))
+    ) continue;
     const now = new Date().toISOString();
     const terminal: PrGuardianJob = {
       ...job,
@@ -236,7 +246,7 @@ export async function runPendingPrGuardianJobs(options: {
       updatedAt: now,
       lastCheckedAt: now,
       lastBlocker: undefined,
-      lastObservedFingerprint: JSON.stringify({ state })
+      lastObservedFingerprint: JSON.stringify(resolution)
     };
     await writeGuardianJob(options.stateDir, terminal);
     await syncImplementationState(options.stateDir, terminal);
@@ -673,7 +683,7 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
 async function inspectPullRequestTerminalState(
   runCommand: CommandRunner,
   req: PrGuardianSkillRequest
-): Promise<PrGateSummary['state']> {
+): Promise<PullRequestTerminalState> {
   const result = await runCommand('gh', [
     'pr',
     'view',
@@ -681,7 +691,7 @@ async function inspectPullRequestTerminalState(
     '--repo',
     req.repo,
     '--json',
-    'state'
+    'state,baseRefName,closingIssuesReferences'
   ], {
     cwd: req.workspaceDir,
     env: githubCliEnv(),
@@ -691,7 +701,7 @@ async function inspectPullRequestTerminalState(
   if (result.exitCode !== 0) {
     throw new Error(`Could not inspect PR state: ${result.stderr || result.stdout}`);
   }
-  return (JSON.parse(result.stdout || '{}') as Pick<PrGateSummary, 'state'>).state;
+  return JSON.parse(result.stdout || '{}') as PullRequestTerminalState;
 }
 
 async function inspectPullRequest(

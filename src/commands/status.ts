@@ -110,6 +110,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
     guardianJobs,
     implementationStates,
     openPullRequestNumbers,
+    defaultBranch: config.git.defaultBranch,
     github
   });
   const reconciledGuardianJobs = guardianJobs.map((job) => pullRequestReconciliation.merged.has(job.prNumber)
@@ -184,19 +185,25 @@ export async function statusProject(options: { cwd: string; project?: string; me
 }
 
 async function reconcilePullRequestStates(options: {
-  guardianJobs: Array<{ prNumber: number; status: string }>;
+  guardianJobs: Array<{ prNumber: number; issueNumber?: number; status: string }>;
   implementationStates: ImplementationState[];
   openPullRequestNumbers: Set<number>;
+  defaultBranch: string;
   github: GitHubClient;
 }): Promise<{ merged: Set<number>; unknown: Set<number> }> {
   const candidates = new Set<number>();
+  const issueNumbersByPullRequest = new Map<number, Set<number>>();
   for (const job of options.guardianJobs) {
     if (!options.openPullRequestNumbers.has(job.prNumber) && job.status !== 'success' && job.status !== 'skipped') {
       candidates.add(job.prNumber);
+      if (job.issueNumber) addIssueNumber(issueNumbersByPullRequest, job.prNumber, job.issueNumber);
     }
   }
   for (const state of options.implementationStates) {
-    if (state.pr && state.phase !== 'complete' && !options.openPullRequestNumbers.has(state.pr)) candidates.add(state.pr);
+    if (state.pr && state.phase !== 'complete' && !options.openPullRequestNumbers.has(state.pr)) {
+      candidates.add(state.pr);
+      addIssueNumber(issueNumbersByPullRequest, state.pr, state.issue);
+    }
   }
   const resolutions: Array<{
     number: number;
@@ -215,12 +222,24 @@ async function reconcilePullRequestStates(options: {
   }
   return {
     merged: new Set(resolutions
-      .filter(({ resolution }) => resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt))
+      .filter(({ number, resolution }) =>
+        (resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt)) &&
+        resolution?.baseRefName === options.defaultBranch &&
+        [...(issueNumbersByPullRequest.get(number) ?? [])].every((issueNumber) =>
+          resolution.closingIssuesReferences.some((issue) => issue.number === issueNumber)
+        )
+      )
       .map(({ number }) => number)),
     unknown: new Set(resolutions
       .filter(({ resolution }) => !resolution)
       .map(({ number }) => number))
   };
+}
+
+function addIssueNumber(target: Map<number, Set<number>>, prNumber: number, issueNumber: number): void {
+  const issueNumbers = target.get(prNumber) ?? new Set<number>();
+  issueNumbers.add(issueNumber);
+  target.set(prNumber, issueNumbers);
 }
 
 function isStaleImplementationState(state: ImplementationState): boolean {
