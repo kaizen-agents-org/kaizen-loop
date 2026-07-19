@@ -90,12 +90,38 @@ describe('runSandboxSmoke', () => {
       status: 'skipped'
     });
     expect(await fileExists(artifact.run.summaryPath)).toBe(true);
+    expect(await fileExists(path.join(home, 'projects', 'o-r', 'run.lock'))).toBe(false);
     const labelCreates = runner.mock.calls.filter(([, args]) => args[0] === 'label' && args[1] === 'create');
     expect(labelCreates.map(([, args]) => args[2])).toEqual(
       expect.arrayContaining(['kaizen', 'kaizen:ready', 'kaizen:pr-only'])
     );
     const issueCreate = runner.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'create');
     expect(issueCreate?.[1][issueCreate[1].indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready,kaizen:pr-only');
+  });
+
+  it('does not create a smoke issue while another run holds the project lock', async () => {
+    const { repo, home } = await setupProject({ smokeJob: true });
+    const stateDir = path.join(home, 'projects', 'o-r');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'run.lock'), JSON.stringify({ pid: process.pid }));
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+        throw new Error('smoke issue must not be created');
+      }
+      return result(command, args, repo, '');
+    });
+
+    await expect(executeRun({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      job: 'weekly-sandbox-smoke',
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    })).rejects.toThrow('Kaizen run is already active');
+
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it('records the async guardian job path in the smoke artifact', async () => {

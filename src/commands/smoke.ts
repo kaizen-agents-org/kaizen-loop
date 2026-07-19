@@ -10,6 +10,7 @@ import { extractLastJsonObject } from '../utils/json.js';
 import { projectStateDir } from '../utils/paths.js';
 import { toRunId } from '../utils/runId.js';
 import type { CommandRunner } from '../utils/command.js';
+import type { RunLock } from '../orchestrator/lock.js';
 import { reportIssueNow } from './report.js';
 
 export interface SandboxSmokeOptions {
@@ -22,6 +23,7 @@ export interface SandboxSmokeOptions {
   json: boolean;
   assumeYes?: boolean;
   schedulerJob?: string;
+  existingLock?: RunLock;
   runCommand: CommandRunner;
 }
 
@@ -103,6 +105,7 @@ export async function runSandboxSmoke(options: SandboxSmokeOptions): Promise<San
     assumeYes: options.assumeYes,
     scheduled: Boolean(options.schedulerJob),
     job: options.schedulerJob,
+    existingLock: options.existingLock,
     runCommand: options.runCommand
   });
 

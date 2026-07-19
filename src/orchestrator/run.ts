@@ -88,6 +88,7 @@ export interface RunOptions {
   json: boolean;
   assumeYes?: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
+  existingLock?: RunLock;
   runCommand: CommandRunner;
 }
 
@@ -212,7 +213,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   await ensureNotPaused(stateDir);
   let lock: RunLock;
   try {
-    lock = await RunLock.acquire(stateDir);
+    lock = options.existingLock ?? await RunLock.acquire(stateDir);
   } catch (error) {
     const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
       ? scheduledJob.config.run.skipIfRunning

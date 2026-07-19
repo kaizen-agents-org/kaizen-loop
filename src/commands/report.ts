@@ -3,6 +3,7 @@ import { loadConfig } from '../config/config.js';
 import { GitHubClient } from '../github/client.js';
 import { type DirectCommitConfirmation, runKaizen } from '../orchestrator/run.js';
 import type { CommandRunner } from '../utils/command.js';
+import type { RunLock } from '../orchestrator/lock.js';
 
 export interface ReportIssueOptions {
   cwd: string;
@@ -23,6 +24,7 @@ export interface ReportIssueNowOptions extends ReportIssueOptions {
   assumeYes?: boolean;
   scheduled?: boolean;
   job?: string;
+  existingLock?: RunLock;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<'direct' | 'pr' | 'reject'>;
 }
 
@@ -61,6 +63,7 @@ export async function reportIssueNow(options: ReportIssueNowOptions) {
     json: options.json,
     assumeYes: Boolean(options.assumeYes),
     confirmDirectCommit: options.confirmDirectCommit,
+    existingLock: options.existingLock,
     runCommand: options.runCommand
   });
   return { issue, fix };

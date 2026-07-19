@@ -1,7 +1,9 @@
 import { loadConfig } from '../config/config.js';
 import { resolveProject } from '../config/registry.js';
 import { runKaizen, type RunOptions } from '../orchestrator/run.js';
+import { RunLock } from '../orchestrator/lock.js';
 import { ConfigError } from '../utils/errors.js';
+import { projectStateDir } from '../utils/paths.js';
 import { runSandboxSmoke } from './smoke.js';
 
 export async function executeRun(options: RunOptions) {
@@ -15,13 +17,20 @@ export async function executeRun(options: RunOptions) {
     throw new ConfigError('Smoke scheduler jobs do not support issue selection, max issue overrides, or dry-run mode.');
   }
 
-  return runSandboxSmoke({
-    cwd: options.cwd,
-    project: resolved.slug,
-    agent: options.agent,
-    json: options.json,
-    assumeYes: true,
-    schedulerJob: options.job,
-    runCommand: options.runCommand
-  });
+  const lock = await RunLock.acquire(projectStateDir(resolved.slug));
+  try {
+    return await runSandboxSmoke({
+      cwd: options.cwd,
+      project: resolved.slug,
+      agent: options.agent,
+      json: options.json,
+      assumeYes: true,
+      schedulerJob: options.job,
+      existingLock: lock,
+      runCommand: options.runCommand
+    });
+  } catch (error) {
+    await lock.release();
+    throw error;
+  }
 }
