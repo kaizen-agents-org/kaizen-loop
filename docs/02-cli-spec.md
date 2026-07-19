@@ -40,6 +40,10 @@ Global Options:
 
 カレントディレクトリのリポジトリに Kaizen Loop を導入する。**冪等**(再実行しても安全。既存設定は上書き確認)。
 
+`package.json`、`pyproject.toml`、`go.mod`、`Cargo.toml`、`Gemfile` をこの順で検出し、最初に一致したスタックの `commands.setup` / `commands.verify` を設定案として生成する。Python は pytest / ruff、Go は test / vet、Rust は test / clippy、Ruby は rake / rspec を提案する。複数スタックのリポジトリでも優先順は常に同じになる。
+
+検出結果は実行ポリシーの確定ではなく、レビュー用の提案である。生成された `.kaizen/config.yml` のコマンドを人間が対象リポジトリに合わせて確認・修正し、その後にコミットする。特に `pyproject.toml` と `Gemfile` だけでは利用ツールや依存関係を完全には判定できないため、提案コマンドを無確認で信頼しない。
+
 ```
 kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 ```
@@ -80,6 +84,8 @@ kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
 | `--max-issues <N>` | この実行に限り処理上限を上書き |
 | `--agent <agent>` | builder-agent へ渡す希望バックエンドを上書き(`claude` または `codex`) |
 | `--agent` | この実行に限りエージェントを上書き |
+
+`--scheduled` は常に registry の専用 workspace にある `.kaizen/config.yml` を運用設定として使う。通常の手動実行は開発 checkout の設定を使う。scheduled実行ではprojectの有効状態やdry-runの有無にかかわらず、workspace設定が欠落または不正な場合は開発checkoutへfallbackせず失敗するため、先に `kaizen fleet refresh --sync` でworkspaceを復旧する。
 
 ### 終了時の通知(macOS)
 
@@ -239,8 +245,10 @@ kaizen status [--project <slug>] [--metrics] [--json]
 - オープン中の kaizen PR 一覧(レビュー待ち)
 - PR guardian job 数。open PR に対応しない非終端 job は `guardian.stale` として表示する
 - Issue 実装 checkpoint の phase、branch、attempt、最終更新、停止理由、draft/ready PR。24 時間以上更新されていない非終端 checkpoint は `implementations.stale` として表示する
+- `configuration` に運用設定の参照元(`workspace` または fallback の `local`)を表示する
+- state file が非終端でも PR が既に merge 済みなら表示上は terminal success / complete として補正する。確認できなかった PR 番号は `pullRequestReconciliation.unknown` に残し、正常扱いしない
 - `origin/main` に未取り込みのコミットがあり、対応するオープン PR がない remote branch
-- `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)と最古の生成 PR の滞留日数を表示する。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
+- `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、sandbox smoke artifact の pass/fail・最新実行日時(`reviewWindow.sandboxSmoke`)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)と最古の生成 PR の滞留日数を表示する。`generatedPullRequests` には open 生成 PR の作成時刻/滞留日数、review-window 内に merge された生成 PR の merge 時刻、commit source、PR 作成後に追加された人間または非 automation の follow-up commit 分母を含める。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
 
 朝のルーティンは `kaizen status` → `git pull` → 必要なら PR レビュー、を想定する。
 
@@ -295,6 +303,7 @@ kaizen scheduler disable [--project <slug>] [--all]
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
 - `sync` は `.kaizen/config.yml` の `scheduler.jobs` を読み、job ごとの plist / cron 行を登録する
+- `run.mode: smoke` の job は `kaizen smoke --yes` 相当の sandbox issue-to-PR run を実行し、job id を artifact の trigger に記録する
 - `plan` は登録対象の desired state を表示し、変更はしない
 - `set-schedule` は job の schedule expression を `.kaizen/config.yml` に書き込む
 - `disable --all`: 登録済み全プロジェクトを無効化
@@ -380,7 +389,7 @@ kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--guardia
 kaizen doctor [--project <slug>] [--repair]
 ```
 
-検査項目: gh 認証、設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。
+検査項目: gh 認証、開発 checkout と workspace の設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。運用検査には workspace 設定を使い、開発 checkout と意味的に異なる場合は `configuration.drift` に診断情報を返す。この差は feature branch 上の作業でも発生し得るため、それだけでは `ok: false` にしない。構造化された `verifier --version --json` を利用できる場合は、ビルド時 commit とリンク先 checkout の commit も比較し、stale build を診断エラーにする。旧 verifier のプレーンな version 出力は互換モードとして受け付ける。
 
 `--repair`: 設定から必要な GitHub ラベルを再作成する。複数 repo の registry 再構築、stale ロック削除、ワークスペース再作成、スケジューラ定義の再生成は `kaizen fleet` を使う。
 

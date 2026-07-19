@@ -111,6 +111,17 @@ describe('selectIssues', () => {
     expect(result.skipped).toEqual([{ number: 1, reason: `terminal disposition: ${label}` }]);
   });
 
+  it('excludes roadmap placeholders from selection by default', () => {
+    const result = selectIssues({
+      issues: [issue(1, 'roadmap placeholder', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:roadmap'])],
+      config,
+      maxIssues: 1
+    });
+
+    expect(result.selected).toEqual([]);
+    expect(result.skipped).toEqual([{ number: 1, reason: 'excluded label: kaizen:roadmap' }]);
+  });
+
   it('keeps retryable disposition eligible', () => {
     const result = selectIssues({
       issues: [issue(1, 'retryable', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:retryable'])],

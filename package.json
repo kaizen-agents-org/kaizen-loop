@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "description": "CLI for running a local AI-powered Kaizen Loop over GitHub issues.",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "kaizen": "./dist/cli.js",
     "kaizen-loop": "./dist/cli.js"

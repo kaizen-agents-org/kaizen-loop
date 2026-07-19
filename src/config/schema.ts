@@ -82,7 +82,8 @@ const schedulerRunSchema = z.discriminatedUnion('mode', [
       skipIfRunning: z.boolean().default(true),
       maxIssues: z.number().int().positive().optional()
     })
-    .strict()
+    .strict(),
+  z.object({ mode: z.literal('smoke') }).strict()
 ]);
 
 const schedulerJobSchema = z

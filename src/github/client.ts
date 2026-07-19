@@ -11,6 +11,7 @@ import type {
   GitHubIssue,
   GitHubLabelEvent,
   GitHubPullRequest,
+  GitHubPullRequestCommit,
   GitHubPullRequestDetails,
   GitHubPullRequestLinkage,
   GitHubPullRequestResolution,
@@ -33,6 +34,7 @@ export const KAIZEN_LABELS = [
   'kaizen:upstream-first',
   'kaizen:not-actionable',
   'kaizen:attempts-exhausted',
+  'kaizen:roadmap',
   'kaizen:goal',
   'kaizen:agent:claude',
   'kaizen:agent:codex'
@@ -213,6 +215,42 @@ export class GitHubClient {
     }
 
     return pullRequests;
+  }
+
+  async searchMergedPullRequestsForOwner(owner: string, mergedSince: string, limit = 1000): Promise<GitHubPullRequest[]> {
+    const pullRequests: GitHubPullRequest[] = [];
+    let cursor: string | undefined;
+
+    while (pullRequests.length < limit) {
+      const pageLimit = Math.min(100, limit - pullRequests.length);
+      const result = await this.gh(searchMergedPullRequestsForOwnerArgs(owner, mergedSince, pageLimit, cursor));
+      const page = parseOwnerPullRequestSearchPage(result.stdout);
+      for (const pullRequest of page.pullRequests) {
+        const pageInfo = page.commitPageInfo.get(pullRequestKey(pullRequest));
+        pullRequests.push(await this.completePullRequestCommits(pullRequest, pageInfo));
+      }
+      if (!page.hasNextPage || !page.endCursor) break;
+      cursor = page.endCursor;
+    }
+
+    return pullRequests;
+  }
+
+  private async completePullRequestCommits(
+    pullRequest: GitHubPullRequest,
+    initialPageInfo?: { hasNextPage: boolean; endCursor?: string }
+  ): Promise<GitHubPullRequest> {
+    const commits = [...(pullRequest.commits ?? [])];
+    let pageInfo = initialPageInfo;
+
+    while (commits.length < (pullRequest.commitCount ?? 0) && pageInfo?.hasNextPage && pageInfo.endCursor) {
+      const result = await this.gh(pullRequestCommitsArgs(pullRequest, pageInfo.endCursor));
+      const page = parsePullRequestCommitPage(result.stdout);
+      commits.push(...page.commits);
+      pageInfo = page.pageInfo;
+    }
+
+    return { ...pullRequest, commits };
   }
 
   async getPullRequest(number: number): Promise<GitHubPullRequestDetails> {
@@ -458,7 +496,7 @@ export class GitHubClient {
   }
 }
 
-const OWNER_PULL_REQUEST_SEARCH_QUERY = `
+const OWNER_OPEN_PULL_REQUEST_SEARCH_QUERY = `
 query($searchQuery: String!, $limit: Int!, $cursor: String) {
   search(query: $searchQuery, type: ISSUE, first: $limit, after: $cursor) {
     pageInfo {
@@ -483,12 +521,87 @@ query($searchQuery: String!, $limit: Int!, $cursor: String) {
   }
 }`;
 
+const OWNER_MERGED_PULL_REQUEST_SEARCH_QUERY = `
+query($searchQuery: String!, $limit: Int!, $cursor: String) {
+  search(query: $searchQuery, type: ISSUE, first: $limit, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        number
+        headRefName
+        createdAt
+        mergedAt
+        url
+        author {
+          login
+          __typename
+        }
+        repository {
+          nameWithOwner
+        }
+        commits(first: 100) {
+          totalCount
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            commit {
+              oid
+              committedDate
+              author {
+                name
+                email
+                user {
+                  login
+                  __typename
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+const PULL_REQUEST_COMMITS_QUERY = `
+query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      commits(first: 100, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          commit {
+            oid
+            committedDate
+            author {
+              name
+              email
+              user {
+                login
+                __typename
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
 function searchOpenPullRequestsForOwnerArgs(owner: string, limit: number, cursor?: string): string[] {
   const args = [
     'api',
     'graphql',
     '-f',
-    `query=${OWNER_PULL_REQUEST_SEARCH_QUERY}`,
+    `query=${OWNER_OPEN_PULL_REQUEST_SEARCH_QUERY}`,
     '-F',
     `searchQuery=is:pr is:open owner:${owner}`,
     '-F',
@@ -498,8 +611,43 @@ function searchOpenPullRequestsForOwnerArgs(owner: string, limit: number, cursor
   return args;
 }
 
+function searchMergedPullRequestsForOwnerArgs(owner: string, mergedSince: string, limit: number, cursor?: string): string[] {
+  const args = [
+    'api',
+    'graphql',
+    '-f',
+    `query=${OWNER_MERGED_PULL_REQUEST_SEARCH_QUERY}`,
+    '-F',
+    `searchQuery=is:pr is:merged owner:${owner} merged:>=${mergedSince}`,
+    '-F',
+    `limit=${limit}`
+  ];
+  if (cursor) args.push('-F', `cursor=${cursor}`);
+  return args;
+}
+
+function pullRequestCommitsArgs(pullRequest: GitHubPullRequest, cursor: string): string[] {
+  const [owner, name] = pullRequest.repository?.nameWithOwner?.split('/') ?? [];
+  if (!owner || !name) throw new Error(`Cannot paginate commits for pull request #${pullRequest.number}: repository is missing`);
+  return [
+    'api',
+    'graphql',
+    '-f',
+    `query=${PULL_REQUEST_COMMITS_QUERY}`,
+    '-F',
+    `owner=${owner}`,
+    '-F',
+    `name=${name}`,
+    '-F',
+    `number=${pullRequest.number}`,
+    '-F',
+    `cursor=${cursor}`
+  ];
+}
+
 function parseOwnerPullRequestSearchPage(stdout: string): {
   pullRequests: GitHubPullRequest[];
+  commitPageInfo: Map<string, { hasNextPage: boolean; endCursor?: string }>;
   hasNextPage: boolean;
   endCursor?: string;
 } {
@@ -511,14 +659,38 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
           number?: number;
           headRefName?: string;
           createdAt?: string;
+          mergedAt?: string | null;
           url?: string;
           author?: { login?: string; __typename?: string };
           repository?: { nameWithOwner?: string };
+          commits?: {
+            totalCount?: number;
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+            nodes?: Array<{
+              commit?: {
+                oid?: string;
+                committedDate?: string;
+                author?: {
+                  name?: string;
+                  email?: string;
+                  user?: { login?: string; __typename?: string } | null;
+                } | null;
+              };
+            } | null>;
+          };
         } | null>;
       };
     };
   };
   const search = payload.data?.search;
+  const commitPageInfo = new Map<string, { hasNextPage: boolean; endCursor?: string }>();
+  for (const node of search?.nodes ?? []) {
+    if (!node?.number || !node.repository?.nameWithOwner || !node.commits?.pageInfo) continue;
+    commitPageInfo.set(`${node.repository.nameWithOwner}#${node.number}`, {
+      hasNextPage: Boolean(node.commits.pageInfo.hasNextPage),
+      endCursor: node.commits.pageInfo.endCursor ?? undefined
+    });
+  }
   return {
     pullRequests:
       search?.nodes
@@ -527,6 +699,7 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
           number: node.number as number,
           headRefName: node.headRefName,
           createdAt: node.createdAt,
+          mergedAt: node.mergedAt,
           url: node.url as string,
           author: node.author
             ? {
@@ -534,11 +707,86 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
                 type: node.author.__typename
               }
             : undefined,
-          repository: node.repository
+          repository: node.repository,
+          commits:
+            node.commits?.nodes
+              ?.flatMap((commitNode) => {
+                const commit = commitNode?.commit;
+                if (!commit?.oid) return [];
+                return [{
+                  oid: commit.oid,
+                  committedDate: commit.committedDate,
+                  author: commit.author
+                    ? {
+                        name: commit.author.name,
+                        email: commit.author.email,
+                        login: commit.author.user?.login,
+                        type: commit.author.user?.__typename
+                      }
+                    : undefined
+                }];
+              }) ?? [],
+          commitCount: node.commits?.totalCount
         })) ?? [],
+    commitPageInfo,
     hasNextPage: Boolean(search?.pageInfo?.hasNextPage),
     endCursor: search?.pageInfo?.endCursor ?? undefined
   };
+}
+
+function parsePullRequestCommitPage(stdout: string): {
+  commits: GitHubPullRequestCommit[];
+  pageInfo: { hasNextPage: boolean; endCursor?: string };
+} {
+  const payload = JSON.parse(stdout || '{}') as {
+    data?: {
+      repository?: {
+        pullRequest?: {
+          commits?: {
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+            nodes?: Array<{
+              commit?: {
+                oid?: string;
+                committedDate?: string;
+                author?: {
+                  name?: string;
+                  email?: string;
+                  user?: { login?: string; __typename?: string } | null;
+                } | null;
+              };
+            } | null>;
+          };
+        };
+      };
+    };
+  };
+  const commits = payload.data?.repository?.pullRequest?.commits;
+  return {
+    commits: commits?.nodes?.flatMap((node) => {
+      const commit = node?.commit;
+      if (!commit?.oid) return [];
+      return [{
+        oid: commit.oid,
+        committedDate: commit.committedDate,
+        author: commit.author
+          ? {
+              name: commit.author.name,
+              email: commit.author.email,
+              login: commit.author.user?.login,
+              type: commit.author.user?.__typename
+            }
+          : undefined
+      }];
+    }) ?? [],
+    pageInfo: {
+      hasNextPage: Boolean(commits?.pageInfo?.hasNextPage),
+      endCursor: commits?.pageInfo?.endCursor ?? undefined
+    }
+  };
+}
+
+function pullRequestKey(pullRequest: GitHubPullRequest): string {
+  return `${pullRequest.repository?.nameWithOwner ?? ''}#${pullRequest.number}`;
 }
 
 function parsePaginatedOpenPullRequests(stdout: string): GitHubPullRequest[] {
@@ -768,6 +1016,7 @@ function descriptionForLabel(label: string): string {
     'kaizen:upstream-first': 'Upstream or source-of-truth work must complete before retry',
     'kaizen:not-actionable': 'Intake rejected this issue as unsafe or not actionable',
     'kaizen:attempts-exhausted': 'Automatic attempt budget exhausted; remove this label after choosing to retry',
+    'kaizen:roadmap': 'Roadmap placeholder; not an actionable Kaizen Loop backlog issue',
     'kaizen:goal': 'Goal-linked iteration issue',
     'kaizen:agent:claude': 'Prefer Claude through builder-agent for this issue',
     'kaizen:agent:codex': 'Prefer Codex through builder-agent for this issue'

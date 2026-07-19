@@ -11,7 +11,7 @@ export interface RunIssueSummary {
   priority?: string;
   agent?: string;
   attempt?: number;
-  outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped';
+  outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped' | 'infrastructure-failure';
   branch?: string;
   commit?: string;
   pr?: number;

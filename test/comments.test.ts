@@ -108,6 +108,22 @@ describe('result comments', () => {
     expect(human).toContain('"humanConfirmationRequired":true');
   });
 
+  it('does not count verifier infrastructure failures as builder attempts', () => {
+    const infrastructureFailure = buildResultComment({
+      runId: '2026-07-17T00-00-00Z',
+      issue: 44,
+      attempt: 2,
+      outcome: 'infrastructure-failure',
+      agent: 'verifier',
+      summary: 'Verifier protocol error',
+      maxAttempts: 3
+    });
+
+    expect(infrastructureFailure).toContain('Infrastructure failure; implementation checkpoint preserved');
+    expect(infrastructureFailure).toContain('"outcome":"infrastructure-failure"');
+    expect(countAttempts([{ body: infrastructureFailure }])).toBe(0);
+  });
+
   it('counts only the latest consecutive retryable blocks', () => {
     const retryable = buildResultComment({
       runId: 'run', issue: 1, attempt: 1, outcome: 'blocked', agent: 'codex', summary: 'retry',

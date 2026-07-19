@@ -49,9 +49,19 @@ async function logFiles(options: LogOptions): Promise<string[]> {
   const runsDir = path.join(projectStateDir(resolved.slug), 'runs');
   const run = options.run ?? (await latestRun(runsDir));
   if (!run) return [];
-  if (!options.issue) return [path.join(runsDir, run, 'summary.json')];
+  if (!options.issue) {
+    return [
+      path.join(runsDir, run, 'summary.json'),
+      path.join(runsDir, run, 'verifier-runtime.json')
+    ];
+  }
   const issueDir = path.join(runsDir, run, `issue-${options.issue}`);
-  return [path.join(issueDir, 'agent.log'), path.join(issueDir, 'verify.log')];
+  return [
+    path.join(runsDir, run, 'verifier-runtime.json'),
+    path.join(issueDir, 'agent.log'),
+    path.join(issueDir, 'verify.log'),
+    path.join(issueDir, 'verifier.log')
+  ];
 }
 
 async function guardianLogFiles(slug: string): Promise<string[]> {

@@ -27,6 +27,7 @@ cd <workspaceDir> && builder-agent < prompt
 - プロンプトは stdin で渡す
 - builder-agent は `.kaizen/builder/build-result.json`(設定 `builder.resultPath`)へ構造化結果を書く
 - Kaizen Loop は stdout の自己申告ではなく、`build-result.json` を読み取って `AgentResult` に変換する
+- `build-result.json` が未生成または schema 不正の場合だけ、`.kaizen/builder/discovered-issues.json` から entry 単位で検証済みの別バグを回収する。主結果の `error` は維持し、回収によって成功扱いにはしない
 - `KAIZEN_BUILD_RESULT_PATH`、`KAIZEN_WORKSPACE_DIR`、`KAIZEN_PREFERRED_AGENT`、必要なら `KAIZEN_AGENT_MODEL` を環境変数として渡す
 - **push・PR 作成・gh 操作は builder-agent に任せない**。反映はオーケストレータの責務
 - builder-agent が処理中に別バグを見つけた場合は、GitHub 操作をせず `discoveredIssues` に構造化して返す。重複確認・Issue 起票・元 Issue へのコメントは Kaizen Loop が行う
@@ -132,12 +133,13 @@ builder-agent の結果は `.kaizen/builder/build-result.json` から読む。
   "status": "fixed",
   "summary": "何をどう直したか。日本語で 3 行以内",
   "notes": "",
-  "blockedReason": "",
   "discoveredIssues": []
 }
 ```
 
 `status` は `fixed` / `partial` / `blocked`。`discoveredIssues` は任意で、省略時は空配列として扱う。結果ファイルがない、またはパースできない場合は `error` 扱いにする。
+
+正常な結果ファイルを読めない場合に限り、builder-agent が保存した `.kaizen/builder/discovered-issues.json` の JSON 配列を fallback として読む。各 entry は通常の `discoveredIssues[]` と同じ strict schema で個別に検証し、不正な entry は破棄する。artifact 全体が不正でも元の builder 失敗理由は変更しない。実行前に古い artifact を削除し、回収後は通常と同じ routing・open Issue 検索・fingerprint 重複排除を通す。
 
 `discoveredIssues[].repo` はバグを修正すべき対象リポジトリを指定する。処理中 Issue のリポジトリではなく、fleet / cross-repository 検証で失敗した checkout・workspace・ログが指す repository を入れること。値は `kaizen-loop` / `builder-agent` / `verifier` / `.github` / `coderabbit` / `renovate-config` の短縮名、または `owner/repo` を受け付ける。`github` は `.github`、`renovate` は `renovate-config` の alias として扱う。未指定または不明な短縮名の場合は処理中プロジェクトのリポジトリへ起票する。ただし本文・証拠・期待値に registry 登録済み repo の checkout/workspace/worktree パスが含まれる場合は、その repo へ補正して起票する。起票ラベルは `kaizen` と、`severity: P0|P1|P2` がある場合の `kaizen:P*` に限定する。
 

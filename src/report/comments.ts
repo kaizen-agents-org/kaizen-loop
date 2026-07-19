@@ -5,7 +5,7 @@ export interface ResultCommentOptions {
   runId: string;
   issue: number;
   attempt: number;
-  outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped';
+  outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped' | 'infrastructure-failure';
   agent: string;
   summary: string;
   notes?: string;
@@ -82,6 +82,7 @@ export function countAttempts(comments: Array<{ body: string }>): number {
   return comments.filter((comment) => {
     const marker = parseKaizenMarker(comment.body, 'result');
     if (!marker) return false;
+    if (marker.outcome === 'infrastructure-failure') return false;
     if (marker.humanConfirmationRequired === true) return true;
     return !marker.retryableExternal && !hasRetryableExternalEvidence(comment.body);
   }).length;
@@ -186,6 +187,7 @@ function formatOutcome(options: ResultCommentOptions): string {
     return 'Blocked; automation cannot proceed';
   }
   if (options.outcome === 'skipped') return 'Skipped';
+  if (options.outcome === 'infrastructure-failure') return 'Infrastructure failure; implementation checkpoint preserved';
   return 'Failed';
 }
 

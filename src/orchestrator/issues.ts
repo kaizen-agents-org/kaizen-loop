@@ -3,6 +3,8 @@ import type { GitHubIssue, GitHubPullRequest } from '../github/types.js';
 import { hasPendingPullRequest } from '../report/comments.js';
 import { TERMINAL_DISPOSITION_LABELS } from './disposition.js';
 
+const BUILT_IN_EXCLUDED_LABELS = ['kaizen:roadmap'];
+
 export interface IssueSelection {
   selected: GitHubIssue[];
   skipped: Array<{ number: number; reason: string }>;
@@ -52,7 +54,8 @@ export function selectIssues(options: {
       });
       return false;
     }
-    const excludedLabel = options.config.issues.selection.excludeLabels.find((label) => labels.includes(label));
+    const excludedLabel = BUILT_IN_EXCLUDED_LABELS.find((label) => labels.includes(label))
+      ?? options.config.issues.selection.excludeLabels.find((label) => labels.includes(label));
     if (excludedLabel) {
       skipped.push({ number: issue.number, reason: excludedLabel === 'kaizen:needs-human' ? 'needs-human' : `excluded label: ${excludedLabel}` });
       return false;

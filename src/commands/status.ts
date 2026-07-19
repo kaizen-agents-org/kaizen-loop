@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadRegistry, resolveProject } from '../config/registry.js';
-import { loadConfig } from '../config/config.js';
+import { loadOperationalConfig } from '../config/operational.js';
 import { GitHubClient } from '../github/client.js';
 import type { CommandRunner } from '../utils/command.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -12,8 +12,10 @@ import type { RunIssueSummary, RunSummary } from '../orchestrator/summary.js';
 import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
   type GeneratedPullRequestBacklog,
+  isGeneratedPullRequest,
   summarizeGeneratedPullRequestBacklog
 } from '../orchestrator/wipLimit.js';
+import type { GitHubPullRequest, GitHubPullRequestCommit } from '../github/types.js';
 
 interface UnreviewedRemoteBranch {
   branch: string;
@@ -28,18 +30,72 @@ interface OpenPullRequestHead {
   repositoryOwner?: string;
 }
 
+interface GeneratedPullRequestMetrics {
+  wipLimit: GeneratedPullRequestBacklog;
+  open: {
+    count: number;
+    sourcePullRequests: OpenGeneratedPullRequestMetric[];
+  };
+  reviewWindow: {
+    since: string;
+    until: string;
+    merged: {
+      count: number;
+      humanEditFree: number;
+      humanOrNonAutomationFollowUp: number;
+      humanOrNonAutomationFollowUpCommits: number;
+      sourcePullRequests: MergedGeneratedPullRequestMetric[];
+    };
+  };
+}
+
+interface OpenGeneratedPullRequestMetric {
+  number: number;
+  url: string;
+  repository?: string;
+  headRefName?: string;
+  createdAt?: string;
+  ageDays?: number;
+  authorLogin?: string;
+  authorType?: string;
+}
+
+interface MergedGeneratedPullRequestMetric {
+  number: number;
+  url: string;
+  repository?: string;
+  headRefName?: string;
+  createdAt?: string;
+  mergedAt?: string | null;
+  authorLogin?: string;
+  authorType?: string;
+  commitCount?: number;
+  commits: PullRequestCommitMetric[];
+  humanOrNonAutomationFollowUpCommits: PullRequestCommitMetric[];
+}
+
+interface PullRequestCommitMetric {
+  oid: string;
+  committedDate?: string;
+  authorName?: string;
+  authorEmail?: string;
+  authorLogin?: string;
+  authorType?: string;
+}
+
+const PULL_REQUEST_RECONCILIATION_CONCURRENCY = 4;
+
 export async function statusProject(options: { cwd: string; project?: string; metrics?: boolean; runCommand: CommandRunner }) {
   const resolved = await resolveProject(options.project, options.cwd);
-  const config = await loadConfig(resolved.project.localPath);
-  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+  const operationalConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: true });
+  const config = operationalConfig.config;
+  const github = new GitHubClient(options.runCommand, operationalConfig.path);
   const issues = await github.listIssues(config.issues.label);
   const openPullRequests = await github.listOpenPullRequests();
-  const generatedPullRequestBacklog = options.metrics
-    ? summarizeGeneratedPullRequestBacklog({
-        pullRequests: await github.searchOpenPullRequestsForOwner(
-          resolved.project.repo.split('/')[0],
-          GENERATED_PULL_REQUEST_FETCH_LIMIT
-        ),
+  const generatedPullRequestMetrics = options.metrics
+    ? await collectGeneratedPullRequestMetrics({
+        github,
+        owner: resolved.project.repo.split('/')[0],
         repo: resolved.project.repo,
         wipLimit: config.safety.wipLimit
       })
@@ -50,9 +106,30 @@ export async function statusProject(options: { cwd: string; project?: string; me
   const guardianJobs = await listPrGuardianJobs(stateDir);
   const implementationStates = await listImplementationStates(stateDir);
   const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
+  const pullRequestReconciliation = await reconcilePullRequestStates({
+    guardianJobs,
+    implementationStates,
+    openPullRequestNumbers,
+    defaultBranch: config.git.defaultBranch,
+    github
+  });
+  const reconciledGuardianJobs = guardianJobs.map((job) => pullRequestReconciliation.merged.has(job.prNumber)
+    ? { ...job, status: 'success' as const, lastBlocker: undefined }
+    : job);
+  const reconciledImplementationStates = implementationStates.map((state) => state.pr && pullRequestReconciliation.merged.has(state.pr)
+    ? { ...state, phase: 'complete' as const, lastFailure: undefined }
+    : state);
   return {
     slug: resolved.slug,
     repo: resolved.project.repo,
+    configuration: {
+      source: operationalConfig.source,
+      path: operationalConfig.path
+    },
+    pullRequestReconciliation: {
+      merged: [...pullRequestReconciliation.merged].sort((a, b) => a - b),
+      unknown: [...pullRequestReconciliation.unknown].sort((a, b) => a - b)
+    },
     enabled: resolved.project.enabled,
     schedule: resolved.project.schedule,
     lastRun: lastRun ?? resolved.project.lastRun ?? lastSummary,
@@ -74,22 +151,22 @@ export async function statusProject(options: { cwd: string; project?: string; me
       open: openPullRequests.length
     },
     guardian: {
-      jobs: guardianJobs.length,
-      pending: countJobs(guardianJobs, 'pending'),
-      running: countJobs(guardianJobs, 'running'),
-      success: countJobs(guardianJobs, 'success'),
-      blocked: countJobs(guardianJobs, 'blocked'),
-      skipped: countJobs(guardianJobs, 'skipped'),
-      stale: guardianJobs.filter((job) => isStaleGuardianJob(job, openPullRequestNumbers)).length,
-      latest: guardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
+      jobs: reconciledGuardianJobs.length,
+      pending: countJobs(reconciledGuardianJobs, 'pending'),
+      running: countJobs(reconciledGuardianJobs, 'running'),
+      success: countJobs(reconciledGuardianJobs, 'success'),
+      blocked: countJobs(reconciledGuardianJobs, 'blocked'),
+      skipped: countJobs(reconciledGuardianJobs, 'skipped'),
+      stale: reconciledGuardianJobs.filter((job) => isStaleGuardianJob(job, openPullRequestNumbers)).length,
+      latest: reconciledGuardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
     },
     implementations: {
-      jobs: implementationStates.length,
-      active: implementationStates.filter((state) => ['implementing', 'verifying', 'publishing', 'guardian'].includes(state.phase)).length,
-      needsAttention: implementationStates.filter(isImplementationNeedsAttention).length,
-      stale: implementationStates.filter(isStaleImplementationState).length,
-      latest: [...implementationStates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0),
-      items: implementationStates.sort((a, b) => a.issue - b.issue)
+      jobs: reconciledImplementationStates.length,
+      active: reconciledImplementationStates.filter((state) => ['implementing', 'verifying', 'publishing', 'guardian'].includes(state.phase)).length,
+      needsAttention: reconciledImplementationStates.filter(isImplementationNeedsAttention).length,
+      stale: reconciledImplementationStates.filter(isStaleImplementationState).length,
+      latest: [...reconciledImplementationStates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0),
+      items: reconciledImplementationStates.sort((a, b) => a.issue - b.issue)
     },
     branchHygiene: await collectBranchHygiene({
       runCommand: options.runCommand,
@@ -103,8 +180,68 @@ export async function statusProject(options: { cwd: string; project?: string; me
           repositoryOwner: pr.headRepositoryOwner?.login?.toLowerCase()
         }))
     }),
-    metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestBacklog) : undefined
+    metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestMetrics) : undefined
   };
+}
+
+async function reconcilePullRequestStates(options: {
+  guardianJobs: Array<{ prNumber: number; issueNumber?: number; status: string }>;
+  implementationStates: ImplementationState[];
+  openPullRequestNumbers: Set<number>;
+  defaultBranch: string;
+  github: GitHubClient;
+}): Promise<{ merged: Set<number>; unknown: Set<number> }> {
+  const candidates = new Set<number>();
+  const issueNumbersByPullRequest = new Map<number, Set<number>>();
+  for (const job of options.guardianJobs) {
+    if (!options.openPullRequestNumbers.has(job.prNumber) && job.status !== 'success' && job.status !== 'skipped') {
+      candidates.add(job.prNumber);
+      if (job.issueNumber) addIssueNumber(issueNumbersByPullRequest, job.prNumber, job.issueNumber);
+    }
+  }
+  for (const state of options.implementationStates) {
+    if (state.pr && state.phase !== 'complete' && !options.openPullRequestNumbers.has(state.pr)) {
+      candidates.add(state.pr);
+      addIssueNumber(issueNumbersByPullRequest, state.pr, state.issue);
+    }
+  }
+  const resolutions: Array<{
+    number: number;
+    resolution: Awaited<ReturnType<GitHubClient['getPullRequestResolution']>> | undefined;
+  }> = [];
+  const candidateNumbers = [...candidates];
+  for (let offset = 0; offset < candidateNumbers.length; offset += PULL_REQUEST_RECONCILIATION_CONCURRENCY) {
+    const batch = candidateNumbers.slice(offset, offset + PULL_REQUEST_RECONCILIATION_CONCURRENCY);
+    resolutions.push(...await Promise.all(batch.map(async (number) => {
+      try {
+        return { number, resolution: await options.github.getPullRequestResolution(number) };
+      } catch {
+        return { number, resolution: undefined };
+      }
+    })));
+  }
+  return {
+    merged: new Set(resolutions
+      .filter(({ number, resolution }) => {
+        const trackedIssues = issueNumbersByPullRequest.get(number);
+        return (resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt)) &&
+        resolution?.baseRefName === options.defaultBranch &&
+        Boolean(trackedIssues?.size) &&
+        [...(trackedIssues ?? [])].every((issueNumber) =>
+          resolution.closingIssuesReferences.some((issue) => issue.number === issueNumber)
+        );
+      })
+      .map(({ number }) => number)),
+    unknown: new Set(resolutions
+      .filter(({ resolution }) => !resolution)
+      .map(({ number }) => number))
+  };
+}
+
+function addIssueNumber(target: Map<number, Set<number>>, prNumber: number, issueNumber: number): void {
+  const issueNumbers = target.get(prNumber) ?? new Set<number>();
+  issueNumbers.add(issueNumber);
+  target.set(prNumber, issueNumbers);
 }
 
 function isStaleImplementationState(state: ImplementationState): boolean {
@@ -114,7 +251,7 @@ function isStaleImplementationState(state: ImplementationState): boolean {
 }
 
 function isImplementationNeedsAttention(state: ImplementationState): boolean {
-  return state.phase === 'failed' || state.phase === 'blocked' || Boolean(state.lastFailure);
+  return state.phase === 'failed' || state.phase === 'infrastructure-failure' || state.phase === 'blocked' || Boolean(state.lastFailure);
 }
 
 export async function listProjects() {
@@ -146,67 +283,103 @@ async function readLastRun(stateDir: string) {
   }
 }
 
-async function collectMetrics(stateDir: string, wipLimit?: GeneratedPullRequestBacklog) {
+async function collectMetrics(stateDir: string, generatedPullRequests?: GeneratedPullRequestMetrics) {
+  const reviewWindowSince = generatedPullRequests
+    ? new Date(generatedPullRequests.reviewWindow.since)
+    : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const now = generatedPullRequests ? new Date(generatedPullRequests.reviewWindow.until) : new Date();
+  const loaded = await readRunSummaries(stateDir);
+  const summaries = loaded.flatMap((item) => (item.summary ? [item.summary] : []));
+  const unreadableRuns = loaded.filter((item) => !item.summary).length;
+  const cumulative = summarizeRunIssues(summaries);
+  const reviewWindowSummaries = summaries.filter((summary) => {
+    const startedAt = Date.parse(summary.startedAt);
+    return Number.isFinite(startedAt) && startedAt >= reviewWindowSince.getTime() && startedAt <= now.getTime();
+  });
+  const reviewWindow = summarizeRunIssues(reviewWindowSummaries);
+  const sandboxSmoke = await collectSandboxSmokeMetrics(stateDir, reviewWindowSince, now);
+  return {
+    ...cumulative,
+    readableRuns: summaries.length,
+    unreadableRuns,
+    reviewWindow: {
+      since: reviewWindowSince.toISOString(),
+      until: now.toISOString(),
+      ...reviewWindow,
+      sandboxSmoke
+    },
+    wipLimit: generatedPullRequests?.wipLimit,
+    generatedPullRequests: generatedPullRequests
+      ? {
+          open: generatedPullRequests.open,
+          reviewWindow: generatedPullRequests.reviewWindow
+        }
+      : undefined
+  };
+}
+
+async function readRunSummaries(stateDir: string): Promise<Array<{ run: string; summary?: RunSummary }>> {
+  const runsDir = path.join(stateDir, 'runs');
   try {
-    const runsDir = path.join(stateDir, 'runs');
     const runs = await fs.readdir(runsDir);
-    const loaded = await Promise.all(runs.map((run) => readRunSummary(runsDir, run)));
-    const summaries = loaded.flatMap((item) => (item.summary ? [item.summary] : []));
-    const unreadableRuns = loaded.filter((item) => !item.summary).length;
-    const cumulative = summarizeRunIssues(summaries);
-    const now = new Date();
-    const reviewWindowSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const reviewWindowSummaries = summaries.filter((summary) => {
-      const startedAt = Date.parse(summary.startedAt);
-      return Number.isFinite(startedAt) && startedAt >= reviewWindowSince.getTime() && startedAt <= now.getTime();
-    });
-    const reviewWindow = summarizeRunIssues(reviewWindowSummaries);
-    return {
-      runs: cumulative.runs,
-      processed: cumulative.processed,
-      prCreated: cumulative.prCreated,
-      directCommit: cumulative.directCommit,
-      failed: cumulative.failed,
-      blocked: cumulative.blocked,
-      skipped: cumulative.skipped,
-      verificationFailed: cumulative.verificationFailed,
-      verifierBlocked: cumulative.verifierBlocked,
-      verifierNeedsContext: cumulative.verifierNeedsContext,
-      verifierFailed: cumulative.verifierFailed,
-      guardian: cumulative.guardian,
-      readableRuns: summaries.length,
-      unreadableRuns,
-      reviewWindow: {
-        since: reviewWindowSince.toISOString(),
-        until: now.toISOString(),
-        ...reviewWindow
-      },
-      wipLimit
-    };
+    return Promise.all(runs.map((run) => readRunSummary(runsDir, run)));
   } catch {
-    return {
-      runs: 0,
-      processed: 0,
-      prCreated: 0,
-      directCommit: 0,
-      failed: 0,
-      blocked: 0,
-      skipped: 0,
-      verificationFailed: 0,
-      verifierBlocked: 0,
-      verifierNeedsContext: 0,
-      verifierFailed: 0,
-      guardian: emptyGuardianMetrics(),
-      readableRuns: 0,
-      unreadableRuns: 0,
-      reviewWindow: {
-        since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-        until: new Date().toISOString(),
-        ...emptyRunMetrics()
-      },
-      wipLimit
-    };
+    return [];
   }
+}
+
+async function collectGeneratedPullRequestMetrics(options: {
+  github: GitHubClient;
+  owner: string;
+  repo: string;
+  wipLimit: number;
+}): Promise<GeneratedPullRequestMetrics> {
+  const now = new Date();
+  const reviewWindowSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const [openPullRequests, mergedPullRequests] = await Promise.all([
+    options.github.searchOpenPullRequestsForOwner(options.owner, GENERATED_PULL_REQUEST_FETCH_LIMIT),
+    options.github.searchMergedPullRequestsForOwner(
+      options.owner,
+      reviewWindowSince.toISOString().slice(0, 10),
+      GENERATED_PULL_REQUEST_FETCH_LIMIT
+    )
+  ]);
+  const openGeneratedPullRequests = openPullRequests.filter(isGeneratedPullRequest);
+  const mergedGeneratedPullRequests = mergedPullRequests.filter((pullRequest) => {
+    if (!isGeneratedPullRequest(pullRequest)) return false;
+    const mergedAt = Date.parse(pullRequest.mergedAt ?? '');
+    return Number.isFinite(mergedAt) && mergedAt >= reviewWindowSince.getTime() && mergedAt <= now.getTime();
+  });
+  const sourcePullRequests = mergedGeneratedPullRequests.map(toMergedGeneratedPullRequestMetric);
+
+  return {
+    wipLimit: summarizeGeneratedPullRequestBacklog({
+      pullRequests: openPullRequests,
+      repo: options.repo,
+      wipLimit: options.wipLimit
+    }),
+    open: {
+      count: openGeneratedPullRequests.length,
+      sourcePullRequests: openGeneratedPullRequests.map(toOpenGeneratedPullRequestMetric)
+    },
+    reviewWindow: {
+      since: reviewWindowSince.toISOString(),
+      until: now.toISOString(),
+      merged: {
+        count: sourcePullRequests.length,
+        humanEditFree: sourcePullRequests.filter((pullRequest) => pullRequest.humanOrNonAutomationFollowUpCommits.length === 0)
+          .length,
+        humanOrNonAutomationFollowUp: sourcePullRequests.filter(
+          (pullRequest) => pullRequest.humanOrNonAutomationFollowUpCommits.length > 0
+        ).length,
+        humanOrNonAutomationFollowUpCommits: sourcePullRequests.reduce(
+          (sum, pullRequest) => sum + pullRequest.humanOrNonAutomationFollowUpCommits.length,
+          0
+        ),
+        sourcePullRequests
+      }
+    }
+  };
 }
 
 async function readRunSummary(runsDir: string, run: string): Promise<{ run: string; summary?: RunSummary }> {
@@ -218,6 +391,83 @@ async function readRunSummary(runsDir: string, run: string): Promise<{ run: stri
   }
 }
 
+interface SmokeMetricArtifact {
+  file: string;
+  startedAt: string;
+  startedAtMs: number;
+  result: string;
+}
+
+async function collectSandboxSmokeMetrics(stateDir: string, since: Date, until: Date) {
+  const smokeDir = path.join(stateDir, 'smoke-runs');
+  let files: string[];
+  try {
+    files = (await fs.readdir(smokeDir)).filter((file) => file.endsWith('.json')).sort();
+  } catch {
+    return emptySandboxSmokeMetrics();
+  }
+
+  const loaded = await Promise.all(
+    files.map(async (file) => {
+      const artifactPath = path.join(smokeDir, file);
+      try {
+        const artifact = JSON.parse(await fs.readFile(artifactPath, 'utf8')) as {
+          startedAt?: unknown;
+          result?: unknown;
+        };
+        if (typeof artifact.startedAt !== 'string' || typeof artifact.result !== 'string') {
+          throw new Error('invalid artifact');
+        }
+        const startedAtMs = Date.parse(artifact.startedAt);
+        if (!Number.isFinite(startedAtMs)) throw new Error('invalid startedAt');
+        return {
+          artifact: {
+            file,
+            startedAt: artifact.startedAt,
+            startedAtMs,
+            result: artifact.result
+          } satisfies SmokeMetricArtifact
+        };
+      } catch {
+        try {
+          return { unreadableAtMs: (await fs.stat(artifactPath)).mtimeMs };
+        } catch {
+          return {};
+        }
+      }
+    })
+  );
+  const inWindow = loaded
+    .flatMap((item) => (item.artifact ? [item.artifact] : []))
+    .filter((artifact) => artifact.startedAtMs >= since.getTime() && artifact.startedAtMs <= until.getTime())
+    .sort((left, right) => left.startedAtMs - right.startedAtMs || left.file.localeCompare(right.file));
+  const latest = inWindow.at(-1);
+  return {
+    runs: inWindow.length,
+    passed: inWindow.filter((artifact) => artifact.result === 'success').length,
+    failed: inWindow.filter((artifact) => artifact.result !== 'success').length,
+    unreadable: loaded.filter(
+      (item) =>
+        item.unreadableAtMs !== undefined &&
+        item.unreadableAtMs >= since.getTime() &&
+        item.unreadableAtMs <= until.getTime()
+    ).length,
+    latestRunAt: latest?.startedAt ?? null,
+    latestResult: latest ? (latest.result === 'success' ? 'pass' : 'fail') : null
+  };
+}
+
+function emptySandboxSmokeMetrics() {
+  return {
+    runs: 0,
+    passed: 0,
+    failed: 0,
+    unreadable: 0,
+    latestRunAt: null,
+    latestResult: null
+  };
+}
+
 function summarizeRunIssues(summaries: RunSummary[]) {
   const issues = summaries.flatMap((summary) => summary.issues ?? []);
   const topLevelSkipped = summaries.reduce((sum, summary) => sum + (summary.skipped?.length ?? 0), 0);
@@ -227,6 +477,7 @@ function summarizeRunIssues(summaries: RunSummary[]) {
   metrics.prCreated = countOutcome(issues, 'pr-created');
   metrics.directCommit = countOutcome(issues, 'direct-commit');
   metrics.failed = countOutcome(issues, 'failed');
+  metrics.infrastructureFailed = countOutcome(issues, 'infrastructure-failure');
   metrics.blocked = countOutcome(issues, 'blocked');
   metrics.skipped = countOutcome(issues, 'skipped') + topLevelSkipped;
   metrics.verificationFailed = countReasonPrefix(issues, 'Verification failed:');
@@ -250,6 +501,7 @@ function emptyRunMetrics() {
     prCreated: 0,
     directCommit: 0,
     failed: 0,
+    infrastructureFailed: 0,
     blocked: 0,
     skipped: 0,
     verificationFailed: 0,
@@ -268,6 +520,68 @@ function emptyGuardianMetrics() {
     queued: 0,
     skipped: 0
   };
+}
+
+function toOpenGeneratedPullRequestMetric(pullRequest: GitHubPullRequest): OpenGeneratedPullRequestMetric {
+  return {
+    number: pullRequest.number,
+    url: pullRequest.url,
+    repository: pullRequest.repository?.nameWithOwner,
+    headRefName: pullRequest.headRefName,
+    createdAt: pullRequest.createdAt,
+    ageDays: pullRequest.createdAt ? elapsedDaysSince(pullRequest.createdAt) : undefined,
+    authorLogin: pullRequest.author?.login,
+    authorType: pullRequest.author?.type
+  };
+}
+
+function toMergedGeneratedPullRequestMetric(pullRequest: GitHubPullRequest): MergedGeneratedPullRequestMetric {
+  const commits = (pullRequest.commits ?? []).map(toCommitMetric);
+  const createdAt = Date.parse(pullRequest.createdAt ?? '');
+  return {
+    number: pullRequest.number,
+    url: pullRequest.url,
+    repository: pullRequest.repository?.nameWithOwner,
+    headRefName: pullRequest.headRefName,
+    createdAt: pullRequest.createdAt,
+    mergedAt: pullRequest.mergedAt,
+    authorLogin: pullRequest.author?.login,
+    authorType: pullRequest.author?.type,
+    commitCount: pullRequest.commitCount,
+    commits,
+    humanOrNonAutomationFollowUpCommits: commits.filter((commit) => {
+      const committedAt = Date.parse(commit.committedDate ?? '');
+      return !isAutomationCommitMetric(commit)
+        && Number.isFinite(createdAt)
+        && Number.isFinite(committedAt)
+        && committedAt > createdAt;
+    })
+  };
+}
+
+function toCommitMetric(commit: GitHubPullRequestCommit): PullRequestCommitMetric {
+  return {
+    oid: commit.oid,
+    committedDate: commit.committedDate,
+    authorName: commit.author?.name,
+    authorEmail: commit.author?.email,
+    authorLogin: commit.author?.login,
+    authorType: commit.author?.type
+  };
+}
+
+function isAutomationCommitMetric(commit: PullRequestCommitMetric): boolean {
+  const login = commit.authorLogin?.toLowerCase();
+  const email = commit.authorEmail?.toLowerCase();
+  return commit.authorType?.toLowerCase() === 'bot'
+    || login?.endsWith('[bot]') === true
+    || email?.includes('[bot]') === true;
+}
+
+function elapsedDaysSince(isoDate: string): number | undefined {
+  const startedAt = Date.parse(isoDate);
+  if (!Number.isFinite(startedAt)) return undefined;
+  return Math.max(0, Math.floor((Date.now() - startedAt) / (24 * 60 * 60 * 1000)));
 }
 
 function countOutcome(issues: RunIssueSummary[], outcome: RunIssueSummary['outcome']): number {

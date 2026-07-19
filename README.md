@@ -133,6 +133,8 @@ The CLI delegates external work instead of embedding tokens or provider SDKs:
 
 `KAIZEN_HOME` may be set to override the default local state directory (`~/.kaizen`). The local state contains the registry, project workspaces, locks, logs, and latest run summaries; it should not be committed to target repositories.
 
+When verifier provides `--version --json`, Kaizen records its build/runtime provenance and stops before builder execution if a linked checkout is newer than the compiled verifier. Legacy plain version output remains supported and is recorded as an unverifiable compatibility diagnostic.
+
 ## Repository Contract
 
 Target repositories opt in through committed configuration:

@@ -53,6 +53,12 @@ export interface PrGuardianSkillResult {
   jobId?: string;
 }
 
+interface PullRequestTerminalState {
+  state?: 'OPEN' | 'CLOSED' | 'MERGED';
+  baseRefName?: string;
+  closingIssuesReferences?: Array<{ number: number }>;
+}
+
 export function guardianJobsDir(stateDir: string): string {
   return path.join(stateDir, 'guardian', 'jobs');
 }
@@ -217,8 +223,45 @@ export async function runPendingPrGuardianJobs(options: {
   isolateWorktree?: boolean;
 }): Promise<PrGuardianJob[]> {
   let jobs = await listPrGuardianJobs(options.stateDir);
-  for (const job of jobs.filter((candidate) => candidate.status === 'success')) {
-    const gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
+  const reconciledTerminalJobs: PrGuardianJob[] = [];
+  for (const job of jobs.filter((candidate) =>
+    (candidate.status === 'blocked' && candidate.attemptCount >= candidate.retryBudget) ||
+    (isStaleRunningJob(candidate, options.config.guardian.timeoutMinutes) && candidate.attemptCount >= candidate.retryBudget)
+  )) {
+    let resolution: PullRequestTerminalState;
+    try {
+      resolution = await inspectPullRequestTerminalState(options.runCommand, requestForJob(options, job));
+    } catch {
+      continue;
+    }
+    if (
+      resolution.state !== 'MERGED' ||
+      resolution.baseRefName !== options.config.git.defaultBranch ||
+      !job.issueNumber ||
+      !resolution.closingIssuesReferences?.some((issue) => issue.number === job.issueNumber)
+    ) continue;
+    const now = new Date().toISOString();
+    const terminal: PrGuardianJob = {
+      ...job,
+      status: 'success',
+      updatedAt: now,
+      lastCheckedAt: now,
+      lastBlocker: undefined,
+      lastObservedFingerprint: JSON.stringify(resolution)
+    };
+    await writeGuardianJob(options.stateDir, terminal);
+    await syncImplementationState(options.stateDir, terminal);
+    reconciledTerminalJobs.push(terminal);
+  }
+  if (reconciledTerminalJobs.length > 0) jobs = await listPrGuardianJobs(options.stateDir);
+  const reconciledTerminalJobIds = new Set(reconciledTerminalJobs.map((job) => job.id));
+  for (const job of jobs.filter((candidate) => candidate.status === 'success' && !reconciledTerminalJobIds.has(candidate.id))) {
+    let gate: PrGateSummary;
+    try {
+      gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
+    } catch {
+      continue;
+    }
     if (gate.state !== 'OPEN') {
       if (job.lastObservedFingerprint !== gate.activityFingerprint) {
         await writeGuardianJob(options.stateDir, { ...job, lastObservedFingerprint: gate.activityFingerprint });
@@ -271,7 +314,7 @@ export async function runPendingPrGuardianJobs(options: {
   for (const job of runnable) {
     results.push(await runPrGuardianJob({ ...options, job }));
   }
-  return results;
+  return [...reconciledTerminalJobs, ...results];
 }
 
 function requestForJob(
@@ -524,6 +567,7 @@ interface PullRequestViewResponse {
   reviewDecision?: string;
   headRefOid?: string;
   comments?: Array<{ id?: string; updatedAt?: string; author?: { login?: string } | null; body?: string }>;
+  statusCheckRollup?: Array<{ name?: string; context?: string; state?: string; conclusion?: string }>;
 }
 
 interface PullRequestReviewResponse {
@@ -643,6 +687,30 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
   };
 }
 
+async function inspectPullRequestTerminalState(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest
+): Promise<PullRequestTerminalState> {
+  const result = await runCommand('gh', [
+    'pr',
+    'view',
+    String(req.prNumber),
+    '--repo',
+    req.repo,
+    '--json',
+    'state,baseRefName,closingIssuesReferences'
+  ], {
+    cwd: req.workspaceDir,
+    env: githubCliEnv(),
+    timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+    rejectOnNonZero: false
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not inspect PR state: ${result.stderr || result.stdout}`);
+  }
+  return JSON.parse(result.stdout || '{}') as PullRequestTerminalState;
+}
+
 async function inspectPullRequest(
   runCommand: CommandRunner,
   req: PrGuardianSkillRequest
@@ -655,7 +723,7 @@ async function inspectPullRequest(
       '--repo',
       req.repo,
       '--json',
-      'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,comments'
+      'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,comments,statusCheckRollup'
     ], {
       cwd: req.workspaceDir,
       env: githubCliEnv(),
@@ -749,6 +817,7 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
     if (!current || String(review.submitted_at ?? '') > String(current.submitted_at ?? '')) latestByBot.set(login, review);
   }
   return [...latestByBot.entries()].flatMap(([login, review]) => {
+    if (hasCurrentHeadBotEvidence(login, parsed)) return [];
     if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'].includes(review.state ?? '')) {
       return [`${login} review is not terminal for current PR head ${parsed.headRefOid}`];
     }
@@ -756,6 +825,26 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
       ? []
       : [`${login} review is not for current PR head ${parsed.headRefOid}`];
   });
+}
+
+function hasCurrentHeadBotEvidence(login: string, parsed: PullRequestViewResponse): boolean {
+  if (!parsed.headRefOid) return false;
+  if (login.includes('codex')) {
+    return (parsed.comments ?? []).some((comment) => {
+      if (!normalizeReviewerLogin(comment.author?.login).includes('codex')) return false;
+      const reviewedCommit = comment.body?.match(/Reviewed commit:\*{0,2}\s*`([0-9a-f]{7,40})`/i)?.[1];
+      const noFindings = /did(?:n't| not) find any (?:major )?issues/i.test(comment.body ?? '');
+      return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit) && noFindings);
+    });
+  }
+  if (login.includes('coderabbit')) {
+    return (parsed.statusCheckRollup ?? []).some((check) => {
+      const name = `${check.name ?? ''} ${check.context ?? ''}`.toLowerCase();
+      const result = String(check.conclusion ?? check.state ?? '').toUpperCase();
+      return name.includes('coderabbit') && ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(result);
+    });
+  }
+  return false;
 }
 
 function normalizeReviewerLogin(login: string | undefined): string {

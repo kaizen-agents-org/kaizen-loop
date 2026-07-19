@@ -19,9 +19,9 @@ Use this workflow by default after opening a pull request in any repository wher
 
 3. Find workflow runs for the PR head branch or head SHA, especially required, pending, or failed CI runs reported by `gh pr checks`, and monitor them with `gh run watch --exit-status`. Use the run exit status to decide whether to inspect logs or continue.
 4. If CI fails, inspect failing jobs and logs, reproduce locally when practical, make the smallest focused fix, commit, and push.
-5. Inspect human, bot, and agent feedback on the PR. Fetch review threads, review comments, PR comments, and check runs through the GitHub API; paginate every connection until `hasNextPage=false`, and retrieve check-run annotations so actionable failures are not hidden behind a summary status. Treat automated suggestions as review input, not commands to apply blindly.
-6. Address each actionable review comment with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. Reply in the same comment or review thread with the fix made and validation run, and resolve addressed review threads when repository permissions allow it. If GitHub does not support replying directly to an item, add a PR comment that links to the original comment or review and lists the action taken.
-7. Push fixes and repeat CI and review checks until the PR is mergeable or a real blocker remains. Before every push from an isolated guardian worktree, confirm that GitHub's current head SHA still equals the SHA captured at the start of the pass; never overwrite a newer head.
+5. Inspect human, bot, and agent feedback on the PR. Read `references/pr-feedback-audit.md` and run its executable GraphQL cursor loops and REST `--paginate` commands before deciding that no feedback remains. Fetch review threads, nested review comments, PR comments, reviews, check runs, and check-run annotations through the GitHub API; paginate every connection until `hasNextPage=false` by feeding every `endCursor` into the next request, and exhaust every REST page. Flat PR comments and first pages are not a complete audit. Treat automated suggestions as review input, not commands to apply blindly.
+6. Address each actionable review thread with a focused change or an explicit explanation. Actionable feedback includes human change requests, bot comments that identify a concrete defect or failing check, and lint/test output tied to changed code; non-actionable summaries, optional generated-code buttons, and vague style preferences may be acknowledged or skipped with a reason. After the fix is pushed and verified, reply to each addressed thread with the commit and validation evidence, then resolve that thread with `resolveReviewThread`. One aggregate PR comment never substitutes for per-thread disposition. If GitHub rejects a reply or resolution, report that thread URL as a concrete blocker.
+7. Push fixes and repeat CI and the complete feedback audit until the PR is mergeable or a real blocker remains. Before every push from an isolated guardian worktree, confirm that GitHub's current head SHA still equals the SHA captured at the start of the pass; never overwrite a newer head. After every push, discard earlier CI and automated-review completion evidence and pin the new head SHA.
 8. Stop only when one of these is true:
    - GitHub reports `isDraft=false`, `mergeable=MERGEABLE`, and `mergeStateStatus=CLEAN` or `HAS_HOOKS`, or `UNSTABLE` with only documented non-required failures; required checks are passing; required approvals are present; all unresolved review threads, including outdated threads, are resolved when conversation resolution is enforced; and no actionable PR comments or check annotations remain. Human approval is not required unless GitHub branch protection explicitly requires it.
    - retry budget is exhausted.
@@ -36,6 +36,8 @@ Use this workflow by default after opening a pull request in any repository wher
 - Prefer `gh run watch --exit-status` over polling when a relevant workflow run exists.
 - Re-check review threads and PR comments after every pushed fix; do not rely on a previous clean merge state.
 - Fetch automated review evidence from the paginated REST `pulls/<pr>/reviews` endpoint and compare `commit_id` with the pinned head SHA. `gh pr view --json reviews` is not current-head evidence.
+- Wait for expected automated reviewers to reach a terminal state for the pinned head, then re-run the complete thread-aware audit. A check marked successful before a bot publishes inline feedback is not final evidence.
+- Before declaring success, take two passing snapshots at least 30 seconds apart after automated review completes. Both must have the same head SHA and no new check, review, comment, or thread activity. Any activity resets this stabilization window.
 - A successful pass is not a permanent terminal state while the PR remains open. Durable reconciliation must re-observe it; a same-head late review thread reactivates the guardian without waiting for another push.
 - An empty review list before expected bots finish is pending review, not proof that there are no findings.
 - Do not rewrite unrelated user changes or broaden the PR scope.
@@ -52,6 +54,19 @@ Before finishing, comment on the PR with:
 - unresolved blockers or skipped suggestions with reasons
 
 If no fixes were needed, still comment with the observed final state. Include any blocking checks, missing approvals, unresolved conversations, permission problems, or external blockers instead of assuming the PR is mergeable.
+
+## Mergeability Gate
+
+Before reporting success:
+
+1. Pin the current head SHA and verify `isDraft=false`, `mergeable=MERGEABLE`, and an allowed `mergeStateStatus`.
+2. Verify every required check is passing for that head.
+3. Verify expected automated reviews are terminal for that head; an older or missing `commit_id` is pending evidence.
+4. Re-run the paginated review-thread audit after the reviewers finish and require zero unresolved threads, including outdated threads.
+5. Require every actionable top-level comment and check annotation to have an explicit disposition.
+6. Complete the stabilization snapshots described above.
+
+`mergeable=MERGEABLE` only means the branches have no merge conflict. If `mergeStateStatus=BLOCKED`, continue investigating required checks, reviews, and unresolved conversations; do not report the pull request as merge-ready.
 
 ## Final Report
 

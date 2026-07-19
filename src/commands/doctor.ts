@@ -4,6 +4,7 @@ import { ClaudeCodeAdapter } from '../agents/claude.js';
 import { CodexAdapter } from '../agents/codex.js';
 import { VerifierAgentAdapter } from '../agents/verifier.js';
 import { loadConfig } from '../config/config.js';
+import { configDrift } from '../config/operational.js';
 import { resolveProject } from '../config/registry.js';
 import type { KaizenConfig } from '../config/schema.js';
 import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
@@ -16,16 +17,25 @@ import { tailText } from '../utils/text.js';
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
   const resolved = await resolveProject(options.project, options.cwd);
-  let config: KaizenConfig | undefined;
+  let localConfig: KaizenConfig | undefined;
+  let workspaceConfig: KaizenConfig | undefined;
   await check(checks, 'config', async () => {
-    config = await loadConfig(resolved.project.localPath);
+    localConfig = await loadConfig(resolved.project.localPath);
   });
-  await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, resolved.project.localPath).authStatus()));
+  await check(checks, 'workspace config', async () => {
+    workspaceConfig = await loadConfig(resolved.project.workspacePath);
+  });
+  const config = workspaceConfig ?? localConfig;
+  const configPath = workspaceConfig ? resolved.project.workspacePath : resolved.project.localPath;
+  const drift = localConfig && workspaceConfig
+    ? configDrift(localConfig, workspaceConfig, resolved.project)
+    : undefined;
+  await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, configPath).authStatus()));
   await check(checks, 'github labels', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     if (!options.repair) return;
-    await new GitHubClient(options.runCommand, resolved.project.localPath).createLabels(requiredLabels(loaded));
+    await new GitHubClient(options.runCommand, configPath).createLabels(requiredLabels(loaded));
   });
   await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
   await check(checks, 'temporary directory', async () => void (await checkWorkspaceTempDir(resolved.project.workspacePath)));
@@ -71,7 +81,10 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     if (!loaded.verifier.enabled) return;
-    if (!(await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).isAvailable())) throw new Error('unavailable');
+    const runtime = await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).inspectRuntime();
+    if (runtime.stale) {
+      throw new Error(`stale build: built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}`);
+    }
   });
   await check(checks, 'pr guardian skill runner', async () => {
     const loaded = config;
@@ -79,7 +92,16 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!loaded.guardian.enabled) return;
     if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
-  return { slug: resolved.slug, checks, ok: checks.every((item) => item.ok) };
+  return {
+    slug: resolved.slug,
+    configuration: {
+      source: workspaceConfig ? 'workspace' as const : 'local' as const,
+      path: configPath,
+      drift
+    },
+    checks,
+    ok: checks.every((item) => item.ok)
+  };
 }
 
 function builderOptions(config: KaizenConfig) {
@@ -113,6 +135,7 @@ export function requiredLabels(config: KaizenConfig): string[] {
     'kaizen:pr-only',
     'kaizen:in-progress',
     ...Object.values(DISPOSITION_LABELS),
+    'kaizen:roadmap',
     config.goal.issueLabel,
     'kaizen:agent:claude',
     'kaizen:agent:codex'

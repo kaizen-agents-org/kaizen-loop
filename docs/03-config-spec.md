@@ -87,6 +87,14 @@ scheduler:
       run:
         mode: watch
         skipIfRunning: true  # 実体は run.lock。前回run中なら次の起動は即終了
+    weekly-sandbox-smoke:
+      enabled: true
+      schedule:
+        type: weekly        # 実行マシンのローカル時刻で毎週日曜 04:45
+        days: [SU]
+        time: "04:45"
+      run:
+        mode: smoke         # `kaizen smoke --yes` 相当を無人実行
 
 commands:
   # ワークスペース reset 後、ベースライン検証前と作業ブランチ作成前に実行(依存インストール等)。null ならスキップ
@@ -207,6 +215,8 @@ issues:
 - `scheduler.provider` は省略可能。省略時、`kaizen scheduler status` / `plan` は macOS なら `launchd`、Linux なら `cron` と表示する。schema は `codex-automation` / `claude-routine` / `external` も受け付けるが、現行の `scheduler sync` は OS に応じた launchd / cron 生成だけを行う
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
+- `init` の manifest 検出表は package root から `STACK_DETECTION_TABLE` として公開する。verifier などの command inference はこの共有契約を利用し、manifest と verify command の対応を重複定義しない
+- 自動検出した `commands.setup` / `commands.verify` は提案であり、生成後に人間が確認・修正してから `.kaizen/config.yml` をコミットする。verify command は信頼の根幹なので自動確定しない
 - `safety.minFreeDiskMb` は workspace / worktree 作成前の空き容量 preflight。対象パスがまだ存在しない場合は既存の親ディレクトリを検査する
 - `safety.wipLimit` は owner 全体の open 生成 PR 数に対する自動 intake の WIP 上限。bot が作成した open PR が上限以上なら新しい Issue は選択せず、run summary に skip reason を残す。`kaizen status --metrics` は repository / organization の現在値、上限到達有無、最古の生成 PR の滞留日数を表示する
 - `safety.envAllowlist` は agent と shell command へ渡す環境変数名の allowlist。`KAIZEN_BUILD_RESULT_PATH` などの Kaizen 専用変数と短い Kaizen `TMPDIR` / `TMP` / `TEMP` は実行時に追加される。`KAIZEN_TMPDIR` を渡すと短い temp root を明示的に上書きでき、その配下に Kaizen 専用 child directory が作られる

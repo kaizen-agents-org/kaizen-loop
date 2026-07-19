@@ -17,7 +17,7 @@ run:
   latestStartHour: 7
 
 safety:
-  # Trusted self-organization dogfood keeps the existing label-selection behavior.
+  # This repository is part of the maintainer-controlled Kaizen Agents dogfood fleet.
   operationMode: dogfood
 
 scheduler:
@@ -46,6 +46,14 @@ scheduler:
       run:
         mode: watch
         skipIfRunning: true
+    weekly-sandbox-smoke:
+      enabled: true
+      schedule:
+        type: weekly
+        days: [SU]
+        time: "04:45"
+      run:
+        mode: smoke
 
 commands:
   setup: "npm ci"
@@ -107,6 +115,12 @@ report:
 
 issues:
   label: "kaizen"
+  selection:
+    # Public issue forms add only `kaizen`; a maintainer must queue execution.
+    mode: opt-in
+    includeLabel: "kaizen:ready"
+    excludeLabels:
+      - "kaizen:needs-human"
   priorityOrder:
     - "kaizen:P0"
     - "kaizen:P1"

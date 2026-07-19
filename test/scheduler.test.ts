@@ -82,6 +82,10 @@ describe('enableScheduler', () => {
             'issue-watch': {
               schedule: { type: 'interval', everyMinutes: 5 },
               run: { mode: 'watch', skipIfRunning: true }
+            },
+            'weekly-sandbox-smoke': {
+              schedule: { type: 'weekly', days: ['SU'], time: '04:45' },
+              run: { mode: 'smoke' }
             }
           }
         }
@@ -106,6 +110,14 @@ describe('enableScheduler', () => {
           schedule: { type: 'interval', everyMinutes: 5 },
           run: { mode: 'watch', skipIfRunning: true }
         }
+      },
+      {
+        name: 'weekly-sandbox-smoke',
+        config: {
+          enabled: true,
+          schedule: { type: 'weekly', days: ['SU'], time: '04:45' },
+          run: { mode: 'smoke' }
+        }
       }
     ]);
     const crontabInput = String(runner.mock.calls.find(([command, args]) => command === 'crontab' && args[0] === '-')?.[2]?.input);
@@ -114,12 +126,15 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('30 1 * * * ');
     expect(crontabInput).toContain('30 14 * * * ');
     expect(crontabInput).toContain('*/5 * * * * ');
+    expect(crontabInput).toContain('45 4 * * 0 ');
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain("bin/run-scheduled.sh'");
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");
     expect(crontabInput).toContain("'owner-repo' 'issue-watch'");
+    expect(crontabInput).toContain("'owner-repo' 'weekly-sandbox-smoke'");
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) maintenance');
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) issue-watch');
+    expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) weekly-sandbox-smoke');
     const launcher = await fs.readFile(path.join(home, 'bin', 'run-scheduled.sh'), 'utf8');
     expect(launcher.indexOf('cleanup\ntrap - EXIT')).toBeGreaterThan(-1);
     expect(launcher.indexOf('cleanup\ntrap - EXIT')).toBeLessThan(launcher.indexOf('exec "$node_bin"'));
