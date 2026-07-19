@@ -40,6 +40,10 @@ Global Options:
 
 カレントディレクトリのリポジトリに Kaizen Loop を導入する。**冪等**(再実行しても安全。既存設定は上書き確認)。
 
+`package.json`、`pyproject.toml`、`go.mod`、`Cargo.toml`、`Gemfile` をこの順で検出し、最初に一致したスタックの `commands.setup` / `commands.verify` を設定案として生成する。Python は pytest / ruff、Go は test / vet、Rust は test / clippy、Ruby は rake / rspec を提案する。複数スタックのリポジトリでも優先順は常に同じになる。
+
+検出結果は実行ポリシーの確定ではなく、レビュー用の提案である。生成された `.kaizen/config.yml` のコマンドを人間が対象リポジトリに合わせて確認・修正し、その後にコミットする。特に `pyproject.toml` と `Gemfile` だけでは利用ツールや依存関係を完全には判定できないため、提案コマンドを無確認で信頼しない。
+
 ```
 kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 ```
