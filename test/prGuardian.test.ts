@@ -942,6 +942,7 @@ describe('runPrGuardianSkill', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ status: 'success', attemptCount: 2, lastBlocker: undefined });
     expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(1);
     const implementationState = await loadImplementationState(stateDir, 1);
     expect(implementationState).toMatchObject({
       phase: 'complete',
