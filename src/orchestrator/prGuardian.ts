@@ -561,6 +561,7 @@ interface PullRequestViewResponse {
   reviewDecision?: string;
   headRefOid?: string;
   comments?: Array<{ id?: string; updatedAt?: string; author?: { login?: string } | null; body?: string }>;
+  statusCheckRollup?: Array<{ name?: string; context?: string; state?: string; conclusion?: string }>;
 }
 
 interface PullRequestReviewResponse {
@@ -716,7 +717,7 @@ async function inspectPullRequest(
       '--repo',
       req.repo,
       '--json',
-      'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,comments'
+      'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,comments,statusCheckRollup'
     ], {
       cwd: req.workspaceDir,
       env: githubCliEnv(),
@@ -810,6 +811,7 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
     if (!current || String(review.submitted_at ?? '') > String(current.submitted_at ?? '')) latestByBot.set(login, review);
   }
   return [...latestByBot.entries()].flatMap(([login, review]) => {
+    if (hasCurrentHeadBotEvidence(login, parsed)) return [];
     if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'].includes(review.state ?? '')) {
       return [`${login} review is not terminal for current PR head ${parsed.headRefOid}`];
     }
@@ -817,6 +819,25 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
       ? []
       : [`${login} review is not for current PR head ${parsed.headRefOid}`];
   });
+}
+
+function hasCurrentHeadBotEvidence(login: string, parsed: PullRequestViewResponse): boolean {
+  if (!parsed.headRefOid) return false;
+  if (login.includes('codex')) {
+    return (parsed.comments ?? []).some((comment) => {
+      if (!normalizeReviewerLogin(comment.author?.login).includes('codex')) return false;
+      const reviewedCommit = comment.body?.match(/Reviewed commit:\*{0,2}\s*`([0-9a-f]{7,40})`/i)?.[1];
+      return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit));
+    });
+  }
+  if (login.includes('coderabbit')) {
+    return (parsed.statusCheckRollup ?? []).some((check) => {
+      const name = `${check.name ?? ''} ${check.context ?? ''}`.toLowerCase();
+      const result = String(check.conclusion ?? check.state ?? '').toUpperCase();
+      return name.includes('coderabbit') && ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(result);
+    });
+  }
+  return false;
 }
 
 function normalizeReviewerLogin(login: string | undefined): string {

@@ -493,6 +493,63 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.find(([command, args]) => command === 'gh' && isReviewApi(args))?.[1]).toContain('--paginate');
   });
 
+  it('accepts current-head Codex comment and CodeRabbit status evidence when REST reviews are stale', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const reviews = [[
+      {
+        id: 1,
+        user: { login: 'chatgpt-codex-connector[bot]' },
+        state: 'COMMENTED',
+        submitted_at: '2026-07-13T01:16:19Z',
+        commit_id: 'old-head'
+      },
+      {
+        id: 2,
+        user: { login: 'coderabbitai[bot]' },
+        state: 'COMMENTED',
+        submitted_at: '2026-07-13T01:16:20Z',
+        commit_id: 'old-head'
+      }
+    ]];
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isReviewApi(args)
+          ? JSON.stringify(reviews)
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              body: '**Reviewed commit:** `abc1234567`'
+            }],
+            statusCheckRollup: [{ context: 'CodeRabbit', state: 'SUCCESS' }]
+          })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(result.summary).not.toContain('not for current PR head');
+  });
+
   it('reactivates a successful same-head job when a late review thread appears', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
@@ -1064,6 +1121,7 @@ function ghResponse(
     reviews: Array<Record<string, unknown>>;
     baseRefName: string;
     closingIssuesReferences: Array<{ number: number }>;
+    comments: Array<Record<string, unknown>>;
   }> = {}
 ): string {
   if (isPrView(args)) return mergeablePrResponse(pr);
@@ -1119,6 +1177,7 @@ function mergeablePrResponse(pr: Partial<{
   reviews: Array<Record<string, unknown>>;
   baseRefName: string;
   closingIssuesReferences: Array<{ number: number }>;
+  comments: Array<Record<string, unknown>>;
 }> = {}): string {
   return JSON.stringify({
     state: pr.state ?? 'OPEN',
@@ -1130,7 +1189,7 @@ function mergeablePrResponse(pr: Partial<{
     baseRefName: pr.baseRefName ?? 'main',
     closingIssuesReferences: pr.closingIssuesReferences ?? [],
     reviews: pr.reviews ?? [],
-    comments: [],
+    comments: pr.comments ?? [],
     statusCheckRollup: pr.statusCheckRollup ?? [
       {
         __typename: 'CheckRun',
