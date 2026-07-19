@@ -51,6 +51,18 @@ describe('GitHub Actions fix workflow', () => {
       .rejects.toThrow('Missing execution authorization label');
   });
 
+  it('fails closed when the Kaizen eligibility label is absent', async () => {
+    const cwd = await configuredRepo();
+    const fakeRun: CommandRunner = async (command, args) => {
+      if (args[0] === 'repo') return result(command, args, 'owner/repo\n');
+      if (args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen:authorized'])));
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    };
+
+    await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
+      .rejects.toThrow('Missing Kaizen eligibility label');
+  });
+
   it('encodes provider output with a versioned provider identity', () => {
     expect(JSON.parse(encodeProviderResult('codex', '{"status":"fixed"}'))).toEqual({
       provider: 'codex',
@@ -166,6 +178,9 @@ describe('GitHub Actions fix workflow', () => {
     expect(workflow.jobs.publish.permissions).toEqual({ contents: 'write', issues: 'read', 'pull-requests': 'write' });
     expect(raw).toContain('openai/codex-action@b11346a6fa031e2e164ab4b7c7ea201afffd7d59');
     expect(raw).toContain('anthropics/claude-code-action@6da9ca517d966862907966f30608e9ea33b715e9');
+    expect(workflow.jobs.provider_gate).toBeDefined();
+    expect(raw).not.toContain('Fail Codex attempt without a patch');
+    expect(raw).not.toContain('Fail Claude attempt without a patch');
     expect(JSON.stringify(workflow.jobs.verify)).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY/);
     expect(JSON.stringify(workflow.jobs.publish)).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY/);
   });

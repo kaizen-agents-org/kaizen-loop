@@ -224,6 +224,8 @@ async function loadActionsContext(cwd: string, issueNumber: number, command: Com
 }
 
 async function assertAuthorized(github: GitHubClient, repo: string, issue: GitHubIssue, config: KaizenConfig) {
+  const eligible = issue.labels.some((label) => label.name.toLowerCase() === config.issues.label.toLowerCase());
+  if (!eligible) throw new Error(`Missing Kaizen eligibility label: ${config.issues.label}`);
   const authorization = config.issues.executionAuthorization;
   const labelActive = issue.labels.some((label) => label.name.toLowerCase() === authorization.label.toLowerCase());
   if (!labelActive) throw new Error(`Missing execution authorization label: ${authorization.label}`);

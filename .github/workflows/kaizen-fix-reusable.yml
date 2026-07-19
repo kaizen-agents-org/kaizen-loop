@@ -125,6 +125,7 @@ jobs:
       - name: Package Codex patch
         id: package
         if: steps.codex.outcome == 'success'
+        continue-on-error: true
         run: |
           mkdir -p _kaizen_provider
           git add -N .
@@ -142,10 +143,6 @@ jobs:
           name: kaizen-provider-codex
           path: _kaizen_provider
           if-no-files-found: error
-
-      - name: Fail Codex attempt without a patch
-        if: always() && steps.package.outputs.succeeded != 'true'
-        run: exit 1
 
   claude:
     needs: [prepare, codex]
@@ -188,6 +185,7 @@ jobs:
       - name: Package Claude patch
         id: package
         if: steps.claude.outcome == 'success'
+        continue-on-error: true
         env:
           STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
         run: |
@@ -210,13 +208,20 @@ jobs:
           path: _kaizen_provider
           if-no-files-found: error
 
-      - name: Fail Claude attempt without a patch
-        if: always() && steps.package.outputs.succeeded != 'true'
-        run: exit 1
+  provider_gate:
+    needs: [prepare, codex, claude]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a provider patch
+        env:
+          CODEX_SUCCEEDED: ${{ needs.codex.outputs.succeeded }}
+          CLAUDE_SUCCEEDED: ${{ needs.claude.outputs.succeeded }}
+        run: test "$CODEX_SUCCEEDED" = true || test "$CLAUDE_SUCCEEDED" = true
 
   verify:
-    needs: [prepare, codex, claude]
-    if: always() && needs.prepare.result == 'success' && (needs.codex.outputs.succeeded == 'true' || needs.claude.outputs.succeeded == 'true')
+    needs: [prepare, codex, claude, provider_gate]
+    if: always() && needs.provider_gate.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
