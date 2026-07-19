@@ -92,6 +92,17 @@ describe('runCommand', () => {
     await expect(fs.access(leakPath)).rejects.toThrow();
   });
 
+  it('terminates background descendants after a successful command exits', async () => {
+    if (process.platform === 'win32') return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-command-'));
+    const leakPath = path.join(dir, 'leaked-after-success');
+    await runCommand('sh', ['-lc', `(sleep 0.3; echo leaked > ${JSON.stringify(leakPath)}) >/dev/null 2>&1 &`]);
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await expect(fs.access(leakPath)).rejects.toThrow();
+  });
+
   it('rejects when a timed-out command exits cleanly after SIGTERM', async () => {
     if (process.platform === 'win32') return;
 

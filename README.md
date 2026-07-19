@@ -112,6 +112,8 @@ kaizen goal create "Improve onboarding reliability" --success "npm test and npm 
 kaizen goal run <goal-id> --yes --json
 ```
 
+For an ephemeral GitHub Actions deployment, see [docs/14-github-actions.md](./docs/14-github-actions.md). External repositories add `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs.
+
 For this repository's own dogfooding loop:
 
 ```sh
@@ -169,3 +171,4 @@ Start with [docs/README.md](./docs/README.md). The most useful implementation-fa
 - [docs/10-skills.md](./docs/10-skills.md): shared Kaizen skills vendored into target repositories.
 - [docs/11-goals.md](./docs/11-goals.md): Goal runner behavior and agent-facing contract.
 - [docs/13-sandbox-smoke.md](./docs/13-sandbox-smoke.md): controlled sandbox smoke runs and readiness artifacts.
+- [docs/14-github-actions.md](./docs/14-github-actions.md): reusable issue-labeled workflow and credential-separated ephemeral execution.

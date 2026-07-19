@@ -170,6 +170,24 @@ export class GitClient {
     return result.stdout;
   }
 
+  async workingTreeDiffNameOnly(): Promise<string[]> {
+    const result = await this.git(['diff', '--name-only', 'HEAD'], { rejectOnNonZero: false });
+    return result.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  }
+
+  async workingTreeDiffNumstat(): Promise<Array<{ file: string; added: number; deleted: number }>> {
+    const result = await this.git(['diff', '--numstat', 'HEAD'], { rejectOnNonZero: false });
+    return result.stdout.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [added, deleted, ...fileParts] = line.split(/\s+/);
+      return { file: fileParts.join(' '), added: Number(added) || 0, deleted: Number(deleted) || 0 };
+    });
+  }
+
+  async workingTreeDiff(): Promise<string> {
+    const result = await this.git(['diff', '--no-ext-diff', 'HEAD'], { rejectOnNonZero: false });
+    return result.stdout;
+  }
+
   async push(ref: string, options: { forceWithLease?: boolean } = {}): Promise<void> {
     await this.git(['push', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref]);
   }

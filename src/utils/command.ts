@@ -120,6 +120,7 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
       if (settled) return;
       settled = true;
       clearTimers();
+      terminateProcessTree(child, 'SIGTERM');
       activeChildren.delete(child);
       const result: CommandResult = {
         command,
