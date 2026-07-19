@@ -129,6 +129,59 @@ describe('runKaizen dry-run', () => {
     })).rejects.toThrow(`Missing Kaizen config: ${path.join(workspace, '.kaizen', 'config.yml')}`);
   });
 
+  it('keeps manual real runs on local-checkout configuration', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ issues: { label: 'local-kaizen' } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await fs.writeFile(
+      path.join(workspace, '.kaizen', 'config.yml'),
+      defaultConfigWith({ issues: { label: 'workspace-kaizen' } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistryFile({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, options?.cwd, '[]');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect(runner).toHaveBeenCalledWith(
+      'gh',
+      expect.arrayContaining(['issue', 'list', '--label', 'local-kaizen']),
+      expect.objectContaining({ cwd: repo })
+    );
+    expect(runner.mock.calls.some(([command]) => command === 'git')).toBe(false);
+  });
+
   it('skips issues without execution authorization in the external default mode', async () => {
     const repo = await setupExternalDryRunProject();
     const runner = vi.fn<CommandRunner>(async (command, args) => {

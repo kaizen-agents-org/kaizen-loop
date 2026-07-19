@@ -169,6 +169,35 @@ describe('statusProject', () => {
     expect(output.implementations).toMatchObject({ active: 1, needsAttention: 1 });
   });
 
+  it('does not reconcile a merged pull request without a tracked issue', async () => {
+    const { repo, workspace, home } = await setupProject();
+    await writeGuardianJob(home, 12, 'blocked');
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          number: 12,
+          url: 'https://github.com/o/r/pull/12',
+          state: 'MERGED',
+          mergedAt: '2026-07-18T00:00:00Z',
+          baseRefName: 'main',
+          closingIssuesReferences: [{ number: 12 }]
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+    expect(output.guardian).toMatchObject({ blocked: 1, success: 0 });
+  });
+
   it('reports pushed remote branches with no open pull request', async () => {
     const { repo, workspace, home } = await setupProject();
     await writeGuardianJob(home, 4, 'pending');

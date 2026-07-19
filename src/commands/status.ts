@@ -222,13 +222,15 @@ async function reconcilePullRequestStates(options: {
   }
   return {
     merged: new Set(resolutions
-      .filter(({ number, resolution }) =>
-        (resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt)) &&
+      .filter(({ number, resolution }) => {
+        const trackedIssues = issueNumbersByPullRequest.get(number);
+        return (resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt)) &&
         resolution?.baseRefName === options.defaultBranch &&
-        [...(issueNumbersByPullRequest.get(number) ?? [])].every((issueNumber) =>
+        Boolean(trackedIssues?.size) &&
+        [...(trackedIssues ?? [])].every((issueNumber) =>
           resolution.closingIssuesReferences.some((issue) => issue.number === issueNumber)
-        )
-      )
+        );
+      })
       .map(({ number }) => number)),
     unknown: new Set(resolutions
       .filter(({ resolution }) => !resolution)

@@ -526,7 +526,7 @@ describe('runPrGuardianSkill', () => {
             headRefOid: 'abc123456789',
             comments: [{
               author: { login: 'chatgpt-codex-connector[bot]' },
-              body: '**Reviewed commit:** `abc1234567`'
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
             }],
             statusCheckRollup: [{ context: 'CodeRabbit', state: 'SUCCESS' }]
           })
@@ -548,6 +548,51 @@ describe('runPrGuardianSkill', () => {
     expect(result.status).toBe('success');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
     expect(result.summary).not.toContain('not for current PR head');
+  });
+
+  it('does not accept a current-head Codex findings comment as no-findings evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isReviewApi(args)
+          ? JSON.stringify([{
+            id: 1,
+            user: { login: 'chatgpt-codex-connector[bot]' },
+            state: 'COMMENTED',
+            submitted_at: '2026-07-13T01:16:19Z',
+            commit_id: 'old-head'
+          }])
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              body: 'Codex Review: Found an actionable issue.\n\n**Reviewed commit:** `abc1234567`'
+            }]
+          })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('not for current PR head');
   });
 
   it('reactivates a successful same-head job when a late review thread appears', async () => {
@@ -1014,9 +1059,10 @@ describe('runPrGuardianSkill', () => {
   });
 
   it.each([
-    ['the pull request was retargeted', { state: 'MERGED', baseRefName: 'release', closingIssuesReferences: [{ number: 1 }] }],
-    ['the pull request no longer closes the issue', { state: 'MERGED', baseRefName: 'main', closingIssuesReferences: [] }]
-  ])('does not reconcile an exhausted guardian job when %s', async (_description, resolution) => {
+    ['the pull request was retargeted', { state: 'MERGED', baseRefName: 'release', closingIssuesReferences: [{ number: 1 }] }, 1],
+    ['the pull request no longer closes the issue', { state: 'MERGED', baseRefName: 'main', closingIssuesReferences: [] }, 1],
+    ['the job has no tracked issue', { state: 'MERGED', baseRefName: 'main', closingIssuesReferences: [{ number: 1 }] }, undefined]
+  ])('does not reconcile an exhausted guardian job when %s', async (_description, resolution, issueNumber) => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
       version: 1,
@@ -1028,7 +1074,7 @@ describe('runPrGuardianSkill', () => {
       repo: 'o/r',
       prUrl: 'https://github.com/o/r/pull/4',
       prNumber: 4,
-      issueNumber: 1,
+      issueNumber,
       branch: 'kaizen/issue-1-fix',
       baseBranch: 'main',
       headSha: 'abc123456789'

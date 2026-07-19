@@ -237,7 +237,8 @@ export async function runPendingPrGuardianJobs(options: {
     if (
       resolution.state !== 'MERGED' ||
       resolution.baseRefName !== options.config.git.defaultBranch ||
-      (job.issueNumber && !resolution.closingIssuesReferences?.some((issue) => issue.number === job.issueNumber))
+      !job.issueNumber ||
+      !resolution.closingIssuesReferences?.some((issue) => issue.number === job.issueNumber)
     ) continue;
     const now = new Date().toISOString();
     const terminal: PrGuardianJob = {
@@ -827,7 +828,8 @@ function hasCurrentHeadBotEvidence(login: string, parsed: PullRequestViewRespons
     return (parsed.comments ?? []).some((comment) => {
       if (!normalizeReviewerLogin(comment.author?.login).includes('codex')) return false;
       const reviewedCommit = comment.body?.match(/Reviewed commit:\*{0,2}\s*`([0-9a-f]{7,40})`/i)?.[1];
-      return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit));
+      const noFindings = /did(?:n't| not) find any (?:major )?issues/i.test(comment.body ?? '');
+      return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit) && noFindings);
     });
   }
   if (login.includes('coderabbit')) {

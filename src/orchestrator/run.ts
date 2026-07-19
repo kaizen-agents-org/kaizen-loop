@@ -234,11 +234,13 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 
   try {
-    const latestWorkspaceConfig = await loadLatestConfigFromExistingWorkspace({
-      config,
-      project: resolved.project,
-      runCommand
-    });
+    const latestWorkspaceConfig = options.scheduled
+      ? await loadLatestConfigFromExistingWorkspace({
+        config,
+        project: resolved.project,
+        runCommand
+      })
+      : undefined;
     if (latestWorkspaceConfig) {
       config = latestWorkspaceConfig;
       assertJobEnabled(config, options.job);
