@@ -340,6 +340,36 @@ describe('BuilderAgentAdapter', () => {
     expect(result.status).toBe('error');
     expect(result.discoveredIssues).toEqual([]);
   });
+
+  it('recovers discovered issues written before a builder timeout', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
+    const fallbackPath = path.join(workspace, '.kaizen', 'builder', 'discovered-issues.json');
+    const runner: CommandRunner = async () => {
+      await fs.writeFile(fallbackPath, JSON.stringify([{
+        title: 'Provider timeout follow-up',
+        repo: 'builder-agent',
+        evidence: 'provider timed out after preserving the fallback artifact'
+      }]));
+      throw new Error('Command timed out after 1000ms');
+    };
+    const adapter = new BuilderAgentAdapter(runner, {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
+    });
+
+    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+
+    expect(result).toMatchObject({
+      status: 'error',
+      summary: 'Error: Command timed out after 1000ms',
+      discoveredIssues: [{
+        title: 'Provider timeout follow-up',
+        repo: 'builder-agent',
+        evidence: 'provider timed out after preserving the fallback artifact'
+      }]
+    });
+  });
 });
 
 describe('VerifierAgentAdapter', () => {

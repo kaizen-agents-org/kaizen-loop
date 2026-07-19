@@ -152,7 +152,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
         status: 'error',
         summary: String(error),
         notes: '',
-        discoveredIssues: [],
+        discoveredIssues: await readDiscoveredIssues(discoveredIssuesPath),
         raw: String(error),
         durationMs: req.timeoutMs
       };
