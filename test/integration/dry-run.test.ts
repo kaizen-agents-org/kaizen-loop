@@ -2346,6 +2346,84 @@ describe('runKaizen PR flow', () => {
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Existing in `kaizen-agents-org/verifier`'))).toBe(true);
   });
 
+  it('files recovered fallback issues without turning an invalid builder result into success or duplicating a retry', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([{
+          ...issue(77, { title: 'Recovered verifier follow-up' }),
+          url: 'https://github.com/kaizen-agents-org/verifier/issues/77'
+        }]));
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        const resultPath = options?.env?.KAIZEN_BUILD_RESULT_PATH;
+        await writeJsonResult(resultPath, {
+          status: 'fixed',
+          summary: 'implemented',
+          notes: '',
+          humanRequest: { reasonCode: 'credentials', requestKey: 'invalid-sibling', question: 'Invalid on fixed output' }
+        });
+        if (typeof resultPath !== 'string') throw new Error('missing result path');
+        await writeJsonResult(path.join(path.dirname(resultPath), 'discovered-issues.json'), [{
+          title: 'Recovered verifier follow-up',
+          repo: 'verifier',
+          body: 'The builder found a separate verifier bug.',
+          expected: 'The verifier should accept the result.',
+          evidence: 'failureClass=false_positive verifier.log exit=0'
+        }]);
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      trigger: 'instant',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0]).toMatchObject({
+      outcome: 'failed',
+      discoveredFollowups: [{
+        title: 'Recovered verifier follow-up',
+        repo: 'kaizen-agents-org/verifier',
+        status: 'duplicate',
+        url: 'https://github.com/kaizen-agents-org/verifier/issues/77'
+      }]
+    });
+    expect('issues' in summary && summary.issues[0].reason).toContain('humanRequest is only valid when status is blocked');
+    expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'create')).toBe(false);
+  });
+
   it('routes builder-discovered issues to the registered repo named by evidence paths', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
