@@ -41,6 +41,29 @@ The artifact indexes the normal run logs:
 - `runs/<run-id>/issue-<number>/verifier.log`
 - `guardian/jobs/<job-id>.json` when `guardian.mode: async`
 
+## Weekly Operation
+
+Register a dedicated scheduler job with a weekly schedule and `run.mode: smoke`. The configured time is interpreted in the local timezone of the machine running launchd or cron. For example, this repository runs the sandbox smoke every Sunday at 04:45 local time:
+
+```yaml
+scheduler:
+  jobs:
+    weekly-sandbox-smoke:
+      enabled: true
+      schedule:
+        type: weekly
+        days: [SU]
+        time: "04:45"
+      run:
+        mode: smoke
+```
+
+Apply the configuration with `kaizen scheduler sync`, then confirm the job with `kaizen scheduler status --json`. A weekly cadence can occasionally produce zero runs inside the rolling seven-day boundary when a run is delayed; inspect `kaizen status --metrics --json` and the artifact directory together.
+
+The `reviewWindow.sandboxSmoke` metrics report parseable in-window artifacts as `runs`, `passed`, and `failed`, plus the paired `latestRunAt` and `latestResult`. `result: success` is a pass; every other persisted terminal result is a failure. Malformed artifacts modified inside the window are counted as `unreadable` but not as runs.
+
+When a smoke run fails, inspect the artifact and its referenced logs, then file a bug issue with the `kaizen` label. Follow `skills/kaizen-bug-router/SKILL.md`: route the issue to the owning Kaizen Agents repository when ownership is clear, or to `kaizen-loop` when it is not. This is an operator action; the scheduler does not file the bug automatically.
+
 ## Readiness Evidence
 
 Readiness reviews should record the artifact path and check these fields:

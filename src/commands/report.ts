@@ -21,6 +21,8 @@ export interface ReportIssueOptions {
 export interface ReportIssueNowOptions extends ReportIssueOptions {
   json: boolean;
   assumeYes?: boolean;
+  scheduled?: boolean;
+  job?: string;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<'direct' | 'pr' | 'reject'>;
 }
 
@@ -49,8 +51,9 @@ export async function reportIssueNow(options: ReportIssueNowOptions) {
   const fix = await runKaizen({
     cwd: options.cwd,
     project: options.project,
-    scheduled: false,
-    trigger: 'instant',
+    scheduled: Boolean(options.scheduled),
+    trigger: options.job ? undefined : 'instant',
+    job: options.job,
     issue: issue.number,
     dryRun: false,
     maxIssues: 1,

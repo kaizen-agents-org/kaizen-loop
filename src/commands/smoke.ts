@@ -21,6 +21,7 @@ export interface SandboxSmokeOptions {
   agent?: 'claude' | 'codex';
   json: boolean;
   assumeYes?: boolean;
+  schedulerJob?: string;
   runCommand: CommandRunner;
 }
 
@@ -100,6 +101,8 @@ export async function runSandboxSmoke(options: SandboxSmokeOptions): Promise<San
     extraLabels: [],
     json: options.json,
     assumeYes: options.assumeYes,
+    scheduled: Boolean(options.schedulerJob),
+    job: options.schedulerJob,
     runCommand: options.runCommand
   });
 

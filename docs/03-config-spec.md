@@ -87,6 +87,14 @@ scheduler:
       run:
         mode: watch
         skipIfRunning: true  # 実体は run.lock。前回run中なら次の起動は即終了
+    weekly-sandbox-smoke:
+      enabled: true
+      schedule:
+        type: weekly        # 実行マシンのローカル時刻で毎週日曜 04:45
+        days: [SU]
+        time: "04:45"
+      run:
+        mode: smoke         # `kaizen smoke --yes` 相当を無人実行
 
 commands:
   # ワークスペース reset 後、ベースライン検証前と作業ブランチ作成前に実行(依存インストール等)。null ならスキップ
