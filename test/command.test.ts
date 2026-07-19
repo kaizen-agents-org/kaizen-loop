@@ -103,6 +103,23 @@ describe('runCommand', () => {
     await expect(fs.access(leakPath)).rejects.toThrow();
   });
 
+  it('waits for force-killed descendants before a successful command resolves', async () => {
+    if (process.platform === 'win32') return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-command-'));
+    const leakPath = path.join(dir, 'stubborn-leak');
+    const descendant = [
+      'process.on("SIGTERM", () => {});',
+      `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(leakPath)}, "leaked"), 500);`,
+      'setInterval(() => {}, 1000);'
+    ].join('');
+
+    await runCommand('sh', ['-lc', `${JSON.stringify(process.execPath)} -e ${JSON.stringify(descendant)} >/dev/null 2>&1 &`]);
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await expect(fs.access(leakPath)).rejects.toThrow();
+  });
+
   it('rejects when a timed-out command exits cleanly after SIGTERM', async () => {
     if (process.platform === 'win32') return;
 
