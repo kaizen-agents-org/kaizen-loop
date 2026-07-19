@@ -236,7 +236,7 @@ export async function runPendingPrGuardianJobs(options: {
     }
     if (
       resolution.state !== 'MERGED' ||
-      resolution.baseRefName !== job.baseBranch ||
+      resolution.baseRefName !== options.config.git.defaultBranch ||
       (job.issueNumber && !resolution.closingIssuesReferences?.some((issue) => issue.number === job.issueNumber))
     ) continue;
     const now = new Date().toISOString();
