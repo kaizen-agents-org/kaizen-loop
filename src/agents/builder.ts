@@ -5,6 +5,18 @@ import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import type { AgentAdapter, AgentRequest, AgentResult } from './types.js';
 
+const discoveredIssueSchema = z
+  .object({
+    title: z.string().min(1),
+    body: z.string().optional(),
+    expected: z.string().optional(),
+    evidence: z.string().optional(),
+    repo: z.string().optional(),
+    severity: z.string().optional(),
+    labels: z.array(z.string()).optional()
+  })
+  .strict();
+
 const builderPayloadSchema = z
   .object({
     status: z.enum(['fixed', 'partial', 'blocked']),
@@ -25,21 +37,7 @@ const builderPayloadSchema = z
       requestKey: z.string().regex(/^[a-z0-9][a-z0-9._:-]*$/),
       question: z.string().min(1)
     }).strict().optional(),
-    discoveredIssues: z
-      .array(
-        z
-          .object({
-            title: z.string().min(1),
-            body: z.string().optional(),
-            expected: z.string().optional(),
-            evidence: z.string().optional(),
-            repo: z.string().optional(),
-            severity: z.string().optional(),
-            labels: z.array(z.string()).optional()
-          })
-          .strict()
-      )
-      .default([])
+    discoveredIssues: z.array(discoveredIssueSchema).default([])
   })
   .strict()
   .superRefine((payload, context) => {
@@ -81,7 +79,11 @@ export class BuilderAgentAdapter implements AgentAdapter {
 
   async run(req: AgentRequest): Promise<AgentResult> {
     const resultPath = path.resolve(req.workspaceDir, this.options.resultPath);
-    await fs.rm(resultPath, { force: true });
+    const discoveredIssuesPath = path.resolve(req.workspaceDir, '.kaizen/builder/discovered-issues.json');
+    await Promise.all([
+      fs.rm(resultPath, { force: true }),
+      fs.rm(discoveredIssuesPath, { force: true })
+    ]);
     await fs.mkdir(path.dirname(resultPath), { recursive: true });
 
     try {
@@ -102,14 +104,25 @@ export class BuilderAgentAdapter implements AgentAdapter {
         env
       });
       const raw = `${result.stdout}${result.stderr}`;
-      const payload = await readBuilderPayload(resultPath);
-      await fs.rm(resultPath, { force: true });
+      let payload: z.infer<typeof builderPayloadSchema> | undefined;
+      try {
+        payload = await readBuilderPayload(resultPath);
+      } catch (error) {
+        return {
+          status: 'error',
+          summary: String(error),
+          notes: '',
+          discoveredIssues: await readDiscoveredIssues(discoveredIssuesPath),
+          raw: String(error),
+          durationMs: req.timeoutMs
+        };
+      }
       if (result.exitCode !== 0 && !payload) {
         return {
           status: 'error',
           summary: `Builder agent exited with code ${result.exitCode}`,
           notes: '',
-          discoveredIssues: [],
+          discoveredIssues: await readDiscoveredIssues(discoveredIssuesPath),
           raw,
           durationMs: result.durationMs
         };
@@ -119,7 +132,7 @@ export class BuilderAgentAdapter implements AgentAdapter {
           status: 'error',
           summary: `Builder agent did not write ${this.options.resultPath}`,
           notes: '',
-          discoveredIssues: [],
+          discoveredIssues: await readDiscoveredIssues(discoveredIssuesPath),
           raw,
           durationMs: result.durationMs
         };
@@ -143,6 +156,11 @@ export class BuilderAgentAdapter implements AgentAdapter {
         raw: String(error),
         durationMs: req.timeoutMs
       };
+    } finally {
+      await Promise.allSettled([
+        fs.rm(resultPath, { force: true }),
+        fs.rm(discoveredIssuesPath, { force: true })
+      ]);
     }
   }
 }
@@ -154,5 +172,18 @@ async function readBuilderPayload(resultPath: string): Promise<z.infer<typeof bu
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
+  }
+}
+
+async function readDiscoveredIssues(discoveredIssuesPath: string): Promise<Array<z.infer<typeof discoveredIssueSchema>>> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(discoveredIssuesPath, 'utf8'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((candidate) => {
+      const result = discoveredIssueSchema.safeParse(candidate);
+      return result.success ? [result.data] : [];
+    });
+  } catch {
+    return [];
   }
 }

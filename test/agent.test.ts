@@ -227,6 +227,119 @@ describe('BuilderAgentAdapter', () => {
     expect(result.status).toBe('error');
     expect(result.summary).toContain('extra');
   });
+
+  it('recovers independently valid discovered issues when the build result is invalid', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
+    const runner: CommandRunner = async (command, args, options) => {
+      if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
+      await fs.writeFile(options.env.KAIZEN_BUILD_RESULT_PATH, JSON.stringify({
+        status: 'fixed',
+        summary: 'done',
+        notes: '',
+        humanRequest: { reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide it?' }
+      }));
+      await fs.writeFile(path.join(workspace, '.kaizen', 'builder', 'discovered-issues.json'), JSON.stringify([
+        {
+          title: 'Preserve this follow-up',
+          repo: 'verifier',
+          body: 'A separate verifier bug was found.',
+          expected: 'The verifier should accept the result.',
+          evidence: 'verifier.log: exit=0'
+        },
+        { title: '', extra: true }
+      ]));
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 123 };
+    };
+    const adapter = new BuilderAgentAdapter(runner, {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
+    });
+
+    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain('humanRequest is only valid when status is blocked');
+    expect(result.discoveredIssues).toEqual([{
+      title: 'Preserve this follow-up',
+      repo: 'verifier',
+      body: 'A separate verifier bug was found.',
+      expected: 'The verifier should accept the result.',
+      evidence: 'verifier.log: exit=0'
+    }]);
+  });
+
+  it.each([
+    ['invalid JSON', '{'],
+    ['wrong top-level shape', JSON.stringify({ discoveredIssues: [{ title: 'Do not recover' }] })],
+    ['invalid entries', JSON.stringify([{ title: 'Unknown field', extra: true }, { body: 'Missing title' }])]
+  ])('ignores a malformed discovered-issues fallback artifact: %s', async (_case, artifact) => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
+    const runner: CommandRunner = async (command, args, options) => {
+      await fs.writeFile(path.join(workspace, '.kaizen', 'builder', 'discovered-issues.json'), artifact);
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 123 };
+    };
+    const adapter = new BuilderAgentAdapter(runner, {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
+    });
+
+    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain('did not write');
+    expect(result.discoveredIssues).toEqual([]);
+  });
+
+  it('does not consume a fallback artifact when the normal build result is valid', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
+    const runner: CommandRunner = async (command, args, options) => {
+      if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
+      await fs.writeFile(options.env.KAIZEN_BUILD_RESULT_PATH, JSON.stringify({
+        status: 'blocked',
+        summary: 'upstream work required',
+        notes: '',
+        blockedReason: 'The fix belongs upstream.',
+        discoveredIssues: []
+      }));
+      await fs.writeFile(path.join(workspace, '.kaizen', 'builder', 'discovered-issues.json'), JSON.stringify([
+        { title: 'Must not be recovered' }
+      ]));
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 123 };
+    };
+    const adapter = new BuilderAgentAdapter(runner, {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
+    });
+
+    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+
+    expect(result.status).toBe('blocked');
+    expect(result.discoveredIssues).toEqual([]);
+  });
+
+  it('clears a stale fallback artifact before running the builder', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
+    const fallbackPath = path.join(workspace, '.kaizen', 'builder', 'discovered-issues.json');
+    await fs.mkdir(path.dirname(fallbackPath), { recursive: true });
+    await fs.writeFile(fallbackPath, JSON.stringify([{ title: 'Stale follow-up' }]));
+    const runner: CommandRunner = async (command, args, options) => {
+      await expect(fs.access(fallbackPath)).rejects.toThrow();
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 123 };
+    };
+    const adapter = new BuilderAgentAdapter(runner, {
+      command: 'builder-agent',
+      resultPath: '.kaizen/builder/build-result.json',
+      envAllowlist: ['PATH']
+    });
+
+    const result = await adapter.run({ workspaceDir: workspace, prompt: 'fix it', timeoutMs: 1000 });
+
+    expect(result.status).toBe('error');
+    expect(result.discoveredIssues).toEqual([]);
+  });
 });
 
 describe('VerifierAgentAdapter', () => {
