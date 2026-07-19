@@ -13,6 +13,37 @@ afterEach(() => {
 });
 
 describe('doctorProject', () => {
+  it('reports drift while using the fleet workspace config for operational checks', async () => {
+    const { repo, workspace } = await setupProject();
+    const workspaceConfig = parse(await fs.readFile(path.join(workspace, '.kaizen', 'config.yml'), 'utf8')) as Record<string, any>;
+    workspaceConfig.issues.selection.mode = 'opt-in';
+    workspaceConfig.issues.selection.includeLabel = 'kaizen:ready';
+    await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), stringify(workspaceConfig));
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: 'doctor smoke ok',
+          notes: '',
+          discoveredIssues: []
+        });
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
+
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: runner });
+
+    expect(output.ok).toBe(true);
+    expect(output.configuration).toMatchObject({
+      source: 'workspace',
+      path: workspace,
+      drift: {
+        detected: true,
+        message: 'developer checkout config differs from fleet workspace config'
+      }
+    });
+  });
+
   it('repairs core state labels even when exclude labels are customized', async () => {
     const { repo, workspace } = await setupProject();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
@@ -120,7 +151,8 @@ async function setupProject(options: { createWorkspace?: boolean } = {}) {
   config.issues.selection.excludeLabels = [];
   await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), stringify(config));
   if (options.createWorkspace !== false) {
-    await fs.mkdir(workspace, { recursive: true });
+    await fs.mkdir(path.join(workspace, '.kaizen'), { recursive: true });
+    await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), stringify(config));
   }
   await saveRegistry({
     version: 1,

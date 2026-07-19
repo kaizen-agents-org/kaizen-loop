@@ -493,6 +493,108 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.find(([command, args]) => command === 'gh' && isReviewApi(args))?.[1]).toContain('--paginate');
   });
 
+  it('accepts current-head Codex comment and CodeRabbit status evidence when REST reviews are stale', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const reviews = [[
+      {
+        id: 1,
+        user: { login: 'chatgpt-codex-connector[bot]' },
+        state: 'COMMENTED',
+        submitted_at: '2026-07-13T01:16:19Z',
+        commit_id: 'old-head'
+      },
+      {
+        id: 2,
+        user: { login: 'coderabbitai[bot]' },
+        state: 'COMMENTED',
+        submitted_at: '2026-07-13T01:16:20Z',
+        commit_id: 'old-head'
+      }
+    ]];
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isReviewApi(args)
+          ? JSON.stringify(reviews)
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }],
+            statusCheckRollup: [{ context: 'CodeRabbit', state: 'SUCCESS' }]
+          })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(result.summary).not.toContain('not for current PR head');
+  });
+
+  it('does not accept a current-head Codex findings comment as no-findings evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isReviewApi(args)
+          ? JSON.stringify([{
+            id: 1,
+            user: { login: 'chatgpt-codex-connector[bot]' },
+            state: 'COMMENTED',
+            submitted_at: '2026-07-13T01:16:19Z',
+            commit_id: 'old-head'
+          }])
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              body: 'Codex Review: Found an actionable issue.\n\n**Reviewed commit:** `abc1234567`'
+            }]
+          })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('not for current PR head');
+  });
+
   it('reactivates a successful same-head job when a late review thread appears', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
@@ -552,6 +654,65 @@ describe('runPrGuardianSkill', () => {
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
+  it('continues pending jobs when an old successful pull request is inaccessible', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const oldJob = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'old-branch',
+      baseBranch: 'main',
+      headSha: 'old-head'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${oldJob.id}.json`),
+      `${JSON.stringify({ ...oldJob, status: 'success' }, null, 2)}\n`
+    );
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/5',
+      prNumber: 5,
+      branch: 'new-branch',
+      baseBranch: 'main',
+      headSha: 'new-head'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      const inaccessible = command === 'gh' && isPrView(args) && args[2] === '4';
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: inaccessible ? 1 : 0,
+        stdout: inaccessible ? '' : command === 'gh' ? ghResponse(args, []) : 'done',
+        stderr: inaccessible ? 'not found' : '',
+        durationMs: 1
+      };
+    });
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ prNumber: 5, status: 'success' });
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ prNumber: 4, status: 'success' }),
+      expect.objectContaining({ prNumber: 5, status: 'success' })
+    ]));
   });
 
   it('reactivates a successful job after a guardian fix advances the head', async () => {
@@ -881,10 +1042,126 @@ describe('runPrGuardianSkill', () => {
     const storedJobs = await listPrGuardianJobs(stateDir);
 
     expect(jobs).toEqual([]);
-    expect(runner).not.toHaveBeenCalled();
+    expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
     expect(storedJobs[0].status).toBe('blocked');
     expect(storedJobs[0].attemptCount).toBe(2);
     expect(storedJobs[0].lastBlocker).toBe('PR guardian retry budget exhausted after 2 attempts.');
+  });
+
+  it('reconciles an exhausted guardian job when the pull request was merged', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    await saveImplementationState(stateDir, {
+      issue: 1,
+      branch: 'kaizen/issue-1-fix',
+      phase: 'guardian',
+      attempt: 2,
+      pr: 4,
+      prUrl: 'https://github.com/o/r/pull/4',
+      lastFailure: 'Guardian retry budget exhausted.'
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({
+        ...job,
+        status: 'blocked',
+        attemptCount: 2,
+        lastBlocker: 'Guardian retry budget exhausted.'
+      }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? ghResponse(args, [], {
+        state: 'MERGED',
+        baseRefName: 'main',
+        closingIssuesReferences: [{ number: 1 }]
+      }) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ status: 'success', attemptCount: 2, lastBlocker: undefined });
+    expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(1);
+    const implementationState = await loadImplementationState(stateDir, 1);
+    expect(implementationState).toMatchObject({
+      phase: 'complete',
+      attempt: 2,
+      pr: 4
+    });
+    expect(implementationState?.lastFailure).toBeUndefined();
+  });
+
+  it.each([
+    ['the pull request was retargeted', { state: 'MERGED', baseRefName: 'release', closingIssuesReferences: [{ number: 1 }] }, 1],
+    ['the pull request no longer closes the issue', { state: 'MERGED', baseRefName: 'main', closingIssuesReferences: [] }, 1],
+    ['the job has no tracked issue', { state: 'MERGED', baseRefName: 'main', closingIssuesReferences: [{ number: 1 }] }, undefined]
+  ])('does not reconcile an exhausted guardian job when %s', async (_description, resolution, issueNumber) => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({ ...job, status: 'blocked', attemptCount: 2 }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? ghResponse(args, [], resolution) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toEqual([]);
+    expect((await listPrGuardianJobs(stateDir))[0]).toMatchObject({ status: 'blocked', attemptCount: 2 });
+    expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
   });
 
   it('leaves active running guardian jobs alone', async () => {
@@ -947,6 +1224,9 @@ function ghResponse(
     statusCheckRollup: Array<Record<string, unknown>>;
     headRefOid: string;
     reviews: Array<Record<string, unknown>>;
+    baseRefName: string;
+    closingIssuesReferences: Array<{ number: number }>;
+    comments: Array<Record<string, unknown>>;
   }> = {}
 ): string {
   if (isPrView(args)) return mergeablePrResponse(pr);
@@ -960,7 +1240,7 @@ function isPrView(args: string[]): boolean {
 }
 
 function isReviewApi(args: string[]): boolean {
-  return args[0] === 'api' && args.some((arg) => arg.includes('/pulls/4/reviews'));
+  return args[0] === 'api' && args.some((arg) => /\/pulls\/\d+\/reviews/.test(arg));
 }
 
 function isRequiredChecks(args: string[]): boolean {
@@ -1000,6 +1280,9 @@ function mergeablePrResponse(pr: Partial<{
   statusCheckRollup: Array<Record<string, unknown>>;
   headRefOid: string;
   reviews: Array<Record<string, unknown>>;
+  baseRefName: string;
+  closingIssuesReferences: Array<{ number: number }>;
+  comments: Array<Record<string, unknown>>;
 }> = {}): string {
   return JSON.stringify({
     state: pr.state ?? 'OPEN',
@@ -1008,8 +1291,10 @@ function mergeablePrResponse(pr: Partial<{
     mergeable: pr.mergeable ?? 'MERGEABLE',
     reviewDecision: pr.reviewDecision ?? '',
     headRefOid: pr.headRefOid ?? 'head-sha',
+    baseRefName: pr.baseRefName ?? 'main',
+    closingIssuesReferences: pr.closingIssuesReferences ?? [],
     reviews: pr.reviews ?? [],
-    comments: [],
+    comments: pr.comments ?? [],
     statusCheckRollup: pr.statusCheckRollup ?? [
       {
         __typename: 'CheckRun',

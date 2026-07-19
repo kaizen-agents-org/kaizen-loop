@@ -47,6 +47,157 @@ describe('listProjects', () => {
 });
 
 describe('statusProject', () => {
+  it('bounds concurrent pull request reconciliation lookups', async () => {
+    const { repo, workspace, home } = await setupProject();
+    for (let pr = 20; pr < 26; pr += 1) await writeGuardianJob(home, pr, 'blocked');
+    let active = 0;
+    let maximumActive = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return result(command, args, repo, JSON.stringify({
+          number: Number(args[2]),
+          url: `https://github.com/o/r/pull/${args[2]}`,
+          state: 'CLOSED',
+          mergedAt: null,
+          baseRefName: 'main',
+          closingIssuesReferences: []
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(maximumActive).toBe(4);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'view')).toHaveLength(6);
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+  });
+
+  it('reconciles merged pull request jobs as terminal and reports workspace config', async () => {
+    const { repo, workspace, home } = await setupProject();
+    await fs.mkdir(path.join(workspace, '.kaizen'), { recursive: true });
+    const workspaceConfig = defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+      .replace('mode: auto', 'mode: opt-in');
+    await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), workspaceConfig);
+    await writeGuardianJob(home, 12, 'blocked');
+    await writeImplementationState(home, {
+      issue: 12,
+      branch: 'kaizen/issue-12-fix',
+      phase: 'guardian',
+      attempt: 2,
+      pr: 12,
+      lastFailure: 'review was not for current head'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, workspace, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, workspace, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view' && args[2] === '12') {
+        return result(command, args, workspace, JSON.stringify({
+          number: 12,
+          url: 'https://github.com/o/r/pull/12',
+          state: 'MERGED',
+          mergedAt: '2026-07-18T00:00:00Z',
+          baseRefName: 'main',
+          closingIssuesReferences: [{ number: 12 }]
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(output.issues.selectionMode).toBe('opt-in');
+    expect(output.pullRequestReconciliation).toEqual({ merged: [12], unknown: [] });
+    expect(output.guardian).toMatchObject({ blocked: 0, success: 1, stale: 0 });
+    expect(output.implementations).toMatchObject({ active: 0, needsAttention: 0, stale: 0 });
+    expect(output.implementations.items[0]).toMatchObject({ phase: 'complete' });
+    expect(output.implementations.items[0].lastFailure).toBeUndefined();
+  });
+
+  it.each([
+    ['a non-default branch', 'release', [{ number: 12 }]],
+    ['no closing issue reference', 'main', []]
+  ])('does not reconcile a merged pull request targeting %s', async (_description, baseRefName, closingIssuesReferences) => {
+    const { repo, workspace, home } = await setupProject();
+    await writeGuardianJob(home, 12, 'blocked', 12);
+    await writeImplementationState(home, {
+      issue: 12,
+      branch: 'kaizen/issue-12-fix',
+      phase: 'guardian',
+      attempt: 2,
+      pr: 12,
+      lastFailure: 'review was not for current head'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          number: 12,
+          url: 'https://github.com/o/r/pull/12',
+          state: 'MERGED',
+          mergedAt: '2026-07-18T00:00:00Z',
+          baseRefName,
+          closingIssuesReferences
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+    expect(output.guardian).toMatchObject({ blocked: 1, success: 0 });
+    expect(output.implementations).toMatchObject({ active: 1, needsAttention: 1 });
+  });
+
+  it('does not reconcile a merged pull request without a tracked issue', async () => {
+    const { repo, workspace, home } = await setupProject();
+    await writeGuardianJob(home, 12, 'blocked');
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify({
+          number: 12,
+          url: 'https://github.com/o/r/pull/12',
+          state: 'MERGED',
+          mergedAt: '2026-07-18T00:00:00Z',
+          baseRefName: 'main',
+          closingIssuesReferences: [{ number: 12 }]
+        }));
+      }
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+    expect(output.guardian).toMatchObject({ blocked: 1, success: 0 });
+  });
+
   it('reports pushed remote branches with no open pull request', async () => {
     const { repo, workspace, home } = await setupProject();
     await writeGuardianJob(home, 4, 'pending');
@@ -122,6 +273,7 @@ describe('statusProject', () => {
 
     expect(output.pullRequests.open).toBe(2);
     expect(output.guardian.stale).toBe(1);
+    expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [99] });
     expect(output.implementations).toMatchObject({
       jobs: 1,
       active: 0,
@@ -507,7 +659,7 @@ async function writeSummary(home: string, run: string, summary: unknown) {
 
 async function writeImplementationState(
   home: string,
-  state: { issue: number; branch: string; phase: string; attempt: number; lastFailure?: string }
+  state: { issue: number; branch: string; phase: string; attempt: number; pr?: number; lastFailure?: string }
 ) {
   const dir = path.join(home, 'projects', 'o-r', 'implementations');
   await fs.mkdir(dir, { recursive: true });
@@ -518,7 +670,7 @@ async function writeImplementationState(
   }, null, 2)}\n`);
 }
 
-async function writeGuardianJob(home: string, prNumber: number, status: string) {
+async function writeGuardianJob(home: string, prNumber: number, status: string, issueNumber?: number) {
   const jobsDir = path.join(home, 'projects', 'o-r', 'guardian', 'jobs');
   await fs.mkdir(jobsDir, { recursive: true });
   const id = `o-r-pr-${prNumber}-abc123456789`;
@@ -530,6 +682,7 @@ async function writeGuardianJob(home: string, prNumber: number, status: string) 
       repo: 'o/r',
       prUrl: `https://github.com/o/r/pull/${prNumber}`,
       prNumber,
+      issueNumber,
       branch: `kaizen/issue-${prNumber}`,
       baseBranch: 'main',
       headSha: 'abc123456789',
