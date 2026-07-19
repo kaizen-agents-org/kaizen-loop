@@ -239,7 +239,7 @@ kaizen status [--project <slug>] [--metrics] [--json]
 - `configuration` に運用設定の参照元(`workspace` または fallback の `local`)を表示する
 - state file が非終端でも PR が既に merge 済みなら表示上は terminal success / complete として補正する。確認できなかった PR 番号は `pullRequestReconciliation.unknown` に残し、正常扱いしない
 - `origin/main` に未取り込みのコミットがあり、対応するオープン PR がない remote branch
-- `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)と最古の生成 PR の滞留日数を表示する。`generatedPullRequests` には open 生成 PR の作成時刻/滞留日数、review-window 内に merge された生成 PR の merge 時刻、commit source、PR 作成後に追加された人間または非 automation の follow-up commit 分母を含める。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
+- `--metrics`: 累積メトリクス、直近 7 日の review-window メトリクス(→ [00-overview.md](./00-overview.md) §6)、sandbox smoke artifact の pass/fail・最新実行日時(`reviewWindow.sandboxSmoke`)、現在の owner-wide 生成 PR WIP 状態(`wipLimit`)と最古の生成 PR の滞留日数を表示する。`generatedPullRequests` には open 生成 PR の作成時刻/滞留日数、review-window 内に merge された生成 PR の merge 時刻、commit source、PR 作成後に追加された人間または非 automation の follow-up commit 分母を含める。欠損 summary は `unreadableRuns` として表示し、読み取れる run の分母を保持する
 
 朝のルーティンは `kaizen status` → `git pull` → 必要なら PR レビュー、を想定する。
 
@@ -294,6 +294,7 @@ kaizen scheduler disable [--project <slug>] [--all]
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
 - `sync` は `.kaizen/config.yml` の `scheduler.jobs` を読み、job ごとの plist / cron 行を登録する
+- `run.mode: smoke` の job は `kaizen smoke --yes` 相当の sandbox issue-to-PR run を実行し、job id を artifact の trigger に記録する
 - `plan` は登録対象の desired state を表示し、変更はしない
 - `set-schedule` は job の schedule expression を `.kaizen/config.yml` に書き込む
 - `disable --all`: 登録済み全プロジェクトを無効化

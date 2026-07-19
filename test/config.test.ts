@@ -165,6 +165,26 @@ describe('configSchema', () => {
     });
   });
 
+  it('accepts weekly sandbox smoke scheduler jobs', () => {
+    const config = configSchema.parse({
+      version: 1,
+      scheduler: {
+        jobs: {
+          'weekly-sandbox-smoke': {
+            schedule: { type: 'weekly', days: ['SU'], time: '04:45' },
+            run: { mode: 'smoke' }
+          }
+        }
+      }
+    });
+
+    expect(config.scheduler.jobs['weekly-sandbox-smoke']).toEqual({
+      enabled: true,
+      schedule: { type: 'weekly', days: ['SU'], time: '04:45' },
+      run: { mode: 'smoke' }
+    });
+  });
+
   it('parses generated yaml shape', () => {
     const config = configSchema.parse(
       parse(`
@@ -189,6 +209,11 @@ commands:
 
     expect(repoConfig.agent.default).toBe('codex');
     expect(repoConfig.safety.operationMode).toBe('dogfood');
+    expect(repoConfig.scheduler.jobs['weekly-sandbox-smoke']).toEqual({
+      enabled: true,
+      schedule: { type: 'weekly', days: ['SU'], time: '04:45' },
+      run: { mode: 'smoke' }
+    });
     expect(cliSpec).toMatch(/agent\.default:\s*codex/);
     expect(cliSpec).toMatch(/生成時のデフォルト:\s*claude/);
     expect(configSpec).toMatch(/agent\.default:\s*codex/);

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { runSandboxSmoke } from '../src/commands/smoke.js';
+import { executeRun } from '../src/commands/run.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
@@ -13,7 +14,7 @@ afterEach(() => {
 
 describe('runSandboxSmoke', () => {
   it('runs the instant issue-to-PR pipeline and persists a smoke artifact', async () => {
-    const { repo, workspace, home } = await setupProject();
+    const { repo, workspace, home } = await setupProject({ smokeJob: true });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
         return result(command, args, repo, 'https://github.com/o/r/issues/14\n');
@@ -56,17 +57,17 @@ describe('runSandboxSmoke', () => {
       return result(command, args, options?.cwd, '');
     });
 
-    const artifact = await runSandboxSmoke({
+    const artifact = await executeRun({
       cwd: repo,
       project: 'o-r',
-      title: 'Sandbox smoke',
-      body: 'Record a harmless smoke marker.',
-      priority: 'P2',
+      scheduled: true,
+      job: 'weekly-sandbox-smoke',
+      dryRun: false,
       json: true,
-      assumeYes: true,
       runCommand: runner
     });
 
+    if (!('kind' in artifact)) throw new Error('expected sandbox smoke artifact');
     expect(artifact.kind).toBe('sandbox-e2e-smoke');
     expect(artifact.issue.number).toBe(14);
     expect(artifact.implementation.branch).toBe('kaizen/issue-14-sandbox-smoke');
@@ -81,6 +82,7 @@ describe('runSandboxSmoke', () => {
       issueLinkRecognized: true
     });
     expect(artifact.artifactPath).toContain(path.join(home, 'projects', 'o-r', 'smoke-runs'));
+    expect(artifact.run.trigger).toBe('weekly-sandbox-smoke');
     const persisted = JSON.parse(await fs.readFile(artifact.artifactPath, 'utf8'));
     expect(persisted.pullRequest.issueLinkRecognized).toBe(true);
     expect(persisted.guardian).toMatchObject({
@@ -88,12 +90,38 @@ describe('runSandboxSmoke', () => {
       status: 'skipped'
     });
     expect(await fileExists(artifact.run.summaryPath)).toBe(true);
+    expect(await fileExists(path.join(home, 'projects', 'o-r', 'run.lock'))).toBe(false);
     const labelCreates = runner.mock.calls.filter(([, args]) => args[0] === 'label' && args[1] === 'create');
     expect(labelCreates.map(([, args]) => args[2])).toEqual(
       expect.arrayContaining(['kaizen', 'kaizen:ready', 'kaizen:pr-only'])
     );
     const issueCreate = runner.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'create');
     expect(issueCreate?.[1][issueCreate[1].indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready,kaizen:pr-only');
+  });
+
+  it('does not create a smoke issue while another run holds the project lock', async () => {
+    const { repo, home } = await setupProject({ smokeJob: true });
+    const stateDir = path.join(home, 'projects', 'o-r');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'run.lock'), JSON.stringify({ pid: process.pid }));
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+        throw new Error('smoke issue must not be created');
+      }
+      return result(command, args, repo, '');
+    });
+
+    await expect(executeRun({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      job: 'weekly-sandbox-smoke',
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    })).rejects.toThrow('Kaizen run is already active');
+
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it('records the async guardian job path in the smoke artifact', async () => {
@@ -163,7 +191,7 @@ describe('runSandboxSmoke', () => {
   });
 });
 
-async function setupProject(options: { guardianMode?: 'sync' | 'async' } = {}) {
+async function setupProject(options: { guardianMode?: 'sync' | 'async'; smokeJob?: boolean } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -172,12 +200,20 @@ async function setupProject(options: { guardianMode?: 'sync' | 'async' } = {}) {
   await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
   let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] });
   config = config.replace('operationMode: external', 'operationMode: dogfood');
+  if (options.smokeJob) {
+    config = config.replace(
+      'commands:\n',
+      '    weekly-sandbox-smoke:\n      enabled: true\n      schedule:\n        type: weekly\n        days: [SU]\n        time: "04:45"\n      run:\n        mode: smoke\ncommands:\n'
+    );
+  }
   if (options.guardianMode === 'async') {
     config = config.replace('  mode: sync', '  mode: async');
   } else {
     config = config.replace('guardian:\n  enabled: true', 'guardian:\n  enabled: false');
   }
   await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), config);
+  await fs.mkdir(path.join(workspace, '.kaizen'), { recursive: true });
+  await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), config);
   await saveRegistry({
     version: 1,
     projects: {

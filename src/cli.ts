@@ -20,6 +20,7 @@ import { listGuardianJobs, runGuardianForPullRequest, watchGuardianJobs } from '
 import { doctorProject } from './commands/doctor.js';
 import { fleetHasFailures, refreshFleet, syncFleet } from './commands/fleet.js';
 import { runSandboxSmoke } from './commands/smoke.js';
+import { executeRun } from './commands/run.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
 import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
 
@@ -69,7 +70,7 @@ program
   .action(async (options) => {
     const globals = program.opts<{ project?: string; json?: boolean }>();
     const json = Boolean(options.json ?? globals.json);
-    const result = await runKaizen({
+    const result = await executeRun({
       cwd: process.cwd(),
       project: options.project ?? globals.project,
       scheduled: Boolean(options.scheduled),
@@ -83,6 +84,15 @@ program
       runCommand
     });
     print(result, json);
+    if (
+      typeof result === 'object' &&
+      result &&
+      'kind' in result &&
+      result.kind === 'sandbox-e2e-smoke' &&
+      result.result !== 'success'
+    ) {
+      process.exitCode = 1;
+    }
   });
 
 program

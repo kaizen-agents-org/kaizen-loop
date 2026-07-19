@@ -333,7 +333,13 @@ describe('statusProject', () => {
     const { repo, workspace, home } = await setupProject();
     const now = new Date();
     const recent = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+    const earlierRecent = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
     const old = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    await writeSmokeArtifact(home, 'recent-failed.json', { startedAt: recent, result: 'failed' });
+    await writeSmokeArtifact(home, 'recent-passed.json', { startedAt: earlierRecent, result: 'success' });
+    await writeSmokeArtifact(home, 'old-passed.json', { startedAt: old, result: 'success' });
+    const smokeDir = path.join(home, 'projects', 'o-r', 'smoke-runs');
+    await fs.writeFile(path.join(smokeDir, 'unreadable.json'), '{');
     await writeSummary(home, '2026-07-01T00-00-00Z', {
       version: 1,
       project: 'o-r',
@@ -564,7 +570,15 @@ describe('statusProject', () => {
         skipped: 1,
         verificationFailed: 1,
         verifierBlocked: 1,
-        verifierNeedsContext: 0
+        verifierNeedsContext: 0,
+        sandboxSmoke: {
+          runs: 2,
+          passed: 1,
+          failed: 1,
+          unreadable: 1,
+          latestRunAt: recent,
+          latestResult: 'fail'
+        }
       },
       wipLimit: {
         repository: 1,
@@ -655,6 +669,12 @@ async function writeSummary(home: string, run: string, summary: unknown) {
   const runDir = path.join(home, 'projects', 'o-r', 'runs', run);
   await fs.mkdir(runDir, { recursive: true });
   await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+}
+
+async function writeSmokeArtifact(home: string, file: string, artifact: { startedAt: string; result: string }) {
+  const smokeDir = path.join(home, 'projects', 'o-r', 'smoke-runs');
+  await fs.mkdir(smokeDir, { recursive: true });
+  await fs.writeFile(path.join(smokeDir, file), `${JSON.stringify(artifact, null, 2)}\n`);
 }
 
 async function writeImplementationState(

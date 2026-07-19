@@ -88,6 +88,7 @@ export interface RunOptions {
   json: boolean;
   assumeYes?: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
+  existingLock?: RunLock;
   runCommand: CommandRunner;
 }
 
@@ -137,7 +138,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let github = new GitHubClient(runCommand, initialConfig.path);
   const stateDir = projectStateDir(resolved.slug);
   const configuredMaxIssues = (requestedIssueNumbers?: number[]) =>
-    options.maxIssues ?? scheduledJob?.config.run.maxIssues ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
+    options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
   const selectRunIssues = async (): Promise<RunIssueSelection> => {
     const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
     const maxIssues = configuredMaxIssues(requestedIssueNumbers);
@@ -212,7 +213,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   await ensureNotPaused(stateDir);
   let lock: RunLock;
   try {
-    lock = await RunLock.acquire(stateDir);
+    lock = options.existingLock ?? await RunLock.acquire(stateDir);
   } catch (error) {
     const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
       ? scheduledJob.config.run.skipIfRunning
@@ -578,6 +579,10 @@ function assertJobEnabled(config: KaizenConfig, jobName: string | undefined): vo
   const configuredJob = config.scheduler.jobs[jobName];
   if (!configuredJob) throw new ConfigError(`Unknown scheduler job: ${jobName}`);
   if (!configuredJob.enabled) throw new ConfigError(`Scheduler job is disabled: ${jobName}`);
+}
+
+function schedulerMaxIssues(job: ReturnType<typeof schedulerJob>): number | undefined {
+  return job && 'maxIssues' in job.config.run ? job.config.run.maxIssues : undefined;
 }
 
 async function applyIssueIntakeGate(options: {

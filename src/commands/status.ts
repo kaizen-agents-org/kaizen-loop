@@ -288,77 +288,43 @@ async function collectMetrics(stateDir: string, generatedPullRequests?: Generate
     ? new Date(generatedPullRequests.reviewWindow.since)
     : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const now = generatedPullRequests ? new Date(generatedPullRequests.reviewWindow.until) : new Date();
+  const loaded = await readRunSummaries(stateDir);
+  const summaries = loaded.flatMap((item) => (item.summary ? [item.summary] : []));
+  const unreadableRuns = loaded.filter((item) => !item.summary).length;
+  const cumulative = summarizeRunIssues(summaries);
+  const reviewWindowSummaries = summaries.filter((summary) => {
+    const startedAt = Date.parse(summary.startedAt);
+    return Number.isFinite(startedAt) && startedAt >= reviewWindowSince.getTime() && startedAt <= now.getTime();
+  });
+  const reviewWindow = summarizeRunIssues(reviewWindowSummaries);
+  const sandboxSmoke = await collectSandboxSmokeMetrics(stateDir, reviewWindowSince, now);
+  return {
+    ...cumulative,
+    readableRuns: summaries.length,
+    unreadableRuns,
+    reviewWindow: {
+      since: reviewWindowSince.toISOString(),
+      until: now.toISOString(),
+      ...reviewWindow,
+      sandboxSmoke
+    },
+    wipLimit: generatedPullRequests?.wipLimit,
+    generatedPullRequests: generatedPullRequests
+      ? {
+          open: generatedPullRequests.open,
+          reviewWindow: generatedPullRequests.reviewWindow
+        }
+      : undefined
+  };
+}
+
+async function readRunSummaries(stateDir: string): Promise<Array<{ run: string; summary?: RunSummary }>> {
+  const runsDir = path.join(stateDir, 'runs');
   try {
-    const runsDir = path.join(stateDir, 'runs');
     const runs = await fs.readdir(runsDir);
-    const loaded = await Promise.all(runs.map((run) => readRunSummary(runsDir, run)));
-    const summaries = loaded.flatMap((item) => (item.summary ? [item.summary] : []));
-    const unreadableRuns = loaded.filter((item) => !item.summary).length;
-    const cumulative = summarizeRunIssues(summaries);
-    const reviewWindowSummaries = summaries.filter((summary) => {
-      const startedAt = Date.parse(summary.startedAt);
-      return Number.isFinite(startedAt) && startedAt >= reviewWindowSince.getTime() && startedAt <= now.getTime();
-    });
-    const reviewWindow = summarizeRunIssues(reviewWindowSummaries);
-    return {
-      runs: cumulative.runs,
-      processed: cumulative.processed,
-      prCreated: cumulative.prCreated,
-      directCommit: cumulative.directCommit,
-      failed: cumulative.failed,
-      infrastructureFailed: cumulative.infrastructureFailed,
-      blocked: cumulative.blocked,
-      skipped: cumulative.skipped,
-      verificationFailed: cumulative.verificationFailed,
-      verifierBlocked: cumulative.verifierBlocked,
-      verifierNeedsContext: cumulative.verifierNeedsContext,
-      verifierFailed: cumulative.verifierFailed,
-      guardian: cumulative.guardian,
-      readableRuns: summaries.length,
-      unreadableRuns,
-      reviewWindow: {
-        since: reviewWindowSince.toISOString(),
-        until: now.toISOString(),
-        ...reviewWindow
-      },
-      wipLimit: generatedPullRequests?.wipLimit,
-      generatedPullRequests: generatedPullRequests
-        ? {
-            open: generatedPullRequests.open,
-            reviewWindow: generatedPullRequests.reviewWindow
-          }
-        : undefined
-    };
+    return Promise.all(runs.map((run) => readRunSummary(runsDir, run)));
   } catch {
-    return {
-      runs: 0,
-      processed: 0,
-      prCreated: 0,
-      directCommit: 0,
-      failed: 0,
-      infrastructureFailed: 0,
-      blocked: 0,
-      skipped: 0,
-      verificationFailed: 0,
-      verifierBlocked: 0,
-      verifierNeedsContext: 0,
-      verifierFailed: 0,
-      guardian: emptyGuardianMetrics(),
-      readableRuns: 0,
-      unreadableRuns: 0,
-      reviewWindow: {
-        since: reviewWindowSince.toISOString(),
-        until: now.toISOString(),
-        ...emptyRunMetrics()
-      },
-      wipLimit: generatedPullRequests?.wipLimit,
-      generatedPullRequests: generatedPullRequests
-        ? {
-            open: generatedPullRequests.open,
-            reviewWindow: generatedPullRequests.reviewWindow
-          }
-        : undefined
-    };
+    return [];
   }
 }
 
@@ -423,6 +389,83 @@ async function readRunSummary(runsDir: string, run: string): Promise<{ run: stri
   } catch {
     return { run };
   }
+}
+
+interface SmokeMetricArtifact {
+  file: string;
+  startedAt: string;
+  startedAtMs: number;
+  result: string;
+}
+
+async function collectSandboxSmokeMetrics(stateDir: string, since: Date, until: Date) {
+  const smokeDir = path.join(stateDir, 'smoke-runs');
+  let files: string[];
+  try {
+    files = (await fs.readdir(smokeDir)).filter((file) => file.endsWith('.json')).sort();
+  } catch {
+    return emptySandboxSmokeMetrics();
+  }
+
+  const loaded = await Promise.all(
+    files.map(async (file) => {
+      const artifactPath = path.join(smokeDir, file);
+      try {
+        const artifact = JSON.parse(await fs.readFile(artifactPath, 'utf8')) as {
+          startedAt?: unknown;
+          result?: unknown;
+        };
+        if (typeof artifact.startedAt !== 'string' || typeof artifact.result !== 'string') {
+          throw new Error('invalid artifact');
+        }
+        const startedAtMs = Date.parse(artifact.startedAt);
+        if (!Number.isFinite(startedAtMs)) throw new Error('invalid startedAt');
+        return {
+          artifact: {
+            file,
+            startedAt: artifact.startedAt,
+            startedAtMs,
+            result: artifact.result
+          } satisfies SmokeMetricArtifact
+        };
+      } catch {
+        try {
+          return { unreadableAtMs: (await fs.stat(artifactPath)).mtimeMs };
+        } catch {
+          return {};
+        }
+      }
+    })
+  );
+  const inWindow = loaded
+    .flatMap((item) => (item.artifact ? [item.artifact] : []))
+    .filter((artifact) => artifact.startedAtMs >= since.getTime() && artifact.startedAtMs <= until.getTime())
+    .sort((left, right) => left.startedAtMs - right.startedAtMs || left.file.localeCompare(right.file));
+  const latest = inWindow.at(-1);
+  return {
+    runs: inWindow.length,
+    passed: inWindow.filter((artifact) => artifact.result === 'success').length,
+    failed: inWindow.filter((artifact) => artifact.result !== 'success').length,
+    unreadable: loaded.filter(
+      (item) =>
+        item.unreadableAtMs !== undefined &&
+        item.unreadableAtMs >= since.getTime() &&
+        item.unreadableAtMs <= until.getTime()
+    ).length,
+    latestRunAt: latest?.startedAt ?? null,
+    latestResult: latest ? (latest.result === 'success' ? 'pass' : 'fail') : null
+  };
+}
+
+function emptySandboxSmokeMetrics() {
+  return {
+    runs: 0,
+    passed: 0,
+    failed: 0,
+    unreadable: 0,
+    latestRunAt: null,
+    latestResult: null
+  };
 }
 
 function summarizeRunIssues(summaries: RunSummary[]) {
