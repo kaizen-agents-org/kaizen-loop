@@ -881,10 +881,74 @@ describe('runPrGuardianSkill', () => {
     const storedJobs = await listPrGuardianJobs(stateDir);
 
     expect(jobs).toEqual([]);
-    expect(runner).not.toHaveBeenCalled();
+    expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
     expect(storedJobs[0].status).toBe('blocked');
     expect(storedJobs[0].attemptCount).toBe(2);
     expect(storedJobs[0].lastBlocker).toBe('PR guardian retry budget exhausted after 2 attempts.');
+  });
+
+  it('reconciles an exhausted guardian job when the pull request was merged', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    await saveImplementationState(stateDir, {
+      issue: 1,
+      branch: 'kaizen/issue-1-fix',
+      phase: 'guardian',
+      attempt: 2,
+      pr: 4,
+      prUrl: 'https://github.com/o/r/pull/4',
+      lastFailure: 'Guardian retry budget exhausted.'
+    });
+    const job = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'abc123456789'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${job.id}.json`),
+      `${JSON.stringify({
+        ...job,
+        status: 'blocked',
+        attemptCount: 2,
+        lastBlocker: 'Guardian retry budget exhausted.'
+      }, null, 2)}\n`
+    );
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' ? ghResponse(args, [], { state: 'MERGED' }) : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ status: 'success', attemptCount: 2, lastBlocker: undefined });
+    expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
+    const implementationState = await loadImplementationState(stateDir, 1);
+    expect(implementationState).toMatchObject({
+      phase: 'complete',
+      attempt: 2,
+      pr: 4
+    });
+    expect(implementationState?.lastFailure).toBeUndefined();
   });
 
   it('leaves active running guardian jobs alone', async () => {

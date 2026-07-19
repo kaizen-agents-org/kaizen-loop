@@ -217,6 +217,32 @@ export async function runPendingPrGuardianJobs(options: {
   isolateWorktree?: boolean;
 }): Promise<PrGuardianJob[]> {
   let jobs = await listPrGuardianJobs(options.stateDir);
+  const reconciledTerminalJobs: PrGuardianJob[] = [];
+  for (const job of jobs.filter((candidate) =>
+    (candidate.status === 'blocked' && candidate.attemptCount >= candidate.retryBudget) ||
+    (isStaleRunningJob(candidate, options.config.guardian.timeoutMinutes) && candidate.attemptCount >= candidate.retryBudget)
+  )) {
+    let state: PrGateSummary['state'];
+    try {
+      state = await inspectPullRequestTerminalState(options.runCommand, requestForJob(options, job));
+    } catch {
+      continue;
+    }
+    if (state !== 'MERGED') continue;
+    const now = new Date().toISOString();
+    const terminal: PrGuardianJob = {
+      ...job,
+      status: 'success',
+      updatedAt: now,
+      lastCheckedAt: now,
+      lastBlocker: undefined,
+      lastObservedFingerprint: JSON.stringify({ state })
+    };
+    await writeGuardianJob(options.stateDir, terminal);
+    await syncImplementationState(options.stateDir, terminal);
+    reconciledTerminalJobs.push(terminal);
+  }
+  if (reconciledTerminalJobs.length > 0) jobs = await listPrGuardianJobs(options.stateDir);
   for (const job of jobs.filter((candidate) => candidate.status === 'success')) {
     const gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
     if (gate.state !== 'OPEN') {
@@ -271,7 +297,7 @@ export async function runPendingPrGuardianJobs(options: {
   for (const job of runnable) {
     results.push(await runPrGuardianJob({ ...options, job }));
   }
-  return results;
+  return [...reconciledTerminalJobs, ...results];
 }
 
 function requestForJob(
@@ -641,6 +667,30 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
     blockers,
     isReady: blockers.length === 0
   };
+}
+
+async function inspectPullRequestTerminalState(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest
+): Promise<PrGateSummary['state']> {
+  const result = await runCommand('gh', [
+    'pr',
+    'view',
+    String(req.prNumber),
+    '--repo',
+    req.repo,
+    '--json',
+    'state'
+  ], {
+    cwd: req.workspaceDir,
+    env: githubCliEnv(),
+    timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+    rejectOnNonZero: false
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not inspect PR state: ${result.stderr || result.stdout}`);
+  }
+  return (JSON.parse(result.stdout || '{}') as Pick<PrGateSummary, 'state'>).state;
 }
 
 async function inspectPullRequest(
