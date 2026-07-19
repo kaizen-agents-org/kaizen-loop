@@ -127,9 +127,9 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     requireWorkspace: options.scheduled
   });
   let config = initialConfig.config;
-  assertJobEnabled(config, options.job);
+  if (!options.scheduled || options.dryRun) assertJobEnabled(config, options.job);
   let scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
-  let trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
+  let trigger = options.trigger ?? scheduledJob?.name ?? options.job ?? (options.scheduled ? 'scheduled' : 'manual');
   const startedAt = new Date();
   const runId = toRunId(startedAt);
   let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
@@ -243,12 +243,14 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       : undefined;
     if (latestWorkspaceConfig) {
       config = latestWorkspaceConfig;
-      assertJobEnabled(config, options.job);
-      scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
-      trigger = options.trigger ?? scheduledJob?.name ?? (options.scheduled ? 'scheduled' : 'manual');
       runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
       runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
       github = new GitHubClient(runCommand, resolved.project.workspacePath);
+    }
+    if (options.scheduled) {
+      assertJobEnabled(config, options.job);
+      scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
+      trigger = options.trigger ?? scheduledJob?.name ?? 'scheduled';
     }
 
     const nowDate = new Date();

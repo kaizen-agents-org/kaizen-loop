@@ -656,6 +656,65 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
+  it('continues pending jobs when an old successful pull request is inaccessible', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const oldJob = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'old-branch',
+      baseBranch: 'main',
+      headSha: 'old-head'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${oldJob.id}.json`),
+      `${JSON.stringify({ ...oldJob, status: 'success' }, null, 2)}\n`
+    );
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/5',
+      prNumber: 5,
+      branch: 'new-branch',
+      baseBranch: 'main',
+      headSha: 'new-head'
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      const inaccessible = command === 'gh' && isPrView(args) && args[2] === '4';
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: inaccessible ? 1 : 0,
+        stdout: inaccessible ? '' : command === 'gh' ? ghResponse(args, []) : 'done',
+        stderr: inaccessible ? 'not found' : '',
+        durationMs: 1
+      };
+    });
+
+    const jobs = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ prNumber: 5, status: 'success' });
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ prNumber: 4, status: 'success' }),
+      expect.objectContaining({ prNumber: 5, status: 'success' })
+    ]));
+  });
+
   it('reactivates a successful job after a guardian fix advances the head', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
@@ -1181,7 +1240,7 @@ function isPrView(args: string[]): boolean {
 }
 
 function isReviewApi(args: string[]): boolean {
-  return args[0] === 'api' && args.some((arg) => arg.includes('/pulls/4/reviews'));
+  return args[0] === 'api' && args.some((arg) => /\/pulls\/\d+\/reviews/.test(arg));
 }
 
 function isRequiredChecks(args: string[]): boolean {

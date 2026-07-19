@@ -1693,6 +1693,67 @@ describe('runKaizen PR flow', () => {
     }
   });
 
+  it('validates a scheduled job after refreshing the workspace configuration', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const updatedConfig = defaultConfigWith({
+      scheduler: {
+        jobs: {
+          maintenance: {
+            enabled: true,
+            schedule: { type: 'interval', everyHours: 8, anchorTime: '02:45' },
+            run: { mode: 'maintenance', lateStartGuard: false }
+          }
+        }
+      }
+    }, { agent: 'claude', setup: null, verify: [] });
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), updatedConfig);
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, '.kaizen', 'config.yml'),
+      defaultConfigWith({}, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git') {
+        if (args[0] === 'reset') await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), updatedConfig);
+        return result(command, args, options?.cwd, '');
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, options?.cwd, '[]');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, options?.cwd, '[]');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      job: 'maintenance',
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.trigger).toBe('maintenance');
+    expect(runner.mock.calls.some(([command, args]) => command === 'git' && args[0] === 'reset')).toBe(true);
+  });
+
   it('skips overlapping scheduled watch jobs when skipIfRunning is enabled', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

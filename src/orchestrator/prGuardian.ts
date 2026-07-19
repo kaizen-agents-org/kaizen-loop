@@ -256,7 +256,12 @@ export async function runPendingPrGuardianJobs(options: {
   if (reconciledTerminalJobs.length > 0) jobs = await listPrGuardianJobs(options.stateDir);
   const reconciledTerminalJobIds = new Set(reconciledTerminalJobs.map((job) => job.id));
   for (const job of jobs.filter((candidate) => candidate.status === 'success' && !reconciledTerminalJobIds.has(candidate.id))) {
-    const gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
+    let gate: PrGateSummary;
+    try {
+      gate = await inspectPrGate(options.runCommand, requestForJob(options, job));
+    } catch {
+      continue;
+    }
     if (gate.state !== 'OPEN') {
       if (job.lastObservedFingerprint !== gate.activityFingerprint) {
         await writeGuardianJob(options.stateDir, { ...job, lastObservedFingerprint: gate.activityFingerprint });
