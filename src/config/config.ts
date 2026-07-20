@@ -137,7 +137,8 @@ export function defaultConfigYaml(options: {
     },
     report: {
       notification: true,
-      issueComments: true
+      issueComments: true,
+      starvationRuns: 2
     },
     issues: {
       label: 'kaizen',

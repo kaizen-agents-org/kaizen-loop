@@ -293,10 +293,11 @@ export const configSchema = z
     report: z
       .object({
         notification: z.boolean().default(true),
-        issueComments: z.boolean().default(true)
+        issueComments: z.boolean().default(true),
+        starvationRuns: z.number().int().positive().default(2)
       })
       .strict()
-      .default({ notification: true, issueComments: true }),
+      .default({ notification: true, issueComments: true, starvationRuns: 2 }),
     issues: z
       .object({
         label: z.string().default('kaizen'),

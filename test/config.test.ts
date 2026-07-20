@@ -49,6 +49,7 @@ describe('configSchema', () => {
     });
     expect(config.run.issueTimeoutMinutes).toBe(120);
     expect(config.run.maxOpenPullRequests).toBe(1);
+    expect(config.report.starvationRuns).toBe(2);
     expect(config.safety.minFreeDiskMb).toBe(1024);
     expect(config.safety.operationMode).toBe('external');
     expect(config.safety.wipLimit).toBe(5);
@@ -94,6 +95,7 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { jobs: { bad: { schedule: { type: 'times', times: [] }, run: { mode: 'maintenance' } } } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, run: { maxOpenPullRequests: -1 } })).toThrow();
     expect(() => configSchema.parse({ version: 1, safety: { wipLimit: -1 } })).toThrow();
+    expect(() => configSchema.parse({ version: 1, report: { starvationRuns: 0 } })).toThrow();
   });
 
   it('accepts a custom generated PR WIP limit', () => {

@@ -35,7 +35,19 @@ describe('listProjects', () => {
       processed: 1,
       fixed: 1,
       prCreated: 1,
-      failed: 0
+      failed: 0,
+      queue: {
+        backlogCount: 2,
+        eligibleCount: 0,
+        processedCount: 0,
+        skipReasons: [{ reason: 'pending pull request', count: 2 }],
+        health: {
+          state: 'starved',
+          consecutiveZeroThroughputRuns: 2,
+          since: '2026-07-14T00:00:00.000Z',
+          warning: 'Queue starvation'
+        }
+      }
     };
     await fs.mkdir(path.join(home, 'projects', 'owner-repo'), { recursive: true });
     await fs.writeFile(path.join(home, 'projects', 'owner-repo', 'last-run.json'), JSON.stringify(lastRun));
@@ -43,6 +55,16 @@ describe('listProjects', () => {
     const registry = await listProjects();
 
     expect(registry.projects['owner-repo'].lastRun).toEqual(lastRun);
+    expect(registry.projects['owner-repo'].queueHealth).toEqual(lastRun.queue.health);
+    expect(registry.health).toEqual({
+      state: 'starved',
+      starvedRepositories: [{
+        slug: 'owner-repo',
+        repo: 'owner/repo',
+        since: '2026-07-14T00:00:00.000Z',
+        warning: 'Queue starvation'
+      }]
+    });
   });
 });
 
@@ -81,6 +103,7 @@ describe('statusProject', () => {
     expect(maximumActive).toBe(4);
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'view')).toHaveLength(6);
     expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+    expect(output.queue?.health.state).toBe('idle');
   });
 
   it('reconciles merged pull request jobs as terminal and reports workspace config', async () => {

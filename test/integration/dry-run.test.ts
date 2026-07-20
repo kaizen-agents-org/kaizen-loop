@@ -856,6 +856,19 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.skipped).toEqual([
       { number: 1, reason: 'open pull request limit reached (0/0)' }
     ]);
+    expect('issues' in summary && summary.queue).toMatchObject({
+      backlogCount: 1,
+      eligibleCount: 0,
+      processedCount: 0,
+      skipReasons: [{
+        reason: 'open pull request limit reached (0/0)',
+        count: 1
+      }],
+      health: {
+        state: 'degraded',
+        consecutiveZeroThroughputRuns: 1
+      }
+    });
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands).toEqual(['fetch origin', 'checkout main', 'reset --hard origin/main', 'clean -fdx']);
   });
