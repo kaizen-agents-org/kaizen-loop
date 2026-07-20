@@ -2626,9 +2626,9 @@ async function readPersistedRunSummaries(stateDir: string): Promise<RunSummary[]
     for (const run of runs) {
       try {
         const summary = JSON.parse(await fs.readFile(path.join(runsDir, run, 'summary.json'), 'utf8')) as RunSummary;
-        if (summary) return [summary];
+        if (summary.queue) return [summary];
       } catch {
-        // Ignore incomplete runs and continue to the latest readable summary.
+        // Ignore incomplete runs and continue to the latest queue observation.
       }
     }
     return [];
