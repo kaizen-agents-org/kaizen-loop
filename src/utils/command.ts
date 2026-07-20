@@ -28,6 +28,7 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
+const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal: NodeJS.Signals | undefined;
 
@@ -119,30 +120,40 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      clearTimers();
-      activeChildren.delete(child);
-      const result: CommandResult = {
-        command,
-        args,
-        cwd: options.cwd,
-        exitCode: code ?? 1,
-        stdout,
-        stderr,
-        durationMs: Date.now() - started
-      };
-      if (timedOut) {
-        const err = new Error(`Command timed out after ${options.timeoutMs}ms: ${formatCommand(command, args)}`);
-        Object.assign(err, { result });
-        reject(err);
-        return;
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
       }
-      if (options.rejectOnNonZero !== false && result.exitCode !== 0) {
-        const err = new Error(formatCommandFailure(result));
-        Object.assign(err, { result });
-        reject(err);
-      } else {
-        resolve(result);
-      }
+      void terminateProcessTreeAndWait(child).then(() => {
+        clearTimers();
+        activeChildren.delete(child);
+        const result: CommandResult = {
+          command,
+          args,
+          cwd: options.cwd,
+          exitCode: code ?? 1,
+          stdout,
+          stderr,
+          durationMs: Date.now() - started
+        };
+        if (timedOut) {
+          const err = new Error(`Command timed out after ${options.timeoutMs}ms: ${formatCommand(command, args)}`);
+          Object.assign(err, { result });
+          reject(err);
+          return;
+        }
+        if (options.rejectOnNonZero !== false && result.exitCode !== 0) {
+          const err = new Error(formatCommandFailure(result));
+          Object.assign(err, { result });
+          reject(err);
+        } else {
+          resolve(result);
+        }
+      }, (error) => {
+        clearTimers();
+        activeChildren.delete(child);
+        reject(error);
+      });
     });
 
     if (options.input) {
@@ -232,6 +243,48 @@ function terminateProcessTree(child: ChildProcessWithoutNullStreams, signal: Nod
       // Process already exited.
     }
   }
+}
+
+async function terminateProcessTreeAndWait(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.pid === undefined) return;
+  if (process.platform === 'win32') {
+    await runTaskkill(child.pid, false);
+    await runTaskkill(child.pid, true);
+    return;
+  }
+
+  terminateProcessTree(child, 'SIGTERM');
+  if (await waitForProcessGroupExit(child.pid, PROCESS_TERMINATION_GRACE_MS)) return;
+  terminateProcessTree(child, 'SIGKILL');
+  await waitForProcessGroupExit(child.pid);
+}
+
+async function waitForProcessGroupExit(pid: number, timeoutMs?: number): Promise<boolean> {
+  const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+  while (processGroupExists(pid)) {
+    if (deadline !== undefined && Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return true;
+}
+
+function processGroupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+function runTaskkill(pid: number, force: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    const args = ['/pid', String(pid), '/T'];
+    if (force) args.push('/F');
+    const taskkill = spawn('taskkill', args, { stdio: 'ignore' });
+    taskkill.on('error', () => resolve());
+    taskkill.on('close', () => resolve());
+  });
 }
 
 export function formatCommand(command: string, args: string[]): string {

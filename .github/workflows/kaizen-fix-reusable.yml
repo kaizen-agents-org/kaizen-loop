@@ -1,0 +1,354 @@
+name: Kaizen fix (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      issue-number:
+        description: Authorized GitHub issue number to process
+        required: true
+        type: number
+      runtime-ref:
+        description: Immutable kaizen-loop commit SHA matching the reusable workflow reference
+        required: true
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+      KAIZEN_GITHUB_TOKEN:
+        description: Optional GitHub App or PAT token so the created PR starts downstream CI
+        required: false
+
+concurrency:
+  group: kaizen-fix-${{ github.repository }}-${{ inputs.issue-number }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      base-sha: ${{ steps.prepare.outputs.base_sha }}
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require an immutable Kaizen runtime reference
+        env:
+          KAIZEN_RUNTIME_REF: ${{ inputs.runtime-ref }}
+        run: |
+          if [[ ! "$KAIZEN_RUNTIME_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'runtime-ref must be a full lowercase commit SHA' >&2
+            exit 1
+          fi
+
+      - name: Checkout Kaizen runtime
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: kaizen-agents-org/kaizen-loop
+          ref: ${{ inputs.runtime-ref }}
+          path: _kaizen_runtime
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
+        with:
+          node-version: 20
+
+      - name: Build Kaizen runtime
+        working-directory: _kaizen_runtime
+        run: npm ci && npm run build
+
+      - name: Isolate Kaizen runtime
+        run: mv _kaizen_runtime "$RUNNER_TEMP/kaizen-runtime"
+
+      - name: Authorize issue and prepare prompt
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+        run: |
+          node "$RUNNER_TEMP/kaizen-runtime/dist/cli.js" actions prepare "$ISSUE_NUMBER" --output-dir _kaizen_prepared --json > _kaizen_prepared-result.json
+          echo "base_sha=$(jq -r .baseSha _kaizen_prepared-result.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload provider prompt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kaizen-provider-prompt
+          path: _kaizen_prepared
+          if-no-files-found: error
+
+  codex:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      succeeded: ${{ steps.package.outputs.succeeded }}
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.base-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download provider prompt
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: kaizen-provider-prompt
+          path: .kaizen-actions-input
+
+      - name: Exclude workflow inputs from the patch
+        run: echo '/.kaizen-actions-input/' >> .git/info/exclude
+
+      - name: Generate patch with Codex
+        id: codex
+        continue-on-error: true
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .kaizen-actions-input/prompt.md
+          output-file: .kaizen-actions-input/final-message.txt
+          output-schema-file: .kaizen-actions-input/provider-output.schema.json
+          working-directory: ${{ github.workspace }}
+          permission-profile: :workspace
+          safety-strategy: drop-sudo
+          allow-users: ${{ github.actor }}
+
+      - name: Package Codex patch
+        id: package
+        if: steps.codex.outcome == 'success'
+        continue-on-error: true
+        run: |
+          mkdir -p _kaizen_provider
+          git add -N .
+          git diff --binary HEAD > _kaizen_provider/change.patch
+          test -s _kaizen_provider/change.patch
+          jq -n --arg provider codex --rawfile finalMessage .kaizen-actions-input/final-message.txt \
+            '{provider: $provider, finalMessage: $finalMessage, attempts: [{provider: "codex", status: "selected", failureClass: "none"}]}' \
+            > _kaizen_provider/provider-result.json
+          echo 'succeeded=true' >> "$GITHUB_OUTPUT"
+
+      - name: Upload Codex result
+        if: steps.package.outputs.succeeded == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kaizen-provider-codex
+          path: _kaizen_provider
+          if-no-files-found: error
+
+  claude:
+    needs: [prepare, codex]
+    if: always() && needs.prepare.result == 'success' && needs.codex.outputs.succeeded != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      succeeded: ${{ steps.package.outputs.succeeded }}
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.base-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download provider prompt
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: kaizen-provider-prompt
+          path: .kaizen-actions-input
+
+      - name: Exclude workflow inputs from the patch
+        run: echo '/.kaizen-actions-input/' >> .git/info/exclude
+
+      - name: Generate patch with Claude
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@273fe825408ddced56cb02b228a74c72bed8241e # v1.0.62
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          allowed_non_write_users: ${{ github.actor }}
+          prompt: Read .kaizen-actions-input/prompt.md completely, perform that task, and return only the requested final JSON.
+          claude_args: >-
+            --json-schema {"type":"object","properties":{"status":{"type":"string","enum":["fixed","partial","blocked"]},"summary":{"type":"string"},"notes":{"type":"string"},"blockedReason":{"type":"string"},"discoveredIssues":{"type":"array"}},"required":["status","summary","notes","discoveredIssues"],"additionalProperties":true}
+          show_full_output: false
+
+      - name: Package Claude patch
+        id: package
+        if: steps.claude.outcome == 'success'
+        continue-on-error: true
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+        run: |
+          mkdir -p _kaizen_provider
+          git add -N .
+          git diff --binary HEAD > _kaizen_provider/change.patch
+          test -s _kaizen_provider/change.patch
+          jq -n --arg provider claude --arg finalMessage "$STRUCTURED_OUTPUT" \
+            '{provider: $provider, finalMessage: $finalMessage, attempts: [
+              {provider: "codex", status: "failed", failureClass: "external_action_failure"},
+              {provider: "claude", status: "selected", failureClass: "none"}
+            ]}' > _kaizen_provider/provider-result.json
+          echo 'succeeded=true' >> "$GITHUB_OUTPUT"
+
+      - name: Upload Claude result
+        if: steps.package.outputs.succeeded == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kaizen-provider-claude
+          path: _kaizen_provider
+          if-no-files-found: error
+
+  provider_gate:
+    needs: [prepare, codex, claude]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a provider patch
+        env:
+          CODEX_SUCCEEDED: ${{ needs.codex.outputs.succeeded }}
+          CLAUDE_SUCCEEDED: ${{ needs.claude.outputs.succeeded }}
+        run: test "$CODEX_SUCCEEDED" = true || test "$CLAUDE_SUCCEEDED" = true
+
+  verify:
+    needs: [prepare, codex, claude, provider_gate]
+    if: always() && needs.provider_gate.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.base-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download Codex result
+        if: needs.codex.outputs.succeeded == 'true'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: kaizen-provider-codex
+          path: ${{ runner.temp }}/kaizen-provider
+
+      - name: Download Claude result
+        if: needs.codex.outputs.succeeded != 'true'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: kaizen-provider-claude
+          path: ${{ runner.temp }}/kaizen-provider
+
+      - name: Checkout Kaizen runtime
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: kaizen-agents-org/kaizen-loop
+          ref: ${{ inputs.runtime-ref }}
+          path: _kaizen_runtime
+          persist-credentials: false
+
+      - name: Checkout trusted verifier
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: kaizen-agents-org/verifier
+          ref: 75e76f62c9bfc4a2c033c377573576299b1ec0b0
+          path: _verifier_runtime
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
+        with:
+          node-version: 20
+
+      - name: Build trusted runtimes
+        run: |
+          npm --prefix _kaizen_runtime ci
+          npm --prefix _kaizen_runtime run build
+          corepack enable
+          pnpm --dir _verifier_runtime install --frozen-lockfile
+          pnpm --dir _verifier_runtime --filter @verifier/core build
+          chmod +x _verifier_runtime/packages/core/dist/cli.js
+          mv _kaizen_runtime "$RUNNER_TEMP/kaizen-runtime"
+          mv _verifier_runtime "$RUNNER_TEMP/verifier-runtime"
+          mkdir -p "$RUNNER_TEMP/kaizen-bin"
+          ln -s "$RUNNER_TEMP/verifier-runtime/packages/core/dist/cli.js" "$RUNNER_TEMP/kaizen-bin/verifier"
+
+      - name: Verify patch with kaizen fix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+        run: |
+          env -i \
+            PATH="$RUNNER_TEMP/kaizen-bin:$PATH" \
+            HOME="$HOME" \
+            LANG=C.UTF-8 \
+            GH_TOKEN="$GH_TOKEN" \
+            KAIZEN_HOME="$RUNNER_TEMP/kaizen-home" \
+            node "$RUNNER_TEMP/kaizen-runtime/dist/cli.js" fix "$ISSUE_NUMBER" \
+            --actions-patch "$RUNNER_TEMP/kaizen-provider/change.patch" \
+            --provider-result "$RUNNER_TEMP/kaizen-provider/provider-result.json" \
+            --artifact-dir "$RUNNER_TEMP/kaizen-verified" \
+            --json
+
+      - name: Upload verified artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kaizen-verified-fix
+          path: ${{ runner.temp }}/kaizen-verified
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: read
+      pull-requests: write
+    steps:
+      - name: Checkout verified base
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.base-sha }}
+          fetch-depth: 0
+          token: ${{ secrets.KAIZEN_GITHUB_TOKEN || github.token }}
+          persist-credentials: true
+
+      - name: Download verified artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: kaizen-verified-fix
+          path: ${{ runner.temp }}/kaizen-verified
+
+      - name: Checkout Kaizen runtime
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: kaizen-agents-org/kaizen-loop
+          ref: ${{ inputs.runtime-ref }}
+          path: _kaizen_runtime
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
+        with:
+          node-version: 20
+
+      - name: Build publish runtime
+        working-directory: _kaizen_runtime
+        run: npm ci && npm run build
+
+      - name: Isolate publish runtime
+        run: mv _kaizen_runtime "$RUNNER_TEMP/kaizen-runtime"
+
+      - name: Publish verified patch
+        env:
+          GH_TOKEN: ${{ secrets.KAIZEN_GITHUB_TOKEN || github.token }}
+        run: node "$RUNNER_TEMP/kaizen-runtime/dist/cli.js" actions publish --artifact-dir "$RUNNER_TEMP/kaizen-verified" --json

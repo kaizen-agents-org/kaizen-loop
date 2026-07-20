@@ -20,6 +20,7 @@ import { listGuardianJobs, runGuardianForPullRequest, watchGuardianJobs } from '
 import { doctorProject } from './commands/doctor.js';
 import { fleetHasFailures, refreshFleet, syncFleet } from './commands/fleet.js';
 import { runSandboxSmoke } from './commands/smoke.js';
+import { encodeProviderResult, prepareActionsFix, publishActionsFix, verifyActionsFix } from './commands/actions.js';
 import { executeRun } from './commands/run.js';
 import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/scheduler.js';
 import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
@@ -365,11 +366,29 @@ program
   .option('--project <slug>', 'target project slug')
   .option('--agent <agent>', 'agent override: claude or codex')
   .option('--yes', 'skip direct commit confirmation', false)
+  .option('--actions-patch <path>', 'verify an Actions-generated patch without publishing')
+  .option('--provider-result <path>', 'Actions provider result JSON used with --actions-patch')
+  .option('--artifact-dir <path>', 'verified Actions artifact output directory')
   .option('--json', 'print machine-readable output')
   .action(async (issue, options) => {
     const globals = program.opts<{ project?: string; json?: boolean }>();
     const json = Boolean(options.json ?? globals.json);
     const assumeYes = Boolean(options.yes);
+    if (options.actionsPatch || options.providerResult || options.artifactDir) {
+      if (!options.actionsPatch || !options.providerResult || !options.artifactDir) {
+        throw new KaizenError('--actions-patch, --provider-result, and --artifact-dir must be used together', 2);
+      }
+      const result = await verifyActionsFix({
+        cwd: process.cwd(),
+        issue: Number(issue),
+        patchPath: path.resolve(options.actionsPatch),
+        providerResultPath: path.resolve(options.providerResult),
+        outputDir: path.resolve(options.artifactDir),
+        runCommand
+      });
+      print(result, json);
+      return;
+    }
     const result = await runKaizen({
       cwd: process.cwd(),
       project: options.project ?? globals.project,
@@ -387,6 +406,58 @@ program
       runCommand
     });
     print(result, json);
+  });
+
+const actions = program
+  .command('actions')
+  .description('run the credential-separated GitHub Actions issue-to-PR workflow');
+
+actions
+  .command('prepare')
+  .description('authorize an issue and write an Actions provider prompt')
+  .argument('<issue>', 'issue number')
+  .requiredOption('--output-dir <path>', 'prompt artifact output directory')
+  .option('--json', 'print machine-readable output')
+  .action(async (issue, options) => {
+    const globals = program.opts<{ json?: boolean }>();
+    const result = await prepareActionsFix({
+      cwd: process.cwd(),
+      issue: Number(issue),
+      outputDir: path.resolve(options.outputDir),
+      runCommand
+    });
+    print(result, Boolean(options.json ?? globals.json));
+  });
+
+actions
+  .command('provider-result')
+  .description('package an Actions provider final message for patch verification')
+  .requiredOption('--provider <provider>', 'provider: codex or claude')
+  .requiredOption('--final-message <path>', 'provider final message file')
+  .requiredOption('--output <path>', 'provider result JSON output path')
+  .action(async (options) => {
+    if (options.provider !== 'codex' && options.provider !== 'claude') {
+      throw new KaizenError('--provider must be codex or claude', 2);
+    }
+    const outputPath = path.resolve(options.output);
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, encodeProviderResult(options.provider, await fs.readFile(path.resolve(options.finalMessage), 'utf8')));
+    print({ provider: options.provider, outputPath }, true);
+  });
+
+actions
+  .command('publish')
+  .description('publish a verified Actions artifact without executing repository code')
+  .requiredOption('--artifact-dir <path>', 'verified artifact directory')
+  .option('--json', 'print machine-readable output')
+  .action(async (options) => {
+    const globals = program.opts<{ json?: boolean }>();
+    const result = await publishActionsFix({
+      cwd: process.cwd(),
+      artifactDir: path.resolve(options.artifactDir),
+      runCommand
+    });
+    print(result, Boolean(options.json ?? globals.json));
   });
 
 program

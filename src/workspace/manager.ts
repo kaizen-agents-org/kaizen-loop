@@ -214,6 +214,25 @@ export class WorkspaceManager {
     return truncateText(diff.trim(), maxChars);
   }
 
+  async collectWorkingTreeDiffStats(config: KaizenConfig): Promise<DiffStats> {
+    const git = this.git();
+    const files = await git.workingTreeDiffNameOnly();
+    const stats = await git.workingTreeDiffNumstat();
+    const changedLines = stats.reduce((sum, item) => sum + item.added + item.deleted, 0);
+    return {
+      files,
+      changedFiles: files.length,
+      changedLines,
+      forbiddenFiles: files.filter((file) => matchesAny(file, config.policy.forbiddenPaths)),
+      protectedFiles: files.filter((file) => matchesAny(file, config.policy.protectedPaths))
+    };
+  }
+
+  async collectWorkingTreeDiffText(maxChars = DEFAULT_DIFF_TEXT_MAX_CHARS): Promise<string> {
+    const diff = await this.git().workingTreeDiff();
+    return truncateText(diff.trim(), maxChars);
+  }
+
   private async runShell(command: string, timeoutMs: number | undefined, config: KaizenConfig, runDeadlineAt: number | undefined) {
     return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
       cwd: this.workspacePath,

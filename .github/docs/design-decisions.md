@@ -1,5 +1,11 @@
 # Design decisions
 
+## 2026-07-19: Credential-separated GitHub Actions execution
+
+The external reusable workflow does not pass provider API keys to `builder-agent`, repository setup, verification, verifier, or publish commands. Codex and Claude run through their official Actions in read-only provider jobs and emit patch artifacts. A separate job with neither provider secrets nor repository write permission applies the patch, runs `kaizen fix` verification, and seals the base commit, changed-file set, and patch SHA-256. A final publish-only job rechecks execution authorization and the sealed artifact before creating a ready pull request; it disables Git hooks and does not run repository code.
+
+This split prevents generated code from sharing a process environment with both provider credentials and write-capable GitHub credentials. A provider Action failure without machine-readable detail is normalized to `external_action_failure`, triggers the configured fallback, and is not treated as a human-input block. Immutable action/source pins are part of the workflow's supply-chain boundary.
+
 ## 2026-07-13: External-operation authorization and safety defaults
 
 Kaizen Loop treats third-party repositories as an external trust boundary. New configurations therefore default to `safety.operationMode: external`; the Kaizen Agents self-organization deployment explicitly uses `dogfood` to retain its existing label-selection behavior.

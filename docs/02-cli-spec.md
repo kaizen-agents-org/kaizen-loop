@@ -105,6 +105,15 @@ kaizen fix <Issue番号> [--project <slug>] [--agent claude|codex] [--yes] [--js
 - 非 TTY 時は `instant.unattendedMode`(デフォルト: PR に切替)に従う
 - 夜間実行と同一ロックを共有。実行中なら中止する
 
+GitHub Actions の reusable workflow は、credential-free verification job で次の deferred-publish 形式を使う。
+
+```sh
+kaizen fix <Issue番号> --actions-patch <patch> --provider-result <json> --artifact-dir <dir> --json
+kaizen actions publish --artifact-dir <dir> --json
+```
+
+前者は local registry を使わず current checkout に patch を適用して setup / verify / trusted verifier を実行し、base SHA・patch hash・証跡を artifact に封印する。後者は authorization と hash を再検証してから、repository code や Git hook を実行せず ready PR を作成する。通常の対話利用向けではない。詳細は [14-github-actions.md](./14-github-actions.md)。
+
 タイトル指定による起票 + 即時処理は `kaizen report "<タイトル>" --now` を使う。`kaizen fix "<タイトル>"` と `--wait` は未実装。
 
 ---
