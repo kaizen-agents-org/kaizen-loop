@@ -35,7 +35,19 @@ describe('listProjects', () => {
       processed: 1,
       fixed: 1,
       prCreated: 1,
-      failed: 0
+      failed: 0,
+      queue: {
+        backlogCount: 2,
+        eligibleCount: 0,
+        processedCount: 0,
+        skipReasons: [{ reason: 'pending pull request', count: 2 }],
+        health: {
+          state: 'starved',
+          consecutiveZeroThroughputRuns: 2,
+          since: '2026-07-14T00:00:00.000Z',
+          warning: 'Queue starvation'
+        }
+      }
     };
     await fs.mkdir(path.join(home, 'projects', 'owner-repo'), { recursive: true });
     await fs.writeFile(path.join(home, 'projects', 'owner-repo', 'last-run.json'), JSON.stringify(lastRun));
@@ -43,6 +55,16 @@ describe('listProjects', () => {
     const registry = await listProjects();
 
     expect(registry.projects['owner-repo'].lastRun).toEqual(lastRun);
+    expect(registry.projects['owner-repo'].queueHealth).toEqual(lastRun.queue.health);
+    expect(registry.health).toEqual({
+      state: 'starved',
+      starvedRepositories: [{
+        slug: 'owner-repo',
+        repo: 'owner/repo',
+        since: '2026-07-14T00:00:00.000Z',
+        warning: 'Queue starvation'
+      }]
+    });
   });
 });
 
@@ -81,6 +103,46 @@ describe('statusProject', () => {
     expect(maximumActive).toBe(4);
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'view')).toHaveLength(6);
     expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
+    expect(output.queue?.health.state).toBe('idle');
+  });
+
+  it('does not reuse an idle run state after a new backlog appears', async () => {
+    const { repo, workspace, home } = await setupProject();
+    const stateDir = path.join(home, 'projects', 'o-r');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'last-run.json'), JSON.stringify({
+      queue: {
+        backlogCount: 0,
+        eligibleCount: 0,
+        processedCount: 0,
+        skipReasons: [],
+        health: { state: 'idle', consecutiveZeroThroughputRuns: 0 }
+      }
+    }));
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([{
+          number: 1,
+          title: 'New backlog issue',
+          body: '',
+          labels: [{ name: 'kaizen' }],
+          createdAt: '2026-07-20T00:00:00Z',
+          comments: [],
+          url: 'https://github.com/o/r/issues/1'
+        }]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return result(command, args, repo, '[]');
+      if (command === 'git' && args.join(' ') === 'fetch --prune origin') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'for-each-ref --format=%(refname:short)%09%(objectname:short) refs/remotes/origin') {
+        return result(command, args, workspace, 'origin/HEAD\t1111111\norigin/main\t2222222\n');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+
+    expect(output.issues.open).toBe(1);
+    expect(output.queue).toBeUndefined();
   });
 
   it('reconciles merged pull request jobs as terminal and reports workspace config', async () => {

@@ -8,7 +8,7 @@ import { projectStateDir } from '../utils/paths.js';
 import { GitClient } from '../workspace/git.js';
 import { listPrGuardianJobs } from '../orchestrator/prGuardian.js';
 import { listImplementationStates, type ImplementationState } from '../orchestrator/implementationState.js';
-import type { RunIssueSummary, RunSummary } from '../orchestrator/summary.js';
+import type { RunIssueSummary, RunQueueSummary, RunSummary } from '../orchestrator/summary.js';
 import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
   type GeneratedPullRequestBacklog,
@@ -103,6 +103,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
   const stateDir = projectStateDir(resolved.slug);
   const lastRun = await readLastRun(stateDir);
   const lastSummary = await readLatestSummary(stateDir);
+  const queue = currentQueueStatus(issues.length, lastSummary?.queue ?? lastRun?.queue);
   const guardianJobs = await listPrGuardianJobs(stateDir);
   const implementationStates = await listImplementationStates(stateDir);
   const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
@@ -133,6 +134,7 @@ export async function statusProject(options: { cwd: string; project?: string; me
     enabled: resolved.project.enabled,
     schedule: resolved.project.schedule,
     lastRun: lastRun ?? resolved.project.lastRun ?? lastSummary,
+    queue,
     issues: {
       open: issues.length,
       selectionMode: config.issues.selection.mode,
@@ -256,11 +258,41 @@ function isImplementationNeedsAttention(state: ImplementationState): boolean {
 
 export async function listProjects() {
   const registry = await loadRegistry();
-  const projects = await Promise.all(Object.entries(registry.projects).map(async ([slug, project]) => [
-    slug,
-    { ...project, lastRun: await readLastRun(projectStateDir(slug)) ?? project.lastRun }
-  ] as const));
-  return { ...registry, projects: Object.fromEntries(projects) };
+  const projects = await Promise.all(Object.entries(registry.projects).map(async ([slug, project]) => {
+    const lastRun = await readLastRun(projectStateDir(slug)) ?? project.lastRun;
+    return [slug, { ...project, lastRun, queueHealth: lastRun?.queue?.health }] as const;
+  }));
+  const projectEntries = Object.fromEntries(projects);
+  const starvedRepositories = Object.entries(projectEntries)
+    .filter(([, project]) => project.queueHealth?.state === 'starved')
+    .map(([slug, project]) => ({
+      slug,
+      repo: project.repo,
+      since: project.queueHealth?.since,
+      warning: project.queueHealth?.warning
+    }));
+  return {
+    ...registry,
+    health: {
+      state: starvedRepositories.length > 0 ? 'starved' as const : 'healthy' as const,
+      starvedRepositories
+    },
+    projects: projectEntries
+  };
+}
+
+function currentQueueStatus(openBacklog: number, latest?: RunQueueSummary): RunQueueSummary | undefined {
+  if (openBacklog === 0) {
+    return {
+      backlogCount: 0,
+      eligibleCount: 0,
+      processedCount: 0,
+      skipReasons: [],
+      health: { state: 'idle', consecutiveZeroThroughputRuns: 0 }
+    };
+  }
+  if (latest?.health.state === 'idle') return undefined;
+  return latest;
 }
 
 async function readLatestSummary(stateDir: string) {

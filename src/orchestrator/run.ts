@@ -56,7 +56,7 @@ import {
   type IssueIntakeDecision
 } from './issueIntake.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
-import type { RunDiscoveredFollowupSummary, RunIssueSummary, RunSummary } from './summary.js';
+import { summarizeQueue, type RunDiscoveredFollowupSummary, type RunIssueSummary, type RunSummary } from './summary.js';
 import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
   generatedPullRequestWipLimitReason,
@@ -113,6 +113,7 @@ interface PullRequestReflection {
 interface RunIssueSelection {
   selected: GitHubIssue[];
   skipped: Array<{ number: number; reason: string }>;
+  backlogCount?: number;
   openPullRequests: GitHubPullRequest[];
   resumableIssueNumbers?: Set<number>;
   resumeBranches?: Set<string>;
@@ -137,6 +138,8 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   let github = new GitHubClient(runCommand, initialConfig.path);
   const stateDir = projectStateDir(resolved.slug);
+  const observesFullBacklog = options.issueNumbers === undefined && options.issue === undefined;
+  const appliesScheduledBacklogLimits = options.scheduled && observesFullBacklog;
   const configuredMaxIssues = (requestedIssueNumbers?: number[]) =>
     options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
   const selectRunIssues = async (): Promise<RunIssueSelection> => {
@@ -183,7 +186,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
     const resumeBranchByIssue = new Map(openCheckpoints.map((state) => [state.issue, state.branch]));
     if (automatic && !options.dryRun) {
-      return { ...budgetedSelection, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
+      return { ...budgetedSelection, backlogCount: selectableIssues.length, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
     }
     const limited = await applyOpenPullRequestLimit({
       config,
@@ -201,11 +204,11 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       github,
       resumableIssueNumbers
     });
-    return { ...wipLimited, openPullRequests };
+    return { ...wipLimited, backlogCount: selectableIssues.length, openPullRequests };
   };
 
   if (options.dryRun) {
-    const { openPullRequests: _openPullRequests, ...selection } = await selectRunIssues();
+    const { openPullRequests: _openPullRequests, backlogCount: _backlogCount, ...selection } = await selectRunIssues();
     return selection;
   }
 
@@ -291,6 +294,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     };
 
     let runFailed = false;
+    let queueObservation: { backlogCount: number; eligibleCount: number } | undefined;
     try {
       let selection = await selectRunIssues();
       if (options.scheduled && config.guardian.enabled) {
@@ -321,7 +325,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
           github,
           openPullRequests: selection.openPullRequests
         });
-        if (options.scheduled && options.issueNumbers === undefined && options.issue === undefined) {
+        if (appliesScheduledBacklogLimits) {
           selection = applyImplementationBudget(selection, configuredMaxIssues());
           const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
           const resumableIssueNumbers = new Set(
@@ -356,6 +360,12 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
           };
         }
         summary.skipped = selection.skipped;
+      }
+      if (observesFullBacklog) {
+        queueObservation = {
+          backlogCount: selection.backlogCount ?? 0,
+          eligibleCount: selection.selected.length
+        };
       }
       if (selection.selected.length > 0) {
         const verifierPreflightFailure = await preflightVerifier({ config, runCommand, runDir });
@@ -486,6 +496,16 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     } finally {
       summary.finishedAt = new Date().toISOString();
       summary.result = runFailed ? 'failed' : resultFor(summary.issues);
+      if (queueObservation) {
+        summary.queue = summarizeQueue({
+          ...queueObservation,
+          processedCount: summary.issues.length,
+          skipped: summary.skipped,
+          previousSummaries: await readPersistedRunSummaries(stateDir),
+          starvationRuns: config.report.starvationRuns,
+          observedAt: summary.startedAt
+        });
+      }
       await fs.writeFile(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
       await updateLastRun(resolved.slug, summary);
     }
@@ -2578,6 +2598,14 @@ async function persistRunSummary(slug: string, summary: RunSummary): Promise<Run
 }
 
 async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
+  let previousQueue: RunSummary['queue'];
+  try {
+    previousQueue = JSON.parse(
+      await fs.readFile(path.join(projectStateDir(slug), 'last-run.json'), 'utf8')
+    ).queue as RunSummary['queue'];
+  } catch {
+    previousQueue = undefined;
+  }
   const lastRun = {
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt,
@@ -2586,9 +2614,28 @@ async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
     fixed: summary.issues.filter((issue) => issue.outcome === 'direct-commit' || issue.outcome === 'pr-created').length,
     prCreated: summary.issues.filter((issue) => issue.outcome === 'pr-created').length,
     failed: summary.issues.filter((issue) => issue.outcome === 'failed').length,
-    infrastructureFailed: summary.issues.filter((issue) => issue.outcome === 'infrastructure-failure').length
+    infrastructureFailed: summary.issues.filter((issue) => issue.outcome === 'infrastructure-failure').length,
+    queue: summary.queue ?? previousQueue
   };
   await fs.writeFile(path.join(projectStateDir(slug), 'last-run.json'), `${JSON.stringify(lastRun, null, 2)}\n`);
+}
+
+async function readPersistedRunSummaries(stateDir: string): Promise<RunSummary[]> {
+  try {
+    const runsDir = path.join(stateDir, 'runs');
+    const runs = (await fs.readdir(runsDir)).sort().reverse();
+    for (const run of runs) {
+      try {
+        const summary = JSON.parse(await fs.readFile(path.join(runsDir, run, 'summary.json'), 'utf8')) as RunSummary;
+        if (summary.queue) return [summary];
+      } catch {
+        // Ignore incomplete runs and continue to the latest queue observation.
+      }
+    }
+    return [];
+  } catch {
+    return [];
+  }
 }
 
 async function ensureNotPaused(stateDir: string): Promise<void> {
