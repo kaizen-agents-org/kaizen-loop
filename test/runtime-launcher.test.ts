@@ -61,6 +61,26 @@ exit 99
     ]);
     await expect(fs.access(staleInvocationPath)).rejects.toMatchObject({ code: 'ENOENT' });
 
+    const manifestPath = path.join(home, 'fleet.yml');
+    await execFileAsync('/bin/sh', [
+      path.join(home, 'bin', 'kaizen'),
+      'fleet',
+      '--manifest',
+      manifestPath,
+      '--dry-run',
+      '--json'
+    ], { env });
+    expect((await fs.readFile(invocationPath, 'utf8')).trim().split('\n')).toEqual([
+      'runtime-commit',
+      path.join(runtime, 'dist', 'cli.js'),
+      'fleet',
+      '--manifest',
+      manifestPath,
+      '--dry-run',
+      '--json'
+    ]);
+    await expect(fs.access(staleInvocationPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
     await fs.rm(path.join(home, 'bin', 'kaizen'));
     await execFileAsync('/bin/sh', [path.join(home, 'bin', 'run-scheduled.sh'), path.join(bin, 'node'), 'owner-repo', 'maintenance'], { env });
     expect((await fs.readFile(invocationPath, 'utf8')).trim().split('\n')).toEqual([
