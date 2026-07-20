@@ -44,11 +44,11 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 if [ ! -d "$runtime_dir/.git" ]; then
-  git clone --branch main --single-branch "$remote_url" "$runtime_dir"
+  git clone --branch main --single-branch "$remote_url" "$runtime_dir" >&2
 fi
 
-git -C "$runtime_dir" fetch --prune origin main
-git -C "$runtime_dir" checkout --detach origin/main
+git -C "$runtime_dir" fetch --prune origin main >&2
+git -C "$runtime_dir" checkout --detach origin/main >&2
 
 installed_launcher="$kaizen_home/bin/kaizen"
 runtime_launcher="$runtime_dir/scripts/kaizen-runtime.sh"
@@ -78,7 +78,7 @@ if [ "$commit" != "$built_commit" ] || [ ! -f "$runtime_dir/dist/cli.js" ]; then
     cd "$runtime_dir"
     npm ci
     npm run build
-  )
+  ) >&2
   printf '%s\n' "$commit" > "$runtime_dir/.kaizen-built-commit"
 fi
 

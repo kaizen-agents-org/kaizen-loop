@@ -27,7 +27,7 @@ describe('stable Kaizen runtime launcher', () => {
     await fs.copyFile('scripts/kaizen-runtime.sh', path.join(runtime, 'scripts', 'kaizen-runtime.sh'));
     await fs.copyFile('scripts/run-scheduled.sh', path.join(runtime, 'scripts', 'run-scheduled.sh'));
     await fs.writeFile(path.join(runtime, 'dist', 'cli.js'), '');
-    await fs.writeFile(path.join(runtime, '.kaizen-built-commit'), 'runtime-commit\n');
+    await fs.writeFile(path.join(runtime, '.kaizen-built-commit'), 'stale-runtime-commit\n');
     await writeExecutable(path.join(bin, 'git'), `#!/bin/sh
 case "$*" in
   *"rev-parse --show-toplevel"*) exit 1 ;;
@@ -37,6 +37,12 @@ esac
 `);
     await writeExecutable(path.join(bin, 'node'), `#!/bin/sh
 printf '%s\\n' "$KAIZEN_RUNTIME_COMMIT" "$@" > "$KAIZEN_TEST_INVOCATION"
+case " $* " in
+  *" --json "*) printf '{"ok":true}\\n' ;;
+esac
+`);
+    await writeExecutable(path.join(bin, 'npm'), `#!/bin/sh
+printf 'npm %s\\n' "$*"
 `);
     await writeExecutable(path.join(bin, 'kaizen'), `#!/bin/sh
 printf '%s\\n' stale > "$KAIZEN_TEST_STALE_INVOCATION"
@@ -52,7 +58,14 @@ exit 99
       PATH: `${bin}:${process.env.PATH ?? ''}`
     };
 
-    await execFileAsync('/bin/sh', [path.join(home, 'bin', 'kaizen'), 'doctor', '--json'], { env });
+    const firstRun = await execFileAsync(
+      '/bin/sh',
+      [path.join(home, 'bin', 'kaizen'), 'doctor', '--json'],
+      { env }
+    );
+    expect(firstRun.stdout).toBe('{"ok":true}\n');
+    expect(firstRun.stderr).toContain('npm ci');
+    expect(firstRun.stderr).toContain('npm run build');
     expect((await fs.readFile(invocationPath, 'utf8')).trim().split('\n')).toEqual([
       'runtime-commit',
       path.join(runtime, 'dist', 'cli.js'),
