@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -103,6 +104,51 @@ describe('GitHub Actions fix workflow', () => {
     expect(command).not.toHaveBeenCalled();
   });
 
+  it('refuses to publish when the default branch advanced after verification', async () => {
+    const cwd = await configuredRepo();
+    await fs.writeFile(path.join(cwd, 'README.md'), 'before\n');
+    await runCommand('git', ['init', '-b', 'main'], { cwd });
+    await runCommand('git', ['add', '.'], { cwd });
+    await runCommand('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'base'], { cwd });
+    const baseSha = (await runCommand('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim();
+    await fs.writeFile(path.join(cwd, 'README.md'), 'after\n');
+    const patch = (await runCommand('git', ['diff', '--binary', 'HEAD'], { cwd })).stdout;
+    await runCommand('git', ['reset', '--hard', 'HEAD'], { cwd });
+    const artifactDir = path.join(cwd, 'artifact');
+    await fs.mkdir(artifactDir);
+    await fs.writeFile(path.join(artifactDir, 'change.patch'), patch);
+    await fs.writeFile(path.join(artifactDir, 'manifest.json'), JSON.stringify({
+      version: 1,
+      repo: 'owner/repo',
+      issue: { number: 199, title: 'Add Actions workflow' },
+      baseSha,
+      patchSha256: crypto.createHash('sha256').update(patch).digest('hex'),
+      provider: 'codex',
+      providerAttempts: [{ provider: 'codex', status: 'selected', failureClass: 'none' }],
+      builder: { summary: 'Update README', notes: '' },
+      verification: [],
+      verifier: { status: 'open_pr', summary: 'ok', notes: '' },
+      files: ['README.md'],
+      createdAt: new Date().toISOString()
+    }));
+    const fakeRun: CommandRunner = async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
+      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+      if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
+        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
+      }
+      if (command === 'gh' && args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/git/ref/heads/main') {
+        return result(command, args, `${'b'.repeat(40)}\n`);
+      }
+      return runCommand(command, args, options);
+    };
+
+    await expect(publishActionsFix({ cwd, artifactDir, runCommand: fakeRun }))
+      .rejects.toThrow('Default branch advanced from verified base');
+    expect((await fs.readFile(path.join(cwd, 'README.md'), 'utf8'))).toBe('before\n');
+  });
+
   it('collects staged patch changes against the ephemeral checkout', async () => {
     const cwd = await configuredRepo();
     await runCommand('git', ['init'], { cwd });
@@ -167,7 +213,7 @@ describe('GitHub Actions fix workflow', () => {
     const baseSha = (await runCommand('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim();
     await fs.writeFile(path.join(cwd, 'README.md'), 'after\n');
     const patch = (await runCommand('git', ['diff', '--binary', 'HEAD'], { cwd })).stdout;
-    await fs.writeFile(path.join(cwd, 'README.md'), 'before\n');
+    await runCommand('git', ['reset', '--hard', 'HEAD'], { cwd });
     const patchPath = path.join(cwd, 'change.patch');
     const providerPath = path.join(cwd, 'provider.json');
     const artifactDir = path.join(cwd, 'verified');
@@ -177,7 +223,6 @@ describe('GitHub Actions fix workflow', () => {
     })));
     let authorizationChecks = 0;
     let liveBaseChecks = 0;
-    let liveBaseSha = 'b'.repeat(40);
     const fakeRun: CommandRunner = async (command, args, options) => {
       if (command === 'gh' && args[0] === 'repo' && args.includes('nameWithOwner')) return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'repo') return result(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
@@ -189,7 +234,7 @@ describe('GitHub Actions fix workflow', () => {
       if (command === 'gh' && args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
       if (command === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/git/ref/heads/main') {
         liveBaseChecks += 1;
-        return result(command, args, `${liveBaseSha}\n`);
+        return result(command, args, `${baseSha}\n`);
       }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, 'https://github.com/owner/repo/pull/7\n');
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
@@ -215,15 +260,11 @@ describe('GitHub Actions fix workflow', () => {
     expect(artifact.files).toEqual(['README.md']);
     await runCommand('git', ['reset', '--hard', 'HEAD'], { cwd });
 
-    await expect(publishActionsFix({ cwd, artifactDir, runCommand: fakeRun }))
-      .rejects.toThrow('Default branch advanced from verified base');
-    expect((await runCommand('git', ['status', '--porcelain', '--', 'README.md'], { cwd })).stdout).toBe('');
-    liveBaseSha = baseSha;
     const published = await publishActionsFix({ cwd, artifactDir, runCommand: fakeRun });
     expect(published.url).toBe('https://github.com/owner/repo/pull/7');
     expect(published.body).toContain('Closes #199');
-    expect(authorizationChecks).toBe(3);
-    expect(liveBaseChecks).toBe(2);
+    expect(authorizationChecks).toBe(2);
+    expect(liveBaseChecks).toBe(1);
     expect((await runCommand('git', ['show', 'HEAD:README.md'], { cwd })).stdout).toBe('after\n');
   });
 
