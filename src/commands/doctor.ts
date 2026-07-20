@@ -13,6 +13,7 @@ import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js'
 import type { CommandRunner } from '../utils/command.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
+import { runtimeIdentity } from '../utils/runtime.js';
 
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
@@ -93,6 +94,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
   return {
+    runtime: runtimeIdentity(),
     slug: resolved.slug,
     configuration: {
       source: workspaceConfig ? 'workspace' as const : 'local' as const,

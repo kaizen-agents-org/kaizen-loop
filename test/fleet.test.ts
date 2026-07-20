@@ -89,6 +89,8 @@ describe('syncFleet', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
     vi.stubEnv('KAIZEN_HOME', home);
     vi.stubEnv('HOME', home);
+    vi.stubEnv('KAIZEN_RUNTIME_COMMIT', 'fleet-commit');
+    vi.stubEnv('KAIZEN_RUNTIME_DIR', '/runtime/kaizen-loop');
 
     const repoDir = path.join(root, 'kaizen-loop');
     await fs.mkdir(path.join(repoDir, '.git'), { recursive: true });
@@ -116,6 +118,8 @@ describe('syncFleet', () => {
       dryRun: true,
       runCommand: runner
     });
+
+    expect(output.runtime).toEqual({ commit: 'fleet-commit', directory: '/runtime/kaizen-loop' });
 
     expect(output.projects).toMatchObject([
       {

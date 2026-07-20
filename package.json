@@ -11,6 +11,7 @@
   },
   "files": [
     "dist",
+    "scripts/kaizen-runtime.sh",
     "scripts/run-scheduled.sh",
     "README.md",
     "docs"
