@@ -138,6 +138,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   let github = new GitHubClient(runCommand, initialConfig.path);
   const stateDir = projectStateDir(resolved.slug);
+  const observesFullBacklog = options.scheduled && options.issueNumbers === undefined && options.issue === undefined;
   const configuredMaxIssues = (requestedIssueNumbers?: number[]) =>
     options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
   const selectRunIssues = async (): Promise<RunIssueSelection> => {
@@ -323,7 +324,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
           github,
           openPullRequests: selection.openPullRequests
         });
-        if (options.scheduled && options.issueNumbers === undefined && options.issue === undefined) {
+        if (observesFullBacklog) {
           selection = applyImplementationBudget(selection, configuredMaxIssues());
           const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
           const resumableIssueNumbers = new Set(
@@ -359,10 +360,12 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         }
         summary.skipped = selection.skipped;
       }
-      queueObservation = {
-        backlogCount: selection.backlogCount ?? 0,
-        eligibleCount: selection.selected.length
-      };
+      if (observesFullBacklog) {
+        queueObservation = {
+          backlogCount: selection.backlogCount ?? 0,
+          eligibleCount: selection.selected.length
+        };
+      }
       if (selection.selected.length > 0) {
         const verifierPreflightFailure = await preflightVerifier({ config, runCommand, runDir });
         if (verifierPreflightFailure) {
