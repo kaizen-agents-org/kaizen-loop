@@ -14,6 +14,7 @@ import type { CommandRunner } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
 import { projectStateDir, workspaceDir } from '../utils/paths.js';
 import { assertProjectSlug, repoFromRemote, slugFromRepo } from '../utils/slug.js';
+import { runtimeIdentity, type RuntimeIdentity } from '../utils/runtime.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 
@@ -52,6 +53,7 @@ export interface FleetProjectResult {
 }
 
 export interface FleetSyncResult {
+  runtime: RuntimeIdentity;
   root: string;
   owner?: string;
   dryRun: boolean;
@@ -78,6 +80,7 @@ export interface FleetRefreshProject {
 }
 
 export interface FleetRefreshResult {
+  runtime: RuntimeIdentity;
   ok: boolean;
   sync: boolean;
   projects: FleetRefreshProject[];
@@ -104,7 +107,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     .filter((item) => item.error)
     .map((item) => fleetProjectError(item.project, item.error!));
   if (preflightFailures.length > 0) {
-    return { root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
+    return { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
   }
   const baselineRegistry = options.prune || options.syncScheduler
     ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
@@ -130,7 +133,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     projects.push(projectResult);
   }
 
-  const value = { root, owner, dryRun: options.dryRun, projects, pruned: [] as string[] };
+  const value = { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects, pruned: [] as string[] };
   if (fleetHasFailures(value)) return value;
   const seen = new Set(discovered.map((project) => project.slug));
   const applyTopology = (registry: Registry): { registry: Registry; pruned: string[] } => {
@@ -206,6 +209,7 @@ export async function refreshFleet(options: {
     projects.push(await refreshProject(slug, project, Boolean(options.sync), options.runCommand));
   }
   return {
+    runtime: runtimeIdentity(),
     ok: projects.length > 0 && projects.every((project) => project.ok),
     sync: Boolean(options.sync),
     projects

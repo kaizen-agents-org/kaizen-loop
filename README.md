@@ -73,14 +73,18 @@ flowchart TB
 
 Most commands accept `--project <slug>` and `--json`. `run`, `fix`, and `improve` accept `--agent claude|codex` to override the repository default for the current run.
 
-Scheduled launchd and cron jobs run through a launcher installed at
-`$KAIZEN_HOME/bin/run-scheduled.sh`. Before each
-job, the launcher refreshes a dedicated runtime clone under
+Scheduler synchronization installs a stable operator launcher at
+`$KAIZEN_HOME/bin/kaizen` and a scheduled wrapper at
+`$KAIZEN_HOME/bin/run-scheduled.sh`. Use the stable launcher for `doctor`, `fleet`,
+monitor checks, and other operator commands; add `$KAIZEN_HOME/bin` before global
+npm locations on `PATH` if the short `kaizen` command is required. Both operator
+and scheduled commands refresh a dedicated runtime clone under
 `$KAIZEN_HOME/runtime/kaizen-loop` from `origin/main`. It installs dependencies and
 rebuilds only when the main commit changes, then runs the requested job with that
 verified build. The dedicated clone keeps automatic updates from switching or
 resetting a developer checkout. An update or build failure stops the scheduled run
-instead of silently using stale code.
+or operator command instead of silently using stale code. `doctor --json` and
+`fleet --json` include the selected runtime commit and directory.
 
 ## Quickstart
 
@@ -103,6 +107,7 @@ For a target repository:
 ```sh
 kaizen init --agent codex --schedule 02:00
 kaizen scheduler sync
+export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"
 kaizen doctor
 kaizen report "Fix stale config reload" --body "Observed during local dogfooding" --priority P2 --queue
 kaizen run --dry-run
@@ -111,6 +116,11 @@ kaizen smoke --project sandbox-repo --yes --json
 kaizen goal create "Improve onboarding reliability" --success "npm test and npm run typecheck pass" --json
 kaizen goal run <goal-id> --yes --json
 ```
+
+After upgrading from a release without the stable operator launcher, run
+`npm run build && node dist/cli.js scheduler sync` once from the upgraded
+kaizen-loop checkout for each registered project. Subsequent invocations atomically
+refresh both installed launchers from the self-updating runtime checkout.
 
 For an ephemeral GitHub Actions deployment, see [docs/14-github-actions.md](./docs/14-github-actions.md). External repositories add `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs.
 

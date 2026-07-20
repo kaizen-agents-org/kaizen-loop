@@ -283,11 +283,19 @@ function scheduledLauncherPath(): string {
 }
 
 async function installScheduledLauncher(): Promise<void> {
-  const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'run-scheduled.sh');
-  const destination = scheduledLauncherPath();
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.copyFile(source, destination);
-  await fs.chmod(destination, 0o755);
+  const scriptsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
+  const binDir = path.dirname(scheduledLauncherPath());
+  await fs.mkdir(binDir, { recursive: true });
+  for (const [sourceName, destinationName] of [
+    ['run-scheduled.sh', 'run-scheduled.sh'],
+    ['kaizen-runtime.sh', 'kaizen']
+  ]) {
+    const destination = path.join(binDir, destinationName);
+    const temporary = `${destination}.${process.pid}.tmp`;
+    await fs.copyFile(path.join(scriptsDir, sourceName), temporary);
+    await fs.chmod(temporary, 0o755);
+    await fs.rename(temporary, destination);
+  }
 }
 
 function escapeXml(value: string): string {

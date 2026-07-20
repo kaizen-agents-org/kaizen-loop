@@ -15,6 +15,8 @@ afterEach(() => {
 describe('doctorProject', () => {
   it('reports drift while using the fleet workspace config for operational checks', async () => {
     const { repo, workspace } = await setupProject();
+    vi.stubEnv('KAIZEN_RUNTIME_COMMIT', 'abc123');
+    vi.stubEnv('KAIZEN_RUNTIME_DIR', '/runtime/kaizen-loop');
     const workspaceConfig = parse(await fs.readFile(path.join(workspace, '.kaizen', 'config.yml'), 'utf8')) as Record<string, any>;
     workspaceConfig.issues.selection.mode = 'opt-in';
     workspaceConfig.issues.selection.includeLabel = 'kaizen:ready';
@@ -34,6 +36,7 @@ describe('doctorProject', () => {
     const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: runner });
 
     expect(output.ok).toBe(true);
+    expect(output.runtime).toEqual({ commit: 'abc123', directory: '/runtime/kaizen-loop' });
     expect(output.configuration).toMatchObject({
       source: 'workspace',
       path: workspace,
