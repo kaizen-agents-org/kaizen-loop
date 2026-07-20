@@ -67,6 +67,36 @@ describe('summarizeQueue', () => {
 
     expect(queue.health.state).toBe('healthy');
   });
+
+  it('normalizes per-issue gate details without changing displayed skip reasons', () => {
+    const first = summaryWithQueue(
+      'execution authorization could not be verified: actor alice lacks write permission',
+      '2026-07-19T02:00:00.000Z'
+    );
+    const queue = summarizeQueue({
+      backlogCount: 2,
+      eligibleCount: 0,
+      processedCount: 0,
+      skipped: [
+        { number: 1, reason: 'execution authorization could not be verified: actor bob lacks write permission' },
+        { number: 2, reason: 'execution authorization could not be verified: actor carol lacks maintain permission' }
+      ],
+      previousSummaries: [first],
+      starvationRuns: 2,
+      observedAt: '2026-07-20T02:00:00.000Z'
+    });
+
+    expect(queue.skipReasons).toEqual([
+      { reason: 'execution authorization could not be verified: actor bob lacks write permission', count: 1 },
+      { reason: 'execution authorization could not be verified: actor carol lacks maintain permission', count: 1 }
+    ]);
+    expect(queue.health).toMatchObject({
+      state: 'starved',
+      consecutiveZeroThroughputRuns: 2,
+      since: '2026-07-19T02:00:00.000Z'
+    });
+    expect(queue.health.warning).toContain('execution authorization could not be verified');
+  });
 });
 
 function summaryWithQueue(reason: string, startedAt: string): RunSummary {

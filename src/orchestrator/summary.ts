@@ -72,23 +72,24 @@ export function summarizeQueue(options: {
     return queueSummary(options, skipReasons, 'idle', 0);
   }
 
+  const gate = singleSkipGate(skipReasons, options.backlogCount);
   const fullySkippedByOneGate = options.eligibleCount === 0 &&
     options.processedCount === 0 &&
-    skipReasons.length === 1 &&
-    skipReasons[0].count === options.backlogCount;
+    gate !== undefined;
   if (!fullySkippedByOneGate) {
     return queueSummary(options, skipReasons, 'healthy', 0);
   }
 
-  const reason = skipReasons[0].reason;
   const previous = [...options.previousSummaries]
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
     .at(0);
+  const previousGate = previous?.queue
+    ? singleSkipGate(previous.queue.skipReasons, previous.queue.backlogCount)
+    : undefined;
   const repeatsPreviousGate = previous?.queue?.backlogCount !== 0 &&
     previous?.queue?.eligibleCount === 0 &&
-    previous.queue.processedCount === 0 &&
-    previous.queue.skipReasons.length === 1 &&
-    previous.queue.skipReasons[0].reason === reason;
+    previous?.queue?.processedCount === 0 &&
+    previousGate === gate;
   const consecutive = repeatsPreviousGate
     ? previous!.queue!.health.consecutiveZeroThroughputRuns + 1
     : 1;
@@ -96,6 +97,7 @@ export function summarizeQueue(options: {
     ? previous!.queue!.health.since ?? previous!.startedAt
     : options.observedAt;
   const state = consecutive >= options.starvationRuns ? 'starved' : 'degraded';
+  const displayedReason = skipReasons.length === 1 ? skipReasons[0].reason : gate;
   return queueSummary(
     options,
     skipReasons,
@@ -103,9 +105,24 @@ export function summarizeQueue(options: {
     consecutive,
     since,
     state === 'starved'
-      ? `Queue starvation: ${options.backlogCount} backlog issue(s) skipped by "${reason}" for ${consecutive} consecutive run(s).`
+      ? `Queue starvation: ${options.backlogCount} backlog issue(s) skipped by "${displayedReason}" for ${consecutive} consecutive run(s).`
       : undefined
   );
+}
+
+function singleSkipGate(skipReasons: RunQueueSummary['skipReasons'], backlogCount: number): string | undefined {
+  if (skipReasons.length === 0 || skipReasons.reduce((total, item) => total + item.count, 0) !== backlogCount) {
+    return undefined;
+  }
+  const gate = normalizeSkipReason(skipReasons[0].reason);
+  return skipReasons.every((item) => normalizeSkipReason(item.reason) === gate) ? gate : undefined;
+}
+
+function normalizeSkipReason(reason: string): string {
+  if (reason.startsWith('open pull request limit ')) return 'open pull request limit';
+  if (reason.startsWith('generated pull request WIP limit reached ')) return 'generated pull request WIP limit reached';
+  const detailSeparator = reason.indexOf(': ');
+  return detailSeparator === -1 ? reason : reason.slice(0, detailSeparator);
 }
 
 function queueSummary(

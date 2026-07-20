@@ -291,6 +291,7 @@ function currentQueueStatus(openBacklog: number, latest?: RunQueueSummary): RunQ
       health: { state: 'idle', consecutiveZeroThroughputRuns: 0 }
     };
   }
+  if (latest?.health.state === 'idle') return undefined;
   return latest;
 }
 

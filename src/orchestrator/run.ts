@@ -2619,15 +2619,16 @@ async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
 async function readPersistedRunSummaries(stateDir: string): Promise<RunSummary[]> {
   try {
     const runsDir = path.join(stateDir, 'runs');
-    const runs = await fs.readdir(runsDir);
-    const summaries = await Promise.all(runs.map(async (run) => {
+    const runs = (await fs.readdir(runsDir)).sort().reverse();
+    for (const run of runs) {
       try {
-        return JSON.parse(await fs.readFile(path.join(runsDir, run, 'summary.json'), 'utf8')) as RunSummary;
+        const summary = JSON.parse(await fs.readFile(path.join(runsDir, run, 'summary.json'), 'utf8')) as RunSummary;
+        if (summary) return [summary];
       } catch {
-        return undefined;
+        // Ignore incomplete runs and continue to the latest readable summary.
       }
-    }));
-    return summaries.filter((summary): summary is RunSummary => Boolean(summary));
+    }
+    return [];
   } catch {
     return [];
   }
