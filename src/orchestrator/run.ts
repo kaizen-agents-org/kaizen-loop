@@ -138,7 +138,8 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
   let github = new GitHubClient(runCommand, initialConfig.path);
   const stateDir = projectStateDir(resolved.slug);
-  const observesFullBacklog = options.scheduled && options.issueNumbers === undefined && options.issue === undefined;
+  const observesFullBacklog = options.issueNumbers === undefined && options.issue === undefined;
+  const appliesScheduledBacklogLimits = options.scheduled && observesFullBacklog;
   const configuredMaxIssues = (requestedIssueNumbers?: number[]) =>
     options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
   const selectRunIssues = async (): Promise<RunIssueSelection> => {
@@ -185,7 +186,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
     const resumeBranchByIssue = new Map(openCheckpoints.map((state) => [state.issue, state.branch]));
     if (automatic && !options.dryRun) {
-      return { ...budgetedSelection, backlogCount: issues.length, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
+      return { ...budgetedSelection, backlogCount: selectableIssues.length, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
     }
     const limited = await applyOpenPullRequestLimit({
       config,
@@ -203,7 +204,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       github,
       resumableIssueNumbers
     });
-    return { ...wipLimited, backlogCount: issues.length, openPullRequests };
+    return { ...wipLimited, backlogCount: selectableIssues.length, openPullRequests };
   };
 
   if (options.dryRun) {
@@ -324,7 +325,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
           github,
           openPullRequests: selection.openPullRequests
         });
-        if (observesFullBacklog) {
+        if (appliesScheduledBacklogLimits) {
           selection = applyImplementationBudget(selection, configuredMaxIssues());
           const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
           const resumableIssueNumbers = new Set(

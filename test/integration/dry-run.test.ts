@@ -1467,7 +1467,7 @@ describe('runKaizen PR flow', () => {
     expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'comment')).toBe(false);
   });
 
-  it('closes merged-PR issues without removing a pending needs-human label', async () => {
+  it('excludes reconciled merged-PR issues from the scheduled queue backlog', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -1475,7 +1475,10 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+      defaultConfigWith(
+        { guardian: { enabled: false }, run: { maxOpenPullRequests: 0 } },
+        { agent: 'claude', setup: null, verify: [] }
+      )
     );
     await saveRegistry({
       version: 1,
@@ -1485,7 +1488,7 @@ describe('runKaizen PR flow', () => {
           localPath: repo,
           workspacePath: workspace,
           schedule: '02:00',
-          enabled: false,
+          enabled: true,
           createdAt: '2026-06-12T00:00:00Z'
         }
       }
@@ -1501,7 +1504,8 @@ describe('runKaizen PR flow', () => {
                 body: '<!-- kaizen-loop:result {"attempt":1,"outcome":"pr-created","pr":"https://github.com/o/r/pull/4"} -->'
               }
             ]
-          })
+          }),
+          issue(2)
         ]));
       }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
@@ -1517,19 +1521,30 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh' && args[0] === 'repo' && args[1] === 'view') {
         return result(command, args, repo, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
       }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, '[]');
+      }
       return result(command, args, repo, '');
     });
 
     const summary = await runKaizen({
       cwd: repo,
       project: 'o-r',
-      scheduled: false,
+      scheduled: true,
+      trigger: 'afternoon',
       dryRun: false,
       json: true,
       runCommand: runner
     });
 
     expect('issues' in summary && summary.issues).toEqual([]);
+    expect('issues' in summary && summary.queue).toMatchObject({
+      backlogCount: 1,
+      eligibleCount: 0,
+      processedCount: 0,
+      skipReasons: [{ reason: 'open pull request limit reached (0/0)', count: 1 }],
+      health: { state: 'degraded' }
+    });
     expect(runner.mock.calls).toContainEqual([
       'gh',
       [
@@ -1562,6 +1577,50 @@ describe('runKaizen PR flow', () => {
       args.some((arg) => arg.includes('kaizen:needs-human'))
     )).toBe(false);
     expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
+  });
+
+  it('records queue health for a manual full-backlog run', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith(
+        { guardian: { enabled: false }, run: { maxOpenPullRequests: 0 } },
+        { agent: 'claude', setup: null, verify: [] }
+      )
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace,
+          schedule: '02:00', enabled: false, createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1)]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, '[]');
+      }
+      return result(command, args, repo, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
+    });
+
+    expect('issues' in summary && summary.queue).toMatchObject({
+      backlogCount: 1,
+      eligibleCount: 1,
+      processedCount: 1,
+      health: { state: 'healthy' }
+    });
   });
 
   it('previews merged PR issue reconciliation during dry-run without mutating GitHub', async () => {
