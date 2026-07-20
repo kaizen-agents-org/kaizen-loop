@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { parseAgentResult } from '../agents/claude.js';
-import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
+import { buildActionsFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import type { AgentResult } from '../agents/types.js';
 import { VerifierAgentAdapter } from '../agents/verifier.js';
 import { loadConfig } from '../config/config.js';
@@ -76,7 +76,7 @@ export async function prepareActionsFix(options: PrepareActionsFixOptions) {
   await assertAuthorized(context.github, context.repo, context.issue, context.config);
   const git = new GitClient(command, options.cwd);
   const baseSha = await git.revParse('HEAD');
-  const prompt = buildFixPrompt({ repo: context.repo, issue: context.issue, config: context.config, attempt: 1 });
+  const prompt = buildActionsFixPrompt({ repo: context.repo, issue: context.issue, config: context.config, attempt: 1 });
   await fs.rm(options.outputDir, { recursive: true, force: true });
   await fs.mkdir(options.outputDir, { recursive: true, mode: 0o700 });
   await fs.writeFile(path.join(options.outputDir, 'prompt.md'), prompt);
@@ -114,6 +114,10 @@ export async function verifyActionsFix(options: VerifyActionsFixOptions) {
   await applyPatch(command, options.cwd, options.patchPath);
   await assertWorkingTreeMatchesPatch(command, options.cwd, sha256(patch));
   const workspace = new WorkspaceManager(command, options.cwd);
+  const initialDiff = await workspace.collectWorkingTreeDiffStats(context.config);
+  if (initialDiff.forbiddenFiles.length) {
+    throw new Error(`Patch changes forbidden paths: ${initialDiff.forbiddenFiles.join(', ')}`);
+  }
   const setup = await workspace.runSetup(context.config);
   if (setup && !setup.ok) throw new Error(`Setup failed: ${setup.command}\n${setup.output}`);
   const verification = await workspace.runVerify(context.config);
@@ -186,6 +190,10 @@ export async function publishActionsFix(options: PublishActionsFixOptions) {
   const git = new GitClient(command, options.cwd);
   const head = await git.revParse('HEAD');
   if (head !== artifact.baseSha) throw new Error(`Publish checkout ${head} does not match verified base ${artifact.baseSha}.`);
+  const liveBase = await context.github.getBranchHeadSha(context.repo, context.config.git.defaultBranch);
+  if (liveBase !== artifact.baseSha) {
+    throw new Error(`Default branch advanced from verified base ${artifact.baseSha} to ${liveBase}.`);
+  }
   await applyPatch(command, options.cwd, patchPath);
   const workspace = new WorkspaceManager(command, options.cwd);
   const diff = await workspace.collectWorkingTreeDiffStats(context.config);

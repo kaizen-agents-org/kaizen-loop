@@ -270,6 +270,11 @@ export class GitHubClient {
     return payload.defaultBranchRef?.name ?? '';
   }
 
+  async getBranchHeadSha(repo: string, branch: string): Promise<string> {
+    const result = await this.gh(['api', `repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`, '--jq', '.object.sha']);
+    return result.stdout.trim();
+  }
+
   async getPullRequestLinkage(number: number): Promise<GitHubPullRequestLinkage> {
     const result = await this.gh([
       'pr',

@@ -17,6 +17,10 @@ afterEach(async () => {
 describe('GitHub Actions fix workflow', () => {
   it('prepares an authorized provider prompt without a local registry', async () => {
     const cwd = await configuredRepo();
+    await fs.writeFile(
+      path.join(cwd, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'codex', setup: null, verify: ['npm test'] })
+    );
     const calls: string[] = [];
     const fakeRun: CommandRunner = vi.fn(async (command, args) => {
       calls.push(`${command} ${args.join(' ')}`);
@@ -34,7 +38,10 @@ describe('GitHub Actions fix workflow', () => {
     const prepared = await prepareActionsFix({ cwd, issue: 199, outputDir, runCommand: fakeRun });
 
     expect(prepared).toMatchObject({ repo: 'owner/repo', issue: 199, baseSha: 'a'.repeat(40) });
-    expect(await fs.readFile(path.join(outputDir, 'prompt.md'), 'utf8')).toContain('# Issue #199: Add Actions workflow');
+    const prompt = await fs.readFile(path.join(outputDir, 'prompt.md'), 'utf8');
+    expect(prompt).toContain('# Issue #199: Add Actions workflow');
+    expect(prompt).toContain('Do not run repository setup or verification commands in this provider job');
+    expect(prompt).not.toContain('npm test');
     expect(calls.some((call) => call.includes('collaborators/maintainer/permission'))).toBe(true);
     await expect(fs.access(path.join(cwd, '.kaizen', 'registry.json'))).rejects.toThrow();
   });
@@ -109,6 +116,48 @@ describe('GitHub Actions fix workflow', () => {
     expect(stats.changedLines).toBe(1);
   });
 
+  it('rejects forbidden patch paths before repository setup runs', async () => {
+    const cwd = await configuredRepo();
+    await fs.writeFile(
+      path.join(cwd, '.kaizen', 'config.yml'),
+      defaultConfigYaml({ agent: 'codex', setup: 'touch setup-ran', verify: [] })
+    );
+    await fs.writeFile(path.join(cwd, 'README.md'), 'base\n');
+    await runCommand('git', ['init', '-b', 'main'], { cwd });
+    await runCommand('git', ['add', '.'], { cwd });
+    await runCommand('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'base'], { cwd });
+    await fs.writeFile(path.join(cwd, 'secret.pem'), 'secret\n');
+    await runCommand('git', ['add', '-N', 'secret.pem'], { cwd });
+    const patch = (await runCommand('git', ['diff', '--binary', 'HEAD'], { cwd })).stdout;
+    await runCommand('git', ['reset', '--', 'secret.pem'], { cwd });
+    await fs.rm(path.join(cwd, 'secret.pem'));
+    const patchPath = path.join(cwd, 'change.patch');
+    const providerPath = path.join(cwd, 'provider.json');
+    await fs.writeFile(patchPath, patch);
+    await fs.writeFile(providerPath, encodeProviderResult('codex', JSON.stringify({
+      status: 'fixed', summary: 'Add secret', notes: '', discoveredIssues: []
+    })));
+    const fakeRun: CommandRunner = async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
+      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+      if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
+        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
+      }
+      if (command === 'gh' && args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
+      return runCommand(command, args, options);
+    };
+
+    await expect(verifyActionsFix({
+      cwd,
+      issue: 199,
+      patchPath,
+      providerResultPath: providerPath,
+      outputDir: path.join(cwd, 'verified'),
+      runCommand: fakeRun
+    })).rejects.toThrow('Patch changes forbidden paths: secret.pem');
+    await expect(fs.access(path.join(cwd, 'setup-ran'))).rejects.toThrow();
+  });
+
   it('verifies and publishes the exact authorized patch without executing publish hooks', async () => {
     const cwd = await configuredRepo();
     await fs.writeFile(path.join(cwd, 'README.md'), 'before\n');
@@ -127,6 +176,8 @@ describe('GitHub Actions fix workflow', () => {
       status: 'fixed', summary: 'Update README', notes: '', discoveredIssues: []
     })));
     let authorizationChecks = 0;
+    let liveBaseChecks = 0;
+    let liveBaseSha = 'b'.repeat(40);
     const fakeRun: CommandRunner = async (command, args, options) => {
       if (command === 'gh' && args[0] === 'repo' && args.includes('nameWithOwner')) return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'repo') return result(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
@@ -136,6 +187,10 @@ describe('GitHub Actions fix workflow', () => {
         return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
       }
       if (command === 'gh' && args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/git/ref/heads/main') {
+        liveBaseChecks += 1;
+        return result(command, args, `${liveBaseSha}\n`);
+      }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, 'https://github.com/owner/repo/pull/7\n');
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
         return result(command, args, JSON.stringify({
@@ -160,10 +215,15 @@ describe('GitHub Actions fix workflow', () => {
     expect(artifact.files).toEqual(['README.md']);
     await runCommand('git', ['reset', '--hard', 'HEAD'], { cwd });
 
+    await expect(publishActionsFix({ cwd, artifactDir, runCommand: fakeRun }))
+      .rejects.toThrow('Default branch advanced from verified base');
+    expect((await runCommand('git', ['status', '--porcelain', '--', 'README.md'], { cwd })).stdout).toBe('');
+    liveBaseSha = baseSha;
     const published = await publishActionsFix({ cwd, artifactDir, runCommand: fakeRun });
     expect(published.url).toBe('https://github.com/owner/repo/pull/7');
     expect(published.body).toContain('Closes #199');
-    expect(authorizationChecks).toBe(2);
+    expect(authorizationChecks).toBe(3);
+    expect(liveBaseChecks).toBe(2);
     expect((await runCommand('git', ['show', 'HEAD:README.md'], { cwd })).stdout).toBe('after\n');
   });
 
@@ -176,8 +236,8 @@ describe('GitHub Actions fix workflow', () => {
     expect(workflow.jobs.claude.permissions).toEqual({ contents: 'read' });
     expect(workflow.jobs.verify.permissions).toEqual({ contents: 'read', issues: 'read' });
     expect(workflow.jobs.publish.permissions).toEqual({ contents: 'write', issues: 'read', 'pull-requests': 'write' });
-    expect(raw).toContain('openai/codex-action@b11346a6fa031e2e164ab4b7c7ea201afffd7d59');
-    expect(raw).toContain('anthropics/claude-code-action@6da9ca517d966862907966f30608e9ea33b715e9');
+    expect(raw).toContain('openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56');
+    expect(raw).toContain('anthropics/claude-code-action@273fe825408ddced56cb02b228a74c72bed8241e');
     expect(workflow.jobs.provider_gate).toBeDefined();
     expect(raw).not.toContain('Fail Codex attempt without a patch');
     expect(raw).not.toContain('Fail Claude attempt without a patch');
