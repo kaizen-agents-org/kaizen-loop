@@ -623,6 +623,23 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[1][1]).toContain('kaizen-agents-org/verifier');
   });
 
+  it('does not retry without a required label when issue creation reports it missing', async () => {
+    const runner = vi.fn<CommandRunner>(async () => {
+      throw new Error("could not add label: 'kaizen:authorized' not found");
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    await expect(client.createIssue({
+      repo: 'kaizen-agents-org/verifier',
+      title: 'follow-up',
+      body: 'details',
+      labels: ['kaizen', 'kaizen:authorized', 'kaizen:ready', 'kaizen:P2'],
+      requiredLabels: ['kaizen', 'kaizen:authorized', 'kaizen:ready']
+    })).rejects.toThrow("kaizen:authorized' not found");
+
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
   it('searches goal issue markers with a quote-free goal id token', async () => {
     const marker = '<!-- kaizen-loop:goal {"goalId":"goal-123","iteration":1} -->';
     const runner = vi.fn<CommandRunner>(async (command, args) => ({

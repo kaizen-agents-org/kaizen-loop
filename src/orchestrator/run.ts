@@ -1024,6 +1024,7 @@ async function processIssue(options: {
           ...await fileDiscoveredIssues({
             sourceIssue: options.issue,
             projectRepo: options.project.repo,
+            config: options.config,
             github: options.github,
             runId: options.runId,
             issueDir,
@@ -2335,6 +2336,7 @@ function withDiscoveredFollowups(
 async function fileDiscoveredIssues(options: {
   sourceIssue: GitHubIssue;
   projectRepo: string;
+  config: KaizenConfig;
   github: GitHubClient;
   runId: string;
   issueDir: string;
@@ -2372,6 +2374,7 @@ async function fileDiscoveredIssues(options: {
         options.filedKeys.add(key);
         continue;
       }
+      const requiredLabels = requiredLabelsForDiscoveredIssue(options.config);
       const created = await options.github.createIssue({
         repo,
         title: issue.title,
@@ -2383,7 +2386,8 @@ async function fileDiscoveredIssues(options: {
           sourceRepo: options.projectRepo,
           runId: options.runId
         }),
-        labels: labelsForDiscoveredIssue(issue)
+        labels: labelsForDiscoveredIssue(issue, requiredLabels),
+        requiredLabels
       });
       filed.push({ title: issue.title, repo, status: 'created', url: created.url });
       options.filedKeys.add(key);
@@ -2563,8 +2567,17 @@ function projectPaths(localPath: string, workspacePath: string): string[] {
   ];
 }
 
-function labelsForDiscoveredIssue(issue: DiscoveredIssue): string[] {
-  const labels = new Set(['kaizen']);
+function requiredLabelsForDiscoveredIssue(config: KaizenConfig): string[] {
+  const labels = new Set([config.issues.label]);
+  if (config.safety.operationMode === 'dogfood') {
+    labels.add(config.issues.executionAuthorization.label);
+    labels.add(config.issues.selection.includeLabel);
+  }
+  return [...labels];
+}
+
+function labelsForDiscoveredIssue(issue: DiscoveredIssue, requiredLabels: string[]): string[] {
+  const labels = new Set(requiredLabels);
   const severity = issue.severity?.trim().toUpperCase();
   if (severity && /^P[0-2]$/.test(severity)) labels.add(`kaizen:${severity}`);
   for (const label of issue.labels ?? []) {

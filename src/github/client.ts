@@ -368,14 +368,20 @@ export class GitHubClient {
     return issues.filter((issue) => issue.body?.includes(marker)).sort((left, right) => left.number - right.number);
   }
 
-  async createIssue(options: { title: string; body: string; labels: string[]; repo?: string }): Promise<GitHubIssue> {
+  async createIssue(options: {
+    title: string;
+    body: string;
+    labels: string[];
+    requiredLabels?: string[];
+    repo?: string;
+  }): Promise<GitHubIssue> {
     let labels = options.labels;
     let result;
     while (!result) {
       try {
         result = await this.gh(createIssueArgs(options, labels), { noRetry: true });
       } catch (error) {
-        const nextLabels = labelsAfterMissingLabelError(labels, error);
+        const nextLabels = labelsAfterMissingLabelError(labels, error, options.requiredLabels);
         if (nextLabels.length === labels.length) throw error;
         labels = nextLabels;
       }
@@ -855,14 +861,22 @@ function isMissingLabelError(error: unknown): boolean {
   return /label/i.test(message) && /not found|does not exist|could not resolve|missing/i.test(message);
 }
 
-function labelsAfterMissingLabelError(labels: string[], error: unknown): string[] {
+function labelsAfterMissingLabelError(labels: string[], error: unknown, requiredLabels?: string[]): string[] {
   if (labels.length === 0 || !isMissingLabelError(error)) return labels;
   const message = String(error).toLowerCase();
-  const baseLabel = labels[0];
-  const missingOptional = labels.slice(1).find((label) => message.includes(label.toLowerCase()));
+  if (!requiredLabels) {
+    const baseLabel = labels[0];
+    const missingOptional = labels.slice(1).find((label) => message.includes(label.toLowerCase()));
+    if (missingOptional) return labels.filter((label) => label !== missingOptional);
+    if (baseLabel && labels.length > 1) return [baseLabel];
+    return [];
+  }
+  const required = new Set(requiredLabels);
+  const missingOptional = labels.find((label) => !required.has(label) && message.includes(label.toLowerCase()));
   if (missingOptional) return labels.filter((label) => label !== missingOptional);
-  if (baseLabel && labels.length > 1) return [baseLabel];
-  return [];
+  if (requiredLabels.some((label) => message.includes(label.toLowerCase()))) return labels;
+  const remainingRequired = labels.filter((label) => required.has(label));
+  return remainingRequired.length < labels.length ? remainingRequired : labels;
 }
 
 function emptyResult(args: string[], cwd: string) {

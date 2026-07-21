@@ -2426,7 +2426,18 @@ describe('runKaizen PR flow', () => {
     vi.stubEnv('KAIZEN_HOME', home);
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
-    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith(
+        {
+          issues: {
+            executionAuthorization: { label: 'kaizen:approved', minimumPermission: 'triage' },
+            selection: { mode: 'opt-in', includeLabel: 'kaizen:queued' }
+          }
+        },
+        { agent: 'claude', setup: null, verify: ['npm test'] }
+      )
+    );
     await saveRegistry({
       version: 1,
       projects: {
@@ -2534,7 +2545,7 @@ describe('runKaizen PR flow', () => {
     expect(issueCreateArgs).toContain('--repo');
     expect(issueCreateArgs).toContain('kaizen-agents-org/verifier');
     expect(issueCreateArgs).toContain('--label');
-    expect(issueCreateArgs).toContain('kaizen,kaizen:P2');
+    expect(issueCreateArgs).toContain('kaizen,kaizen:approved,kaizen:queued,kaizen:P2');
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('Source issue');
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('<!-- kaizen-loop:discovered-issue:v1');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
@@ -2824,7 +2835,7 @@ describe('runKaizen PR flow', () => {
     const issueCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue create'));
     expect(issueCreates.length).toBe(2);
     expect(issueCreates.at(-1)?.[1]).toContain('--label');
-    expect(issueCreates.at(-1)?.[1]).toContain('kaizen');
+    expect(issueCreates.at(-1)?.[1]).toContain('kaizen,kaizen:authorized,kaizen:ready');
     expect(issueCreates.at(-1)?.[1]).toContain('external/project');
   });
 
