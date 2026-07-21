@@ -623,6 +623,56 @@ describe('GitHubClient', () => {
     expect(runner.mock.calls[1][1]).toContain('kaizen-agents-org/verifier');
   });
 
+  it.each(['kaizen', 'kaizen:authorized', 'kaizen:ready'])(
+    'does not retry without required label %s when issue creation reports it missing',
+    async (missingLabel) => {
+      const runner = vi.fn<CommandRunner>(async () => {
+        throw new Error(`could not add label: '${missingLabel}' not found`);
+      });
+      const client = new GitHubClient(runner, '/repo');
+
+      await expect(client.createIssue({
+        repo: 'kaizen-agents-org/verifier',
+        title: 'follow-up',
+        body: 'details',
+        labels: ['kaizen', 'kaizen:authorized', 'kaizen:ready', 'kaizen:P2'],
+        requiredLabels: ['kaizen', 'kaizen:authorized', 'kaizen:ready']
+      })).rejects.toThrow(`${missingLabel}' not found`);
+
+      expect(runner).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('retries without an optional label while retaining every required label', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      const labelValue = String(args.at(args.indexOf('--label') + 1));
+      if (labelValue.includes('kaizen:P2')) {
+        throw new Error("could not add label: 'kaizen:P2' not found");
+      }
+      return {
+        command,
+        args,
+        exitCode: 0,
+        stdout: 'https://github.com/kaizen-agents-org/verifier/issues/77\n',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+    const client = new GitHubClient(runner, '/repo');
+
+    const issue = await client.createIssue({
+      repo: 'kaizen-agents-org/verifier',
+      title: 'follow-up',
+      body: 'details',
+      labels: ['kaizen', 'kaizen:authorized', 'kaizen:ready', 'kaizen:P2'],
+      requiredLabels: ['kaizen', 'kaizen:authorized', 'kaizen:ready']
+    });
+
+    expect(issue.labels.map(({ name }) => name)).toEqual(['kaizen', 'kaizen:authorized', 'kaizen:ready']);
+    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner.mock.calls[1][1]).toContain('kaizen,kaizen:authorized,kaizen:ready');
+  });
+
   it('searches goal issue markers with a quote-free goal id token', async () => {
     const marker = '<!-- kaizen-loop:goal {"goalId":"goal-123","iteration":1} -->';
     const runner = vi.fn<CommandRunner>(async (command, args) => ({

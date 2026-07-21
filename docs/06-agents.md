@@ -141,7 +141,7 @@ builder-agent の結果は `.kaizen/builder/build-result.json` から読む。
 
 正常な結果ファイルを読めない場合に限り、builder-agent が保存した `.kaizen/builder/discovered-issues.json` の JSON 配列を fallback として読む。各 entry は通常の `discoveredIssues[]` と同じ strict schema で個別に検証し、不正な entry は破棄する。artifact 全体が不正でも元の builder 失敗理由は変更しない。実行前に古い artifact を削除し、回収後は通常と同じ routing・open Issue 検索・fingerprint 重複排除を通す。
 
-`discoveredIssues[].repo` はバグを修正すべき対象リポジトリを指定する。処理中 Issue のリポジトリではなく、fleet / cross-repository 検証で失敗した checkout・workspace・ログが指す repository を入れること。値は `kaizen-loop` / `builder-agent` / `verifier` / `.github` / `coderabbit` / `renovate-config` の短縮名、または `owner/repo` を受け付ける。`github` は `.github`、`renovate` は `renovate-config` の alias として扱う。未指定または不明な短縮名の場合は処理中プロジェクトのリポジトリへ起票する。ただし本文・証拠・期待値に registry 登録済み repo の checkout/workspace/worktree パスが含まれる場合は、その repo へ補正して起票する。起票ラベルは `kaizen` と、`severity: P0|P1|P2` がある場合の `kaizen:P*` に限定する。
+`discoveredIssues[].repo` はバグを修正すべき対象リポジトリを指定する。処理中 Issue のリポジトリではなく、fleet / cross-repository 検証で失敗した checkout・workspace・ログが指す repository を入れること。値は `kaizen-loop` / `builder-agent` / `verifier` / `.github` / `coderabbit` / `renovate-config` の短縮名、または `owner/repo` を受け付ける。`github` は `.github`、`renovate` は `renovate-config` の alias として扱う。未指定または不明な短縮名の場合は処理中プロジェクトのリポジトリへ起票する。ただし本文・証拠・期待値に registry 登録済み repo の checkout/workspace/worktree パスが含まれる場合は、その repo へ補正して起票する。起票時は `issues.label` と、`severity: P0|P1|P2` がある場合の `kaizen:P*` を付ける。`dogfood` ではさらに設定済みの execution authorization / selection label を必須とし、付与できなければ起票しない。`external` ではそれらを自動付与しない。
 
 ## 5. バックエンド比較
 
