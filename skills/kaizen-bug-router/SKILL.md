@@ -42,11 +42,11 @@ Only pass `--label` values that exist. Prefer `bug` for ordinary bug reports and
 
 Issue creation and execution authorization are separate:
 
-- Add `kaizen` by default when the label exists, but do not add `kaizen:ready` or any other execution-selection label by default.
-- Add the execution authorization label only when the user asks to queue, approve, run, execute, or put the issue on the Kaizen Loop.
-- In opt-in selection mode, add the repository's configured execution authorization label only when it exists.
-- If the user asks for immediate execution, file the issue, add the execution authorization label when available, then report the explicit command that should run next, such as `kaizen fix <issue>`.
-- If the issue needs human clarification before automation, do not add an execution authorization label; state what clarification is needed.
+- Add `kaizen` by default when the label exists, but do not add `kaizen:authorized`, `kaizen:ready`, or any other authorization or selection label by default.
+- When the user asks to queue, approve, run, execute, or put the issue on the Kaizen Loop, add both the repository's execution authorization label and its configured `issues.selection.includeLabel` when those labels exist.
+- In the managed opt-in fleet, this means adding both `kaizen:authorized` and `kaizen:ready`; either label alone leaves the issue ineligible.
+- If the user asks for immediate execution, file the issue, add both labels when available, then report the explicit command that should run next, such as `kaizen fix <issue>`.
+- If the issue needs human clarification before automation, do not add an authorization or selection label; state what clarification is needed.
 
 ## Issue Body
 

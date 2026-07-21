@@ -2,7 +2,7 @@
 
 ## Kaizen Issue-to-PR MVP
 
-- Treat GitHub Issues labeled `kaizen` as eligible for Kaizen Loop processing.
+- Treat GitHub Issues as selected for Kaizen Loop processing only when they have both `kaizen` and `kaizen:ready`; manual/external authorization also requires `kaizen:authorized`.
 - Keep the MVP PR-first: create ready-for-review pull requests, not draft PRs, unless explicitly requested.
 - Every implementation PR must include a GitHub closing keyword in the PR body, for example `Closes #123`.
 - Do not rely on issue comments, PR titles, or branch names alone to link issues.
