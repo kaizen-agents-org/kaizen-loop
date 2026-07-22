@@ -74,7 +74,7 @@ describe('kaizen report CLI', () => {
     expect(output.fix.issues[0].prUrl).toBe('https://github.com/o/r/pull/4');
     const calls = await readCalls(logPath);
     const issueCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('issue create'));
-    expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready');
+    expect(issueCreate?.args[issueCreate.args.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:authorized,kaizen:ready');
     expect(calls.some((call) => call.command === 'builder-agent' && call.args.length === 0)).toBe(true);
     const prCreate = calls.find((call) => call.command === 'gh' && call.args.join(' ').startsWith('pr create'));
     expect(prCreate).toBeDefined();
@@ -145,8 +145,8 @@ describe('reportIssue', () => {
     expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
   });
 
-  it('adds the configured queue label when requested', async () => {
-    const { repo } = await setupProject();
+  it('adds the configured authorization and queue labels when requested', async () => {
+    const { repo } = await setupProject({ authorizationLabel: 'kaizen:trusted' });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
         return result(command, args, repo, 'https://github.com/o/r/issues/14\n');
@@ -171,9 +171,9 @@ describe('reportIssue', () => {
     });
 
     const labelCreates = runner.mock.calls.filter(([, args]) => args.join(' ').startsWith('label create'));
-    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:ready']);
+    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:trusted', 'kaizen:ready']);
     const createArgs = runner.mock.calls.find(([, args]) => args.join(' ').startsWith('issue create'))?.[1];
-    expect(createArgs?.[createArgs.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready');
+    expect(createArgs?.[createArgs.indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:trusted,kaizen:ready');
   });
 });
 
@@ -235,7 +235,7 @@ describe('reportIssueNow', () => {
   });
 });
 
-async function setupProject(options: { verify?: string[]; guardianEnabled?: boolean } = {}) {
+async function setupProject(options: { verify?: string[]; guardianEnabled?: boolean; authorizationLabel?: string } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -244,6 +244,9 @@ async function setupProject(options: { verify?: string[]; guardianEnabled?: bool
   await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
   let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: options.verify ?? [] });
   config = config.replace('operationMode: external', 'operationMode: dogfood');
+  if (options.authorizationLabel) {
+    config = config.replace('label: kaizen:authorized', `label: ${options.authorizationLabel}`);
+  }
   if (options.guardianEnabled === false) {
     config = config.replace('guardian:\n  enabled: true', 'guardian:\n  enabled: false');
   }

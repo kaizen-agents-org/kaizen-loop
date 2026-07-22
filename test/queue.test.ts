@@ -12,8 +12,8 @@ afterEach(() => {
 });
 
 describe('queueIssues', () => {
-  it('adds the base and queue labels to each issue', async () => {
-    const { repo } = await setupProject();
+  it('adds the base, configured authorization, and queue labels to each issue', async () => {
+    const { repo } = await setupProject({ authorizationLabel: 'kaizen:trusted' });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => result(command, args, options?.cwd, ''));
 
     const output = await queueIssues({
@@ -23,13 +23,13 @@ describe('queueIssues', () => {
       runCommand: runner
     });
 
-    expect(output).toEqual({ queued: [3, 4], labels: ['kaizen', 'kaizen:ready'] });
+    expect(output).toEqual({ queued: [3, 4], labels: ['kaizen', 'kaizen:trusted', 'kaizen:ready'] });
     const labelCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('label create'));
-    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:ready']);
+    expect(labelCreates.map(([, args]) => args[2])).toEqual(['kaizen', 'kaizen:trusted', 'kaizen:ready']);
     const edits = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue edit'));
     expect(edits.map(([, args]) => [args[2], args.at(-1)])).toEqual([
-      ['3', 'kaizen,kaizen:ready'],
-      ['4', 'kaizen,kaizen:ready']
+      ['3', 'kaizen,kaizen:trusted,kaizen:ready'],
+      ['4', 'kaizen,kaizen:trusted,kaizen:ready']
     ]);
   });
 });
@@ -79,13 +79,17 @@ describe('listQueuedIssues', () => {
   });
 });
 
-async function setupProject() {
+async function setupProject(options: { authorizationLabel?: string } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
   vi.stubEnv('KAIZEN_HOME', home);
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
-  await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+  let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: [] });
+  if (options.authorizationLabel) {
+    config = config.replace('label: kaizen:authorized', `label: ${options.authorizationLabel}`);
+  }
+  await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), config);
   await saveRegistry({
     version: 1,
     projects: {
