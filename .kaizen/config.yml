@@ -46,6 +46,14 @@ scheduler:
       run:
         mode: watch
         skipIfRunning: true
+    weekly-sandbox-smoke:
+      enabled: true
+      schedule:
+        type: weekly
+        days: [SU]
+        time: "04:45"
+      run:
+        mode: smoke
 
 commands:
   setup: "npm ci"
