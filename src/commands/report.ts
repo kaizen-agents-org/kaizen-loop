@@ -34,9 +34,13 @@ export async function reportIssue(options: ReportIssueOptions) {
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
   const labels = [config.issues.label, `kaizen:${options.priority ?? 'P2'}`, ...options.extraLabels];
   if (options.queue) {
-    const queueLabels = [config.issues.label, config.issues.selection.includeLabel];
+    const queueLabels = uniqueLabels([
+      config.issues.label,
+      config.issues.executionAuthorization.label,
+      config.issues.selection.includeLabel
+    ]);
     await github.createLabels(queueLabels);
-    labels.push(config.issues.selection.includeLabel);
+    labels.push(...queueLabels.filter((label) => !labels.includes(label)));
   }
   if (options.direct) labels.push('kaizen:direct');
   if (options.prOnly) labels.push('kaizen:pr-only');
@@ -46,6 +50,10 @@ export async function reportIssue(options: ReportIssueOptions) {
     body: options.body,
     labels
   });
+}
+
+function uniqueLabels(labels: string[]): string[] {
+  return [...new Set(labels)];
 }
 
 export async function reportIssueNow(options: ReportIssueNowOptions) {

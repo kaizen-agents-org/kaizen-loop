@@ -93,10 +93,12 @@ describe('runSandboxSmoke', () => {
     expect(await fileExists(path.join(home, 'projects', 'o-r', 'run.lock'))).toBe(false);
     const labelCreates = runner.mock.calls.filter(([, args]) => args[0] === 'label' && args[1] === 'create');
     expect(labelCreates.map(([, args]) => args[2])).toEqual(
-      expect.arrayContaining(['kaizen', 'kaizen:ready', 'kaizen:pr-only'])
+      expect.arrayContaining(['kaizen', 'kaizen:authorized', 'kaizen:ready', 'kaizen:pr-only'])
     );
     const issueCreate = runner.mock.calls.find(([, args]) => args[0] === 'issue' && args[1] === 'create');
-    expect(issueCreate?.[1][issueCreate[1].indexOf('--label') + 1]).toBe('kaizen,kaizen:P2,kaizen:ready,kaizen:pr-only');
+    expect(issueCreate?.[1][issueCreate[1].indexOf('--label') + 1]).toBe(
+      'kaizen,kaizen:P2,kaizen:authorized,kaizen:ready,kaizen:pr-only'
+    );
   });
 
   it('does not create a smoke issue while another run holds the project lock', async () => {
