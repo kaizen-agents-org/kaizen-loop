@@ -178,8 +178,11 @@ echo "$STRUCTURED_BODY" | kaizen report "<タイトル>" --body-file - --priorit
 # queued 実行に載せる場合は明示する
 kaizen queue <Issue番号>
 
-# 代替: gh CLI 直接(kaizen ラベルを必ず付けること。opt-in 運用で実行許可するなら kaizen:ready も付ける)
+# 代替: gh CLI 直接(登録だけなら kaizen ラベルを付ける)
 gh issue create --label kaizen --title "..." --body "..."
+
+# gh CLI で queued 実行まで許可する場合(既定ラベル名)
+gh issue create --label kaizen --label kaizen:authorized --label kaizen:ready --title "..." --body "..."
 ```
 
-`kaizen` は Kaizen 管理対象であることを示す。`issues.selection.mode: opt-in` の場合、scheduled / backlog 実行に載せるには `issues.selection.includeLabel`(デフォルト `kaizen:ready`)が別途必要。Issue 登録 skill は、ユーザが「queue」「実行して」「kaizen-loop に載せて」と明示した場合だけ ready label を付ける。
+`kaizen` は Kaizen 管理対象であることを示す。queued 実行には `issues.executionAuthorization.label`(デフォルト `kaizen:authorized`)による実行許可が必要で、`issues.selection.mode: opt-in` の場合は `issues.selection.includeLabel`(デフォルト `kaizen:ready`)による選択も別途必要になる。`kaizen queue` は base、実行許可、選択の各設定ラベルを付ける。Issue 登録 skill は、ユーザが「queue」「実行して」「kaizen-loop に載せて」と明示した場合だけ実行許可 label と ready label の両方を付け、登録だけではどちらも付けない。
