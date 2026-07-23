@@ -221,4 +221,14 @@ commands:
     expect(configSpec).toMatch(/agent\.default:\s*codex/);
     expect(configSpec).toMatch(/生成時のデフォルト値/);
   });
+
+  it('documents the execution-gate labels created by kaizen init', () => {
+    const cliSpec = fs.readFileSync('docs/02-cli-spec.md', 'utf8');
+    const labelCreationStep = cliSpec.match(/^4\. \*\*GitHub ラベル作成\*\*.*$/m)?.[0];
+
+    expect(labelCreationStep).toContain('`kaizen:authorized`');
+    expect(labelCreationStep).toContain('`kaizen:ready`');
+    expect(labelCreationStep).toContain('実行承認');
+    expect(labelCreationStep).toContain('issues.selection.mode: opt-in');
+  });
 });
