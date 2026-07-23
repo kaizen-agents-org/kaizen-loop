@@ -53,13 +53,14 @@ describe('unqueueIssues', () => {
 });
 
 describe('listQueuedIssues', () => {
-  it('lists queued issues that still have the base kaizen label', async () => {
-    const { repo } = await setupProject();
+  it('lists queued issues that have the base and configured authorization labels', async () => {
+    const { repo } = await setupProject({ authorizationLabel: 'kaizen:trusted' });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([
-          issue(1, ['kaizen', 'kaizen:ready']),
-          issue(2, ['kaizen:ready'])
+          issue(1, ['kaizen', 'kaizen:trusted', 'kaizen:ready']),
+          issue(2, ['kaizen', 'kaizen:ready']),
+          issue(3, ['kaizen:trusted', 'kaizen:ready'])
         ]));
       }
       return result(command, args, options?.cwd, '');

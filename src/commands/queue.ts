@@ -51,7 +51,11 @@ export async function listQueuedIssues(options: QueueListOptions): Promise<{ lab
   const issues = await github.listIssues(config.issues.selection.includeLabel);
   return {
     label: config.issues.selection.includeLabel,
-    issues: issues.filter((issue) => issue.labels.some((label) => label.name === config.issues.label))
+    issues: issues.filter(
+      (issue) =>
+        issue.labels.some((label) => label.name === config.issues.label) &&
+        issue.labels.some((label) => label.name === config.issues.executionAuthorization.label)
+    )
   };
 }
 
