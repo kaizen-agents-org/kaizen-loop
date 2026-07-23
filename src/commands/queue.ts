@@ -48,7 +48,10 @@ export async function listQueuedIssues(options: QueueListOptions): Promise<{ lab
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
   const github = new GitHubClient(options.runCommand, resolved.project.localPath);
-  const issues = await github.listIssues(config.issues.selection.includeLabel);
+  const issueLabels = config.safety.operationMode === 'external'
+    ? [config.issues.selection.includeLabel, config.issues.executionAuthorization.label]
+    : config.issues.selection.includeLabel;
+  const issues = await github.listIssues(issueLabels);
   return {
     label: config.issues.selection.includeLabel,
     issues: issues.filter(

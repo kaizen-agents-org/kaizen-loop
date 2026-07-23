@@ -75,8 +75,8 @@ describe('listQueuedIssues', () => {
     expect(output.label).toBe('kaizen:ready');
     expect(output.issues.map((item) => item.number)).toEqual([1]);
     const list = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue list'));
-    expect(list?.[1]).toContain('--label');
-    expect(list?.[1]).toContain('kaizen:ready');
+    expect(list?.[1].filter((arg) => arg === '--label')).toHaveLength(2);
+    expect(list?.[1]).toEqual(expect.arrayContaining(['kaizen:ready', 'kaizen:trusted']));
   });
 
   it('does not require an authorization label in dogfood mode', async () => {
