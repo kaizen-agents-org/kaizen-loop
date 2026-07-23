@@ -54,7 +54,8 @@ export async function listQueuedIssues(options: QueueListOptions): Promise<{ lab
     issues: issues.filter(
       (issue) =>
         issue.labels.some((label) => label.name === config.issues.label) &&
-        issue.labels.some((label) => label.name === config.issues.executionAuthorization.label)
+        (config.safety.operationMode === 'dogfood' ||
+          issue.labels.some((label) => label.name === config.issues.executionAuthorization.label))
     )
   };
 }

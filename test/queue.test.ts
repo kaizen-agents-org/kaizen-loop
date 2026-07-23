@@ -78,9 +78,30 @@ describe('listQueuedIssues', () => {
     expect(list?.[1]).toContain('--label');
     expect(list?.[1]).toContain('kaizen:ready');
   });
+
+  it('does not require an authorization label in dogfood mode', async () => {
+    const { repo } = await setupProject({ operationMode: 'dogfood' });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([
+          issue(1, ['kaizen', 'kaizen:ready']),
+          issue(2, ['kaizen:ready'])
+        ]));
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const output = await listQueuedIssues({
+      cwd: repo,
+      project: 'o-r',
+      runCommand: runner
+    });
+
+    expect(output.issues.map((item) => item.number)).toEqual([1]);
+  });
 });
 
-async function setupProject(options: { authorizationLabel?: string } = {}) {
+async function setupProject(options: { authorizationLabel?: string; operationMode?: 'external' | 'dogfood' } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -89,6 +110,9 @@ async function setupProject(options: { authorizationLabel?: string } = {}) {
   let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: [] });
   if (options.authorizationLabel) {
     config = config.replace('label: kaizen:authorized', `label: ${options.authorizationLabel}`);
+  }
+  if (options.operationMode) {
+    config = config.replace('operationMode: external', `operationMode: ${options.operationMode}`);
   }
   await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), config);
   await saveRegistry({
