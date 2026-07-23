@@ -20,7 +20,7 @@ Issue creation and loop execution are separate decisions.
 - `issues.selection.includeLabel` (default `kaizen:ready`) selects the issue for queued Kaizen Loop execution when `issues.selection.mode: opt-in`.
 - Creating an issue must not imply execution authorization unless the user explicitly asks to queue, run, approve, or execute it.
 
-For bundled issue-filing skills such as `kaizen-bug-router`:
+For bundled issue-filing skills such as `kaizen-bug-router`, the table describes the labels stamped for each explicit user intent, not universal runtime prerequisites:
 
 | User intent | Registration |
 |---|---|
@@ -31,4 +31,10 @@ For bundled issue-filing skills such as `kaizen-bug-router`:
 
 `kaizen:needs-human` は具体的な未回答 request 専用であり、versioned marker と安定した request identity を保存するオーケストレータだけが付与する。単なる失敗・上流先行・試行上限を表す目的では指定しない。
 
-When `issues.selection.mode: auto`, the base `kaizen` label remains enough for automatic selection; execution authorization remains a separate gate. When `issues.selection.mode: manual-only`, scheduled selection does not pick any issue; explicit commands are required.
+Runtime selection depends on `issues.selection.mode`:
+
+- `auto`: scheduled selection requires the base `kaizen` label; `issues.selection.includeLabel` is not required. Execution authorization remains a separate gate.
+- `opt-in`: scheduled selection requires both the base `kaizen` label and `issues.selection.includeLabel`. Execution authorization remains a separate gate.
+- `manual-only`: scheduled selection does not pick any issue. An explicit command such as `kaizen fix <issue>` is required and execution authorization still applies.
+
+`kaizen queue` and the default `kaizen report --now` path stamp the base, execution-authorization, and selection labels regardless of selection mode, so the table above records command behavior even where `auto` does not require the selection label.
