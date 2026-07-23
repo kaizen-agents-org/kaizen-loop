@@ -56,11 +56,16 @@ export async function listQueuedIssues(options: QueueListOptions): Promise<{ lab
     label: config.issues.selection.includeLabel,
     issues: issues.filter(
       (issue) =>
-        issue.labels.some((label) => label.name === config.issues.label) &&
+        hasLabel(issue, config.issues.label) &&
         (config.safety.operationMode === 'dogfood' ||
-          issue.labels.some((label) => label.name === config.issues.executionAuthorization.label))
+          hasLabel(issue, config.issues.executionAuthorization.label))
     )
   };
+}
+
+function hasLabel(issue: GitHubIssue, expected: string): boolean {
+  const normalizedExpected = expected.toLowerCase();
+  return issue.labels.some((label) => label.name.toLowerCase() === normalizedExpected);
 }
 
 function uniqueIssues(issues: number[]): number[] {

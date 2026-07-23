@@ -58,7 +58,7 @@ describe('listQueuedIssues', () => {
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([
-          issue(1, ['kaizen', 'kaizen:trusted', 'kaizen:ready']),
+          issue(1, ['Kaizen', 'Kaizen:Trusted', 'kaizen:ready']),
           issue(2, ['kaizen', 'kaizen:ready']),
           issue(3, ['kaizen:trusted', 'kaizen:ready'])
         ]));
