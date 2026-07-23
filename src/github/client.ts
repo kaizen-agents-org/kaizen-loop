@@ -68,12 +68,12 @@ export class GitHubClient {
     }
   }
 
-  async listIssues(label: string, limit = 100): Promise<GitHubIssue[]> {
+  async listIssues(labels: string | string[], limit = 100): Promise<GitHubIssue[]> {
+    const labelArgs = (Array.isArray(labels) ? labels : [labels]).flatMap((label) => ['--label', label]);
     const result = await this.gh([
       'issue',
       'list',
-      '--label',
-      label,
+      ...labelArgs,
       '--state',
       'open',
       '--json',

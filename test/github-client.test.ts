@@ -8,6 +8,27 @@ describe('GitHubClient', () => {
     expect(KAIZEN_LABELS).toContain('kaizen:roadmap');
   });
 
+  it('passes every requested issue label to GitHub before applying the result limit', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, '[]'));
+
+    await new GitHubClient(runner, '/repo').listIssues(['kaizen:ready', 'kaizen:authorized'], 25);
+
+    expect(runner.mock.calls[0][1]).toEqual([
+      'issue',
+      'list',
+      '--label',
+      'kaizen:ready',
+      '--label',
+      'kaizen:authorized',
+      '--state',
+      'open',
+      '--json',
+      'number,title,body,labels,createdAt,comments,url',
+      '--limit',
+      '25'
+    ]);
+  });
+
   it('returns normalized label transitions for acknowledgement checks', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, JSON.stringify([
       [
