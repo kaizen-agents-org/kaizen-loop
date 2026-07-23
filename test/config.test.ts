@@ -228,7 +228,8 @@ commands:
 
     expect(labelCreationStep).toContain('`kaizen:authorized`');
     expect(labelCreationStep).toContain('`kaizen:ready`');
-    expect(labelCreationStep).toContain('実行承認');
-    expect(labelCreationStep).toContain('issues.selection.mode: opt-in');
+    expect(labelCreationStep).toContain('`kaizen:roadmap`');
+    expect(labelCreationStep).toMatch(/`kaizen:authorized`[^、]*メンテナによる実行承認/);
+    expect(labelCreationStep).toMatch(/`kaizen:ready`[^、]*`issues\.selection\.mode: opt-in` の queued 実行選択/);
   });
 });
