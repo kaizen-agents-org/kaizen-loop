@@ -224,6 +224,7 @@ commands:
 
   it('documents the execution-gate labels created by kaizen init', () => {
     const cliSpec = fs.readFileSync('docs/02-cli-spec.md', 'utf8');
+    const issueConventions = fs.readFileSync('docs/05-issue-conventions.md', 'utf8');
     const labelCreationStep = cliSpec.match(/^4\. \*\*GitHub ラベル作成\*\*.*$/m)?.[0];
 
     expect(labelCreationStep).toContain('`kaizen:authorized`');
@@ -231,5 +232,8 @@ commands:
     expect(labelCreationStep).toContain('`kaizen:roadmap`');
     expect(labelCreationStep).toMatch(/`kaizen:authorized`[^、]*メンテナによる実行承認/);
     expect(labelCreationStep).toMatch(/`kaizen:ready`[^、]*`issues\.selection\.mode: opt-in` の queued 実行選択/);
+    expect(issueConventions).toMatch(
+      /\| `kaizen:roadmap` \| [^|\n]*実行可能な Kaizen backlog Issue ではなく、自動選択から除外する \|/
+    );
   });
 });
