@@ -612,6 +612,35 @@ describe('buildVerifierPrompt', () => {
     expect(prompt).toContain('Set it to "reported"');
   });
 
+  it('does not treat failure words in passing test names as failure evidence', () => {
+    const prompt = buildVerifierPrompt({
+      repo: 'o/r',
+      issue: {
+        number: 296,
+        title: 'Do not misclassify passing test names',
+        body: 'Passing test names can describe failure behavior.',
+        labels: [{ name: 'kaizen' }],
+        createdAt: '2026-07-25T00:00:00Z',
+        comments: []
+      },
+      agentResult: { status: 'fixed', summary: '直した', notes: '', raw: '', durationMs: 1 },
+      verifyResults: [{
+        command: 'npm test',
+        ok: true,
+        output: [
+          '✓ keeps a clean run free of failure observations',
+          '✓ marks an unexpected 5xx as failed after retries are exhausted'
+        ].join('\n')
+      }],
+      diff: { changedFiles: 1, changedLines: 1, files: ['src/file.ts'], forbiddenFiles: [], protectedFiles: [] },
+      diffText: 'diff --git a/src/file.ts b/src/file.ts'
+    });
+
+    expect(prompt).toContain('A command marked "Status: passed" is successful');
+    expect(prompt).toContain('failure-like words in a passing test name');
+    expect(prompt).toContain('do not use those words as failure evidence');
+  });
+
   it('includes diff text and verification log evidence', () => {
     const prompt = buildVerifierPrompt({
       repo: 'o/r',
