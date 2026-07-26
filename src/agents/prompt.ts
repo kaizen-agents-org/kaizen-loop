@@ -157,6 +157,8 @@ ${diffData}
 
 You are a conservative PR-creation gate. Decide only whether opening a ready-for-review pull request is acceptable. You are NOT approving the change for merge; a human reviewer makes the final merge decision.
 
+A command marked "Status: passed" is successful. Its output may contain passing test names that describe failure scenarios. When a line has a passing test marker, failure-like words in a passing test name are test-case content; do not use those words as failure evidence.
+
 Return "open_pr" when opening a PR is acceptable and you have no caveats.
 Return "open_pr_with_warning" when opening a PR is acceptable but a caveat must be surfaced to the human reviewer (put the caveat in "reason").
 Return "block_pr" when the builder must revise the change before a PR is opened (put the required change in "reason").
