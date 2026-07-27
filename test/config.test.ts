@@ -222,6 +222,17 @@ commands:
     expect(configSpec).toMatch(/生成時のデフォルト値/);
   });
 
+  it('documents the guardian review settle default in the full config sample', () => {
+    const configSpec = fs.readFileSync('docs/03-config-spec.md', 'utf8');
+    const fullSample = configSpec.match(/### フルサンプル[\s\S]*?```yaml\n([\s\S]*?)\n```/)?.[1];
+    const generatedConfig = parse(defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+
+    expect(fullSample).toBeDefined();
+    expect(parse(fullSample ?? '').guardian.reviewSettleSeconds).toBe(
+      generatedConfig.guardian.reviewSettleSeconds
+    );
+  });
+
   it('documents the execution-gate labels created by kaizen init', () => {
     const cliSpec = fs.readFileSync('docs/02-cli-spec.md', 'utf8');
     const issueConventions = fs.readFileSync('docs/05-issue-conventions.md', 'utf8');
