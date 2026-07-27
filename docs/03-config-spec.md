@@ -128,6 +128,8 @@ guardian:
   command: "codex"
   timeoutMinutes: 60
   maxAttempts: 5
+  # ready 判定前に mergeability と review activity の安定を再確認する待機秒数
+  reviewSettleSeconds: 30
 
 goal:
   # 1 Goal あたりの最大自動 iteration 数
