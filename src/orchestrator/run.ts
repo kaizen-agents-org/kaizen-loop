@@ -139,7 +139,6 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   let github = new GitHubClient(runCommand, initialConfig.path);
   const stateDir = projectStateDir(resolved.slug);
   const observesFullBacklog = options.issueNumbers === undefined && options.issue === undefined;
-  const appliesScheduledBacklogLimits = options.scheduled && observesFullBacklog;
   const configuredMaxIssues = (requestedIssueNumbers?: number[]) =>
     options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
   const selectRunIssues = async (): Promise<RunIssueSelection> => {
@@ -164,16 +163,14 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const selection = selectIssues({
       issues: selectableIssues,
       config,
-      maxIssues: config.safety.operationMode === 'external' || (automatic && !options.dryRun)
-        ? Number.MAX_SAFE_INTEGER
-        : maxIssues,
+      maxIssues: config.safety.operationMode === 'external' ? Number.MAX_SAFE_INTEGER : maxIssues,
       explicit: requestedIssues !== undefined,
       openPullRequests
     });
     const authorizedSelection = config.safety.operationMode === 'external'
       ? await applyExecutionAuthorizationGate({ selection, config, repo: resolved.project.repo, github })
       : selection;
-    const budgetedSelection = config.safety.operationMode === 'external' && (!automatic || options.dryRun)
+    const budgetedSelection = config.safety.operationMode === 'external'
       ? applyImplementationBudget({ ...authorizedSelection, openPullRequests }, maxIssues)
       : authorizedSelection;
     const implementationStates = await listImplementationStates(stateDir);
@@ -185,9 +182,6 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     const resumableIssueNumbers = new Set(selectedResumableStates.map((state) => state.issue));
     const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
     const resumeBranchByIssue = new Map(openCheckpoints.map((state) => [state.issue, state.branch]));
-    if (automatic && !options.dryRun) {
-      return { ...budgetedSelection, backlogCount: selectableIssues.length, openPullRequests, resumableIssueNumbers, resumeBranches, resumeBranchByIssue };
-    }
     const limited = await applyOpenPullRequestLimit({
       config,
       selection: budgetedSelection,
@@ -204,7 +198,10 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       github,
       resumableIssueNumbers
     });
-    return { ...wipLimited, backlogCount: selectableIssues.length, openPullRequests };
+    const limitedSelection = { ...wipLimited, backlogCount: selectableIssues.length, openPullRequests };
+    return automatic && !options.dryRun
+      ? { ...limitedSelection, resumableIssueNumbers, resumeBranches, resumeBranchByIssue }
+      : limitedSelection;
   };
 
   if (options.dryRun) {
@@ -325,40 +322,6 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
           github,
           openPullRequests: selection.openPullRequests
         });
-        if (appliesScheduledBacklogLimits) {
-          selection = applyImplementationBudget(selection, configuredMaxIssues());
-          const selectedIssueNumbers = new Set(selection.selected.map((issue) => issue.number));
-          const resumableIssueNumbers = new Set(
-            [...(selection.resumableIssueNumbers ?? [])].filter((issue) => selectedIssueNumbers.has(issue))
-          );
-          const resumeBranches = new Set(
-            [...(selection.resumeBranchByIssue ?? [])]
-              .filter(([issue]) => selectedIssueNumbers.has(issue))
-              .map(([, branch]) => branch)
-          );
-          selection = {
-            ...selection,
-            ...await applyOpenPullRequestLimit({
-              config,
-              selection,
-              automatic: true,
-              openPullRequests: selection.openPullRequests,
-              resumableIssueNumbers,
-              resumeBranches
-            })
-          };
-          selection = {
-            ...selection,
-            ...await applyGeneratedPullRequestWipLimit({
-              config,
-              selection,
-              automatic: true,
-              repo: resolved.project.repo,
-              github,
-              resumableIssueNumbers
-            })
-          };
-        }
         summary.skipped = selection.skipped;
       }
       if (observesFullBacklog) {

@@ -78,6 +78,8 @@ gh issue list --label kaizen --state open \
 2. 同優先度内では作成日時の古い順
 
 上位から `maxIssuesPerNight` 件を選択。選択結果と除外理由は `run.log` に全件記録する。
+scheduled 自動実行では、この件数上限と repo / owner の backpressure を Issue intake gate より先に適用する。
+上限超過の Issue は `maxIssuesPerNight reached` として記録し、その run では intake コメントや disposition ラベルを付けない。
 
 `--dry-run` はここまでを表示して終了する。修正前には diff が存在しないため、リスク判定は行わない。
 

@@ -1347,6 +1347,92 @@ describe('runKaizen PR flow', () => {
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'list')).toHaveLength(1);
   });
 
+  it('bounds automatic scheduled intake to maxIssuesPerNight', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith(
+        {
+          run: { maxIssuesPerNight: 2, maxOpenPullRequests: 3 },
+          guardian: { enabled: false }
+        },
+        { agent: 'claude', setup: null, verify: [] }
+      )
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const issues = [1, 2, 3].map((number) => issue(number, {
+      title: 'Complete a live dogfood run in another repository',
+      body: [
+        'Select a separate Rust repository.',
+        'Run kaizen init there.',
+        'Complete the live Issue→PR→merge workflow.'
+      ].join('\n')
+    }));
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify(issues));
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(issues.find(({ number }) => number === Number(args[2]))));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, '[]');
+      }
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
+        return result(command, args, repo, JSON.stringify({
+          data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }
+        }));
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'afternoon',
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    const intakeIssueNumbers = runner.mock.calls
+      .filter(([command, args]) =>
+        command === 'gh' &&
+        args[0] === 'issue' &&
+        args[1] === 'comment' &&
+        args.some((arg) => arg.includes('kaizen-loop:intake-decision'))
+      )
+      .map(([, args]) => Number(args[2]));
+    expect(intakeIssueNumbers).toEqual([1, 2]);
+    const dispositionIssueNumbers = runner.mock.calls
+      .filter(([command, args]) => command === 'gh' && args[0] === 'issue' && args[1] === 'edit')
+      .map(([, args]) => Number(args[2]));
+    expect(new Set(dispositionIssueNumbers)).toEqual(new Set([1, 2]));
+    expect('issues' in summary && summary.skipped).toContainEqual({
+      number: 3,
+      reason: 'maxIssuesPerNight reached'
+    });
+  });
+
   it('hands live cross-repository workflows to a human before starting the builder', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
