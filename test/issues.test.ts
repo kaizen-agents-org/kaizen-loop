@@ -257,6 +257,94 @@ describe('selectIssues', () => {
     expect(selection.skipped).toEqual([{ number: 1, reason: 'manual-only selection mode' }]);
   });
 
+  it('matches the base label regardless of GitHub label casing', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [issue(1, 'mixed case base label', '2026-06-12T01:00:00Z', ['Kaizen'])]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
+  });
+
+  it('matches the opt-in selection label regardless of GitHub label casing', () => {
+    const selection = selectIssues({
+      config: optInConfig,
+      maxIssues: 10,
+      issues: [issue(1, 'mixed case ready label', '2026-06-12T01:00:00Z', ['Kaizen', 'Kaizen:Ready'])]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([1]);
+    expect(selection.skipped).toEqual([]);
+  });
+
+  it('ranks priority labels regardless of GitHub label casing', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [
+        issue(1, 'p2', '2026-06-12T01:00:00Z', ['kaizen', 'kaizen:P2']),
+        issue(2, 'mixed case p1', '2026-06-12T02:00:00Z', ['kaizen', 'Kaizen:p1'])
+      ]
+    });
+
+    expect(selection.selected.map((item) => item.number)).toEqual([2, 1]);
+  });
+
+  it('honors terminal dispositions regardless of GitHub label casing', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [issue(1, 'mixed case needs human', '2026-06-12T01:00:00Z', ['kaizen', 'Kaizen:Needs-Human'])]
+    });
+
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'needs-human' }]);
+  });
+
+  it('excludes roadmap placeholders regardless of GitHub label casing', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      issues: [issue(1, 'mixed case roadmap', '2026-06-12T01:00:00Z', ['kaizen', 'Kaizen:Roadmap'])]
+    });
+
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'excluded label: kaizen:roadmap' }]);
+  });
+
+  it('excludes configured exclusion labels regardless of GitHub label casing', () => {
+    const selection = selectIssues({
+      config: configSchema.parse({
+        version: 1,
+        issues: { selection: { excludeLabels: ['do-not-run'] } }
+      }),
+      maxIssues: 10,
+      issues: [issue(1, 'mixed case exclusion', '2026-06-12T01:00:00Z', ['kaizen', 'Do-Not-Run'])]
+    });
+
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'excluded label: do-not-run' }]);
+  });
+
+  it('detects an active in-progress label regardless of GitHub label casing', () => {
+    const selection = selectIssues({
+      config,
+      maxIssues: 10,
+      now: new Date('2026-06-12T03:00:00Z'),
+      issues: [
+        {
+          ...issue(1, 'mixed case in progress', '2026-06-12T01:00:00Z', ['kaizen']),
+          labels: [{ name: 'kaizen' }, { name: 'Kaizen:In-Progress', createdAt: '2026-06-12T02:00:00Z' }]
+        }
+      ]
+    });
+
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([{ number: 1, reason: 'in-progress' }]);
+  });
+
   it('skips issues without the base kaizen label', () => {
     const selection = selectIssues({
       config,
