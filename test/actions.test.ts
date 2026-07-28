@@ -7,7 +7,7 @@ import { encodeProviderResult, prepareActionsFix, publishActionsFix, verifyActio
 import { defaultConfigYaml, loadConfig } from '../src/config/config.js';
 import { runCommand, type CommandResult, type CommandRunner } from '../src/utils/command.js';
 import { WorkspaceManager } from '../src/workspace/manager.js';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 
 const tempDirs: string[] = [];
 
@@ -18,15 +18,16 @@ afterEach(async () => {
 describe('GitHub Actions fix workflow', () => {
   it('prepares an authorized provider prompt without a local registry', async () => {
     const cwd = await configuredRepo();
-    await fs.writeFile(
-      path.join(cwd, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'codex', setup: null, verify: ['npm test'] })
-    );
+    const config = parse(defaultConfigYaml({ agent: 'codex', setup: null, verify: ['npm test'] }));
+    config.issues.selection.mode = 'opt-in';
+    await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), stringify(config));
     const calls: string[] = [];
     const fakeRun: CommandRunner = vi.fn(async (command, args) => {
       calls.push(`${command} ${args.join(' ')}`);
       if (args[0] === 'repo') return result(command, args, 'owner/repo\n');
-      if (args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+      if (args[0] === 'issue') {
+        return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
+      }
       if (args.at(-1)?.endsWith('/events')) {
         return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
       }
@@ -69,6 +70,23 @@ describe('GitHub Actions fix workflow', () => {
 
     await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
       .rejects.toThrow('Missing Kaizen eligibility label');
+  });
+
+  it('fails closed when the configured opt-in selection label is absent', async () => {
+    const cwd = await configuredRepo();
+    const config = parse(await fs.readFile(path.join(cwd, '.kaizen', 'config.yml'), 'utf8'));
+    config.issues.selection.mode = 'opt-in';
+    await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), stringify(config));
+    const fakeRun: CommandRunner = async (command, args) => {
+      if (args[0] === 'repo') return result(command, args, 'owner/repo\n');
+      if (args[0] === 'issue') {
+        return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    };
+
+    await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
+      .rejects.toThrow('Missing execution selection label: kaizen:ready');
   });
 
   it('encodes provider output with a versioned provider identity', () => {

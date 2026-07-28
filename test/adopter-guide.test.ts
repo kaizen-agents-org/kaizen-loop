@@ -17,6 +17,8 @@ describe('third-party adopter guide', () => {
       'operationMode: external',
       'mode: pr-only',
       'command: "verifier"',
+      'mode: opt-in',
+      'includeLabel: kaizen:ready',
       'kaizen:authorized',
       'minimumPermission: triage',
       'OPENAI_API_KEY',
@@ -35,5 +37,7 @@ describe('third-party adopter guide', () => {
     expect(guide).toContain('does not merge the pull request');
     expect(guide).toContain('Do not use a moving branch');
     expect(guide).toContain('These local labels are not the Actions fallback mechanism.');
+    expect(guide.indexOf('npx kaizen-loop run --dry-run --json'))
+      .toBeLessThan(guide.indexOf('npx kaizen-loop scheduler sync'));
   });
 });

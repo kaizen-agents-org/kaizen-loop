@@ -75,6 +75,9 @@ issues:
   executionAuthorization:
     label: kaizen:authorized
     minimumPermission: triage
+  selection:
+    mode: opt-in
+    includeLabel: kaizen:ready
 ```
 
 Unspecified fields use the audited defaults. Keep `operationMode: external`,
@@ -130,26 +133,27 @@ Provider keys belong only in Actions secrets. Do not add them to
 `safety.envAllowlist`, repository variables, `.env` files, or the workflow
 itself. Configure provider billing alerts and rotation outside Kaizen Loop.
 
-Create the `kaizen` and `kaizen:authorized` labels. The authorization label must
-be applied by a collaborator whose current permission meets
-`minimumPermission`. The default is `triage`; raise it to `write`, `maintain`, or
-`admin` if your repository needs a smaller authorization group.
+Create the `kaizen`, `kaizen:ready`, and `kaizen:authorized` labels. The
+authorization label must be applied by a collaborator whose current permission
+meets `minimumPermission`. The default is `triage`; raise it to `write`,
+`maintain`, or `admin` if your repository needs a smaller authorization group.
 
 ### 4. Run the first Issue
 
 1. Open a narrowly scoped Issue with observed behavior, expected behavior, and
    verification expectations.
 2. Add `kaizen` to mark it as eligible.
-3. After reviewing the Issue as untrusted input, an authorized maintainer adds
+3. Add `kaizen:ready` to select it for execution.
+4. After reviewing the Issue as untrusted input, an authorized maintainer adds
    `kaizen:authorized`. Add this label last because its label event starts the
    workflow.
-4. Watch the `Kaizen issue fix` workflow.
-5. Review the ready pull request; do not merge from the workflow result alone.
+5. Watch the `Kaizen issue fix` workflow.
+6. Review the ready pull request; do not merge from the workflow result alone.
 
 Removing authorization after generation still prevents publication because the
-publish job re-fetches the Issue and checks authorization again. If an imported
-Issue has the label but no usable label event, remove it and have an authorized
-maintainer add it again.
+publish job re-fetches the Issue and checks eligibility, opt-in selection, and
+authorization again. If an imported Issue has the authorization label but no
+usable label event, remove it and have an authorized maintainer add it again.
 
 ## What the safety boundary does
 
@@ -161,8 +165,9 @@ to evaluate that content.
 
 The Actions workflow separates capabilities:
 
-1. `prepare` re-fetches the Issue and checks the active authorization label,
-   latest label event, and actor permission.
+1. `prepare` re-fetches the Issue and checks the eligibility and opt-in
+   selection labels, active authorization label, latest label event, and actor
+   permission.
 2. `codex`, then `claude` as fallback, receives a read-only checkout and a
    provider key and emits a patch.
 3. `verify` receives neither provider keys nor a write-capable token. It rejects
@@ -237,19 +242,18 @@ From a clean checkout of the target repository:
 
 ```sh
 npx kaizen-loop init --agent codex --schedule 02:00
-npx kaizen-loop doctor
 ```
 
 `kaizen init` proposes setup and verification commands, creates
 `.kaizen/config.yml` and the Issue template, creates labels, registers an
 isolated workspace, and prepares scheduler settings. Review and commit the two
-generated repository files before enabling unattended runs. Then synchronize
-the scheduler and perform a dry run:
+generated repository files before enabling unattended runs. Validate the
+installation and perform a dry run before synchronizing the scheduler:
 
 ```sh
-npx kaizen-loop scheduler sync
 npx kaizen-loop doctor
 npx kaizen-loop run --dry-run --json
+npx kaizen-loop scheduler sync
 ```
 
 Process one already authorized Issue manually with:
@@ -270,7 +274,7 @@ See the [CLI specification](./02-cli-spec.md) and
 
 - Confirm Actions are enabled and repository policy permits the referenced
   reusable workflow and pinned actions.
-- Confirm the Issue has both `kaizen` and `kaizen:authorized`.
+- Confirm the Issue has `kaizen`, `kaizen:ready`, and `kaizen:authorized`.
 - Confirm the latest authorization-label event was created by a collaborator
   who still meets `minimumPermission`.
 - Confirm the caller's `uses` SHA and `runtime-ref` are identical full lowercase
