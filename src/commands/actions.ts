@@ -235,10 +235,7 @@ async function assertAuthorized(github: GitHubClient, repo: string, issue: GitHu
   const eligible = issue.labels.some((label) => label.name.toLowerCase() === config.issues.label.toLowerCase());
   if (!eligible) throw new Error(`Missing Kaizen eligibility label: ${config.issues.label}`);
   const selection = config.issues.selection;
-  if (
-    selection.mode === 'opt-in' &&
-    !issue.labels.some((label) => label.name.toLowerCase() === selection.includeLabel.toLowerCase())
-  ) {
+  if (!issue.labels.some((label) => label.name.toLowerCase() === selection.includeLabel.toLowerCase())) {
     throw new Error(`Missing execution selection label: ${selection.includeLabel}`);
   }
   const authorization = config.issues.executionAuthorization;

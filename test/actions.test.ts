@@ -52,7 +52,7 @@ describe('GitHub Actions fix workflow', () => {
     const cwd = await configuredRepo();
     const fakeRun: CommandRunner = async (command, args) => {
       if (args[0] === 'repo') return result(command, args, 'owner/repo\n');
-      if (args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen'])));
+      if (args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready'])));
       throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
     };
 
@@ -72,21 +72,23 @@ describe('GitHub Actions fix workflow', () => {
       .rejects.toThrow('Missing Kaizen eligibility label');
   });
 
-  it('fails closed when the configured opt-in selection label is absent', async () => {
-    const cwd = await configuredRepo();
-    const config = parse(await fs.readFile(path.join(cwd, '.kaizen', 'config.yml'), 'utf8'));
-    config.issues.selection.mode = 'opt-in';
-    await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), stringify(config));
-    const fakeRun: CommandRunner = async (command, args) => {
-      if (args[0] === 'repo') return result(command, args, 'owner/repo\n');
-      if (args[0] === 'issue') {
-        return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
-      }
-      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
-    };
+  it('fails closed when the configured selection label is absent in every selection mode', async () => {
+    for (const mode of ['auto', 'manual-only', 'opt-in']) {
+      const cwd = await configuredRepo();
+      const config = parse(await fs.readFile(path.join(cwd, '.kaizen', 'config.yml'), 'utf8'));
+      config.issues.selection.mode = mode;
+      await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), stringify(config));
+      const fakeRun: CommandRunner = async (command, args) => {
+        if (args[0] === 'repo') return result(command, args, 'owner/repo\n');
+        if (args[0] === 'issue') {
+          return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+        }
+        throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+      };
 
-    await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
-      .rejects.toThrow('Missing execution selection label: kaizen:ready');
+      await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
+        .rejects.toThrow('Missing execution selection label: kaizen:ready');
+    }
   });
 
   it('encodes provider output with a versioned provider identity', () => {
@@ -151,7 +153,7 @@ describe('GitHub Actions fix workflow', () => {
     }));
     const fakeRun: CommandRunner = async (command, args, options) => {
       if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
-      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
       if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
         return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
       }
@@ -203,7 +205,7 @@ describe('GitHub Actions fix workflow', () => {
     })));
     const fakeRun: CommandRunner = async (command, args, options) => {
       if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
-      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
       if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
         return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
       }
@@ -244,7 +246,7 @@ describe('GitHub Actions fix workflow', () => {
     const fakeRun: CommandRunner = async (command, args, options) => {
       if (command === 'gh' && args[0] === 'repo' && args.includes('nameWithOwner')) return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'repo') return result(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
-      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:authorized'])));
+      if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
       if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
         authorizationChecks += 1;
         return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
