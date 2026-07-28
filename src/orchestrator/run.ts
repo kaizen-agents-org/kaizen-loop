@@ -157,16 +157,27 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       ? issues.filter((issue) => !reconciled.includes(issue.number))
       : issues;
     const automatic = options.scheduled && requestedIssues === undefined;
-    const openPullRequests = automatic || selectableIssues.some(hasPullRequestResultMarker)
+    const priorAlreadyResolved = automatic
+      ? selectableIssues.filter((issue) => hasIssueIntakeDecisionComment(issue, 'already_resolved'))
+      : [];
+    const priorAlreadyResolvedNumbers = new Set(priorAlreadyResolved.map((issue) => issue.number));
+    const intakeCandidates = priorAlreadyResolved.length > 0
+      ? selectableIssues.filter((issue) => !priorAlreadyResolvedNumbers.has(issue.number))
+      : selectableIssues;
+    const openPullRequests = automatic || intakeCandidates.some(hasPullRequestResultMarker)
       ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
       : [];
     const selection = selectIssues({
-      issues: selectableIssues,
+      issues: intakeCandidates,
       config,
       maxIssues: config.safety.operationMode === 'external' ? Number.MAX_SAFE_INTEGER : maxIssues,
       explicit: requestedIssues !== undefined,
       openPullRequests
     });
+    selection.skipped.push(...priorAlreadyResolved.map((issue) => ({
+      number: issue.number,
+      reason: 'intake already_resolved: prior intake decision already recorded'
+    })));
     const authorizedSelection = config.safety.operationMode === 'external'
       ? await applyExecutionAuthorizationGate({ selection, config, repo: resolved.project.repo, github })
       : selection;

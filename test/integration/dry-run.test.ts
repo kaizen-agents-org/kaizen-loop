@@ -1385,6 +1385,9 @@ describe('runKaizen PR flow', () => {
         'Complete the live Issue→PR→merge workflow.'
       ].join('\n')
     }));
+    issues.unshift(issue(0, {
+      comments: [{ body: '<!-- kaizen-loop:intake-decision status=already_resolved -->' }]
+    }));
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify(issues));
@@ -1430,6 +1433,10 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.skipped).toContainEqual({
       number: 3,
       reason: 'maxIssuesPerNight reached'
+    });
+    expect('issues' in summary && summary.skipped).toContainEqual({
+      number: 0,
+      reason: 'intake already_resolved: prior intake decision already recorded'
     });
   });
 
