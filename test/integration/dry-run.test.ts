@@ -1383,9 +1383,13 @@ describe('runKaizen PR flow', () => {
         'Select a separate Rust repository.',
         'Run kaizen init there.',
         'Complete the live Issue→PR→merge workflow.'
-      ].join('\n')
+      ].join('\n'),
+      comments: number === 1
+        ? [{ body: '<!-- kaizen-loop:intake-decision status=already_resolved -->' }]
+        : []
     }));
     issues.unshift(issue(0, {
+      body: 'This issue was already fixed.',
       comments: [{ body: '<!-- kaizen-loop:intake-decision status=already_resolved -->' }]
     }));
     const runner = vi.fn<CommandRunner>(async (command, args) => {

@@ -157,16 +157,23 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       ? issues.filter((issue) => !reconciled.includes(issue.number))
       : issues;
     const automatic = options.scheduled && requestedIssues === undefined;
+    const openPullRequests = automatic || selectableIssues.some(hasPullRequestResultMarker)
+      ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
+      : [];
     const priorAlreadyResolved = automatic
-      ? selectableIssues.filter((issue) => hasIssueIntakeDecisionComment(issue, 'already_resolved'))
+      ? selectableIssues.filter((issue) =>
+        hasIssueIntakeDecisionComment(issue, 'already_resolved') &&
+        evaluateIssueIntake({
+          issue,
+          repo: resolved.project.repo,
+          openPullRequests
+        }).status === 'already_resolved'
+      )
       : [];
     const priorAlreadyResolvedNumbers = new Set(priorAlreadyResolved.map((issue) => issue.number));
     const intakeCandidates = priorAlreadyResolved.length > 0
       ? selectableIssues.filter((issue) => !priorAlreadyResolvedNumbers.has(issue.number))
       : selectableIssues;
-    const openPullRequests = automatic || intakeCandidates.some(hasPullRequestResultMarker)
-      ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
-      : [];
     const selection = selectIssues({
       issues: intakeCandidates,
       config,
