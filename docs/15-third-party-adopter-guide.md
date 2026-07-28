@@ -258,16 +258,23 @@ issues:
     includeLabel: kaizen:ready
 ```
 
-Commit that policy change with the generated files. Validate the
-installation and perform a dry run before synchronizing the scheduler:
+Commit that policy change with the generated files, then merge or push that
+commit to the configured default branch. Refresh the isolated workspace before
+validation so it contains the committed configuration. Perform a dry run before
+synchronizing the scheduler:
 
 ```sh
+npx kaizen-loop fleet refresh --sync
 npx kaizen-loop doctor
 npx kaizen-loop run --dry-run --json
 npx kaizen-loop scheduler sync
 ```
 
-Process one already authorized Issue manually with:
+Before processing an Issue manually, confirm that it has all three local gates:
+`kaizen`, the configured `kaizen:ready` selection label, and
+`kaizen:authorized`. Do not run an explicit fix without the selection label,
+because explicit issue selection bypasses the scheduled opt-in filter. Then
+process the authorized Issue with:
 
 ```sh
 npx kaizen-loop fix 42 --json

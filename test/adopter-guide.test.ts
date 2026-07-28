@@ -87,7 +87,18 @@ describe('third-party adopter guide', () => {
     expect(guide).toContain('does not merge the pull request');
     expect(guide).toContain('Do not use a moving branch');
     expect(guide).toContain('These local labels are not the Actions fallback mechanism.');
-    expect(guide.indexOf('npx kaizen-loop run --dry-run --json'))
-      .toBeLessThan(guide.indexOf('npx kaizen-loop scheduler sync'));
+    const refresh = guide.indexOf('npx kaizen-loop fleet refresh --sync');
+    const doctor = guide.indexOf('npx kaizen-loop doctor');
+    const dryRun = guide.indexOf('npx kaizen-loop run --dry-run --json');
+    const schedulerSync = guide.indexOf('npx kaizen-loop scheduler sync');
+    expect(refresh).toBeGreaterThan(-1);
+    expect(refresh).toBeLessThan(doctor);
+    expect(doctor).toBeLessThan(dryRun);
+    expect(dryRun).toBeLessThan(schedulerSync);
+
+    const manualFix = guide.indexOf('npx kaizen-loop fix 42 --json');
+    expect(guide.indexOf('all three local gates')).toBeLessThan(manualFix);
+    expect(guide.indexOf('Do not run an explicit fix without the selection label'))
+      .toBeLessThan(manualFix);
   });
 });
