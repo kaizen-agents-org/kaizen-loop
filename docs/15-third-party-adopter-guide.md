@@ -247,7 +247,18 @@ npx kaizen-loop init --agent codex --schedule 02:00
 `kaizen init` proposes setup and verification commands, creates
 `.kaizen/config.yml` and the Issue template, creates labels, registers an
 isolated workspace, and prepares scheduler settings. Review and commit the two
-generated repository files before enabling unattended runs. Validate the
+generated repository files before enabling unattended runs. The generated
+selection mode is `auto`; change it to the same explicit ready-label gate used
+by the Actions installation:
+
+```yaml
+issues:
+  selection:
+    mode: opt-in
+    includeLabel: kaizen:ready
+```
+
+Commit that policy change with the generated files. Validate the
 installation and perform a dry run before synchronizing the scheduler:
 
 ```sh

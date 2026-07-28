@@ -20,7 +20,7 @@ describe('third-party adopter guide', () => {
   it('preserves the external Actions safety contract', () => {
     const guide = fs.readFileSync('docs/15-third-party-adopter-guide.md', 'utf8');
     const yamlBlocks = [...guide.matchAll(/```yaml\n([\s\S]*?)\n```/g)].map((match) => match[1]);
-    expect(yamlBlocks).toHaveLength(2);
+    expect(yamlBlocks).toHaveLength(3);
 
     const config = parse(yamlBlocks[0]);
     expect(config).toMatchObject({
@@ -57,6 +57,16 @@ describe('third-party adopter guide', () => {
       KAIZEN_GITHUB_TOKEN: '${{ secrets.KAIZEN_GITHUB_TOKEN }}'
     });
     expect(workflowSource).not.toContain('secrets: inherit');
+
+    const localConfig = parse(yamlBlocks[2]);
+    expect(localConfig).toEqual({
+      issues: {
+        selection: {
+          mode: 'opt-in',
+          includeLabel: 'kaizen:ready'
+        }
+      }
+    });
 
     for (const requiredText of [
       'kaizen:authorized',
