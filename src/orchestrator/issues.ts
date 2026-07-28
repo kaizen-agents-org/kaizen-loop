@@ -24,8 +24,8 @@ export function selectIssues(options: {
   const candidates = options.issues.filter((issue) => {
     if (options.onlyIssue && issue.number !== options.onlyIssue) return false;
 
-    const labels = labelNames(issue);
-    if (!labels.includes(options.config.issues.label)) {
+    const labels = normalizedLabelNames(issue);
+    if (!labels.includes(normalizeLabel(options.config.issues.label))) {
       skipped.push({ number: issue.number, reason: `missing required label: ${options.config.issues.label}` });
       return false;
     }
@@ -38,13 +38,13 @@ export function selectIssues(options: {
     if (
       !options.explicit &&
       options.config.issues.selection.mode === 'opt-in' &&
-      !labels.includes(options.config.issues.selection.includeLabel)
+      !labels.includes(normalizeLabel(options.config.issues.selection.includeLabel))
     ) {
       skipped.push({ number: issue.number, reason: `missing selection label: ${options.config.issues.selection.includeLabel}` });
       return false;
     }
 
-    const terminalDisposition = TERMINAL_DISPOSITION_LABELS.find((label) => labels.includes(label));
+    const terminalDisposition = TERMINAL_DISPOSITION_LABELS.find((label) => labels.includes(normalizeLabel(label)));
     if (terminalDisposition) {
       skipped.push({
         number: issue.number,
@@ -54,8 +54,8 @@ export function selectIssues(options: {
       });
       return false;
     }
-    const excludedLabel = BUILT_IN_EXCLUDED_LABELS.find((label) => labels.includes(label))
-      ?? options.config.issues.selection.excludeLabels.find((label) => labels.includes(label));
+    const excludedLabel = BUILT_IN_EXCLUDED_LABELS.find((label) => labels.includes(normalizeLabel(label)))
+      ?? options.config.issues.selection.excludeLabels.find((label) => labels.includes(normalizeLabel(label)));
     if (excludedLabel) {
       skipped.push({ number: issue.number, reason: excludedLabel === 'kaizen:needs-human' ? 'needs-human' : `excluded label: ${excludedLabel}` });
       return false;
@@ -92,9 +92,19 @@ export function labelNames(issue: GitHubIssue): string[] {
   return (issue.labels ?? []).map((label) => label.name);
 }
 
+// GitHub preserves the casing a label was created with, so issue labels can differ in
+// case from the configured Kaizen labels. Compare normalized, report configured names.
+function normalizeLabel(label: string): string {
+  return label.toLowerCase();
+}
+
+function normalizedLabelNames(issue: GitHubIssue): string[] {
+  return labelNames(issue).map(normalizeLabel);
+}
+
 export function priorityLabel(issue: GitHubIssue, config: KaizenConfig): string | undefined {
-  const labels = labelNames(issue);
-  return config.issues.priorityOrder.find((label) => labels.includes(label));
+  const labels = normalizedLabelNames(issue);
+  return config.issues.priorityOrder.find((label) => labels.includes(normalizeLabel(label)));
 }
 
 function priorityRank(issue: GitHubIssue, config: KaizenConfig): number {
@@ -103,7 +113,7 @@ function priorityRank(issue: GitHubIssue, config: KaizenConfig): number {
 }
 
 function hasActiveInProgress(issue: GitHubIssue, now: Date): boolean {
-  const label = issue.labels.find((item) => item.name === 'kaizen:in-progress');
+  const label = issue.labels.find((item) => normalizeLabel(item.name) === 'kaizen:in-progress');
   if (!label) return false;
   if (!label.createdAt) return true;
   const ageMs = now.getTime() - Date.parse(label.createdAt);
