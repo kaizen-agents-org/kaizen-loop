@@ -122,7 +122,7 @@ After upgrading from a release without the stable operator launcher, run
 kaizen-loop checkout for each registered project. Subsequent invocations atomically
 refresh both installed launchers from the self-updating runtime checkout.
 
-For an ephemeral GitHub Actions deployment, see [docs/14-github-actions.md](./docs/14-github-actions.md). External repositories add `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs.
+For a third-party installation, start with the [third-party adopter guide](./docs/15-third-party-adopter-guide.md). Its recommended GitHub Actions path adds `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs. The lower-level workflow contract is documented in [docs/14-github-actions.md](./docs/14-github-actions.md).
 
 For this repository's own dogfooding loop:
 
@@ -184,3 +184,4 @@ Start with [docs/README.md](./docs/README.md). The most useful implementation-fa
 - [docs/11-goals.md](./docs/11-goals.md): Goal runner behavior and agent-facing contract.
 - [docs/13-sandbox-smoke.md](./docs/13-sandbox-smoke.md): controlled sandbox smoke runs and readiness artifacts.
 - [docs/14-github-actions.md](./docs/14-github-actions.md): reusable issue-labeled workflow and credential-separated ephemeral execution.
+- [docs/15-third-party-adopter-guide.md](./docs/15-third-party-adopter-guide.md): third-party prerequisites, installation, safe operation, troubleshooting, and rollback.

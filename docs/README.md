@@ -21,6 +21,7 @@ Kaizen Loop は、対象プロジェクトに「日中ドッグフーディン�
 | [12-scheduler-providers.md](./12-scheduler-providers.md) | Codex Automations / Claude Code routines / launchd / cron などの scheduler provider 同期仕様 |
 | [13-sandbox-smoke.md](./13-sandbox-smoke.md) | sandbox issue-to-PR smoke run と readiness review 用 artifact |
 | [14-github-actions.md](./14-github-actions.md) | ephemeral reusable workflow、provider secret、publish trust boundary |
+| [15-third-party-adopter-guide.md](./15-third-party-adopter-guide.md) | 第三者リポジトリへの安全な導入、運用、トラブルシューティング、削除手順 |
 
 ## 確定済みの設計方針
 
