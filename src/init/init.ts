@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { defaultConfigYaml } from '../config/config.js';
+import { stringify } from 'yaml';
+import { defaultConfigObject } from '../config/config.js';
 import { upsertProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
 import type { CommandRunner } from '../utils/command.js';
@@ -10,6 +11,7 @@ import { repoFromRemote, slugFromRepo } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 import { detectCommands } from './detect.js';
+import { bundledProfilesDir, applySafetyFloor, loadProfile, mergeOverlay } from './profile.js';
 import { issueTemplateYaml } from './templates.js';
 
 export interface InitOptions {
@@ -17,10 +19,20 @@ export interface InitOptions {
   agent?: 'claude' | 'codex';
   schedule: string;
   yes: boolean;
+  profile?: string;
+  profilesDir?: string;
   runCommand: CommandRunner;
 }
 
-export async function initProject(options: InitOptions): Promise<{ slug: string; repo: string; configPath: string }> {
+export interface InitResult {
+  slug: string;
+  repo: string;
+  configPath: string;
+  profile?: string;
+  safetyFloorCorrections: string[];
+}
+
+export async function initProject(options: InitOptions): Promise<InitResult> {
   const git = new GitClient(options.runCommand, options.cwd);
   const repoDir = await git.root();
   const remoteUrl = await git.remoteUrl('origin');
@@ -35,7 +47,19 @@ export async function initProject(options: InitOptions): Promise<{ slug: string;
   const configPath = path.join(repoDir, '.kaizen', 'config.yml');
   const templatePath = path.join(repoDir, '.github', 'ISSUE_TEMPLATE', 'kaizen.yml');
 
-  await writeFileOnce(configPath, defaultConfigYaml({ agent, schedule: options.schedule, ...commands }), options.yes);
+  let config = defaultConfigObject({ agent, schedule: options.schedule, ...commands });
+  let profileName: string | undefined;
+  let corrections: string[] = [];
+  if (options.profile) {
+    const overlay = await loadProfile(options.profile, options.profilesDir ?? bundledProfilesDir());
+    profileName = overlay.name;
+    config = mergeOverlay(config, overlay.values) as Record<string, unknown>;
+  }
+  const floored = applySafetyFloor(config);
+  config = floored.config;
+  corrections = floored.corrections;
+
+  await writeFileOnce(configPath, stringify(config), options.yes);
   await writeFileOnce(templatePath, issueTemplateYaml(), options.yes);
   await github.createLabels();
 
@@ -53,7 +77,7 @@ export async function initProject(options: InitOptions): Promise<{ slug: string;
     createdAt: new Date().toISOString()
   });
 
-  return { slug, repo, configPath };
+  return { slug, repo, configPath, profile: profileName, safetyFloorCorrections: corrections };
 }
 
 function chooseAgent(preferred: 'claude' | 'codex' | undefined): 'claude' | 'codex' {

@@ -46,7 +46,24 @@ Global Options:
 
 ```
 kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
+            [--profile <name|path>]
 ```
+
+### `--profile`
+
+オンボーディングプロファイル(`.kaizen/config.yml` への部分オーバーレイ)を適用する。名前(`pilot-node` など)を渡すと同梱の `profiles/` から、パスを渡すとそのファイルから読み込む。正本は `.github` リポジトリの `onboarding/profiles/`(選び方はそこの README)で、同梱コピーはオフライン導入のための vendor である。
+
+プロファイルは**流量とリスク許容度**(`run.maxIssuesPerNight`、`safety.wipLimit` など)を決める。次の 3 つは組織の安全最低線として固定されており、プロファイルが設定するとエラーで停止する:
+
+| 設定 | 固定値 |
+|---|---|
+| `policy.mode` | `pr-only` |
+| `verifier.enabled` | `true` |
+| `safety.operationMode` | `external` |
+
+さらに `policy.protectedPaths` / `policy.forbiddenPaths` の最低集合は欠けていれば復元され、`safety.wipLimit` は 5 を超えていれば 5 に切り下げられる。復元・切り下げが起きた場合は警告を stderr に出力し、`--json` 出力の `safetyFloorCorrections` にも記録する。
+
+検証コマンドはプロファイルに含めない。何をもって「検証済み」とするかは信頼の根幹であり、対象リポジトリを見ていないプロファイルが決めてよいものではないため、スタック検出の提案を人間が確認して確定する。
 
 ### 処理内容
 

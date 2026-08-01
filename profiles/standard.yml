@@ -1,0 +1,18 @@
+# Standard profile for repositories that have graduated from a pilot.
+#
+# Adopt this only after weekly metrics show stable throughput and review
+# bandwidth to match: it raises the concurrent pull-request ceiling to the
+# organization maximum. Direct commits stay disabled; pr-only is a safety-floor
+# invariant, not a profile choice.
+#
+# Verification commands come from stack detection and operator confirmation,
+# not from this file.
+run:
+  maxIssuesPerNight: 3
+  maxOpenPullRequests: 2
+safety:
+  wipLimit: 5
+policy:
+  directCommit:
+    maxChangedLines: 0
+    maxChangedFiles: 0

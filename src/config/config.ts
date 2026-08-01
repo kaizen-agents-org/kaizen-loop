@@ -30,7 +30,16 @@ export function defaultConfigYaml(options: {
   setup: string | null;
   verify: string[];
 }): string {
-  return stringify({
+  return stringify(defaultConfigObject(options));
+}
+
+export function defaultConfigObject(options: {
+  agent: 'claude' | 'codex';
+  schedule?: string;
+  setup: string | null;
+  verify: string[];
+}): Record<string, unknown> {
+  return {
     version: 1,
     agent: {
       default: options.agent,
@@ -153,5 +162,5 @@ export function defaultConfigYaml(options: {
       },
       priorityOrder: ['kaizen:P0', 'kaizen:P1', 'kaizen:P2']
     }
-  });
+  };
 }
