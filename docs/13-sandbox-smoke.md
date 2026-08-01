@@ -43,7 +43,7 @@ The artifact indexes the normal run logs:
 
 ## Weekly Operation
 
-Register a dedicated scheduler job with a weekly schedule and `run.mode: smoke`. The configured time is interpreted in the local timezone of the machine running launchd or cron. For example, this repository runs the sandbox smoke every Sunday at 04:45 local time:
+To opt into recurring smoke evidence, register a dedicated scheduler job with a weekly schedule and `run.mode: smoke`. The configured time is interpreted in the local timezone of the machine running launchd or cron. For example:
 
 ```yaml
 scheduler:
@@ -57,6 +57,8 @@ scheduler:
       run:
         mode: smoke
 ```
+
+This repository does not currently enable this job in `.kaizen/config.yml`; operators that need fresh rolling smoke evidence must add and synchronize it explicitly.
 
 Apply the configuration with `kaizen scheduler sync`, then confirm the job with `kaizen scheduler status --json`. A weekly cadence can occasionally produce zero runs inside the rolling seven-day boundary when a run is delayed; inspect `kaizen status --metrics --json` and the artifact directory together.
 
