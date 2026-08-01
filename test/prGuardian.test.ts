@@ -226,7 +226,10 @@ describe('runPrGuardianSkill', () => {
     expect(result.status).toBe('success');
   });
 
-  it('treats the GitHub CLI no-required-checks response as an empty check set', async () => {
+  it.each([
+    "no required checks reported on the 'branch' branch",
+    "no checks reported on the 'branch' branch"
+  ])('treats the GitHub CLI empty-check response as an empty check set: %s', async (emptyChecksError) => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
@@ -237,9 +240,7 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: command === 'gh' && isRequiredChecks(args) ? 1 : 0,
       stdout: command === 'gh' && isRequiredChecks(args) ? '' : command === 'gh' ? ghResponse(args, []) : 'done',
-      stderr: command === 'gh' && isRequiredChecks(args)
-        ? "no required checks reported on the 'branch' branch"
-        : '',
+      stderr: command === 'gh' && isRequiredChecks(args) ? emptyChecksError : '',
       durationMs: 1
     }));
 

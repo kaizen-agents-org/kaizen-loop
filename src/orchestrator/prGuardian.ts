@@ -773,7 +773,7 @@ async function listRequiredChecks(runCommand: CommandRunner, req: PrGuardianSkil
   });
   if (!result.stdout.trim()) {
     if (result.exitCode === 0) return [];
-    if (/no required checks reported/i.test(result.stderr)) return [];
+    if (/no (?:required )?checks reported/i.test(result.stderr)) return [];
     throw new Error(`Could not inspect required PR checks: ${result.stderr || `exit ${result.exitCode}`}`);
   }
   const checks = JSON.parse(result.stdout) as Array<{ name?: string; state?: string; bucket?: string }>;
