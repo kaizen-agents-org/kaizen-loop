@@ -227,9 +227,10 @@ describe('runPrGuardianSkill', () => {
   });
 
   it.each([
-    "no required checks reported on the 'branch' branch",
-    "no checks reported on the 'branch' branch"
-  ])('treats the GitHub CLI empty-check response as an empty check set: %s', async (emptyChecksError) => {
+    { stderr: "no required checks reported on the 'branch' branch", expectedStatus: 'success' },
+    { stderr: "no checks reported on the 'branch' branch", expectedStatus: 'success' },
+    { stderr: "authentication failed\nno checks reported on the 'branch' branch", expectedStatus: 'failed' }
+  ])('handles the GitHub CLI checks response safely: $stderr', async ({ stderr, expectedStatus }) => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
@@ -240,7 +241,7 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: command === 'gh' && isRequiredChecks(args) ? 1 : 0,
       stdout: command === 'gh' && isRequiredChecks(args) ? '' : command === 'gh' ? ghResponse(args, []) : 'done',
-      stderr: command === 'gh' && isRequiredChecks(args) ? emptyChecksError : '',
+      stderr: command === 'gh' && isRequiredChecks(args) ? stderr : '',
       durationMs: 1
     }));
 
@@ -254,7 +255,7 @@ describe('runPrGuardianSkill', () => {
       baseBranch: 'main'
     });
 
-    expect(result.status).toBe('success');
+    expect(result.status).toBe(expectedStatus);
   });
 
   it('stabilizes a ready retry preflight before returning without another guardian pass', async () => {
