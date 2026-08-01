@@ -138,7 +138,8 @@ describe('enableScheduler', () => {
     const launcher = await fs.readFile(path.join(home, 'bin', 'run-scheduled.sh'), 'utf8');
     expect(launcher).toContain('exec "$operator_launcher" run');
     const operatorLauncher = await fs.readFile(path.join(home, 'bin', 'kaizen'), 'utf8');
-    expect(operatorLauncher).toContain('git -C "$runtime_dir" fetch --prune origin main');
+    expect(operatorLauncher).toContain('git -C "$runtime_dir" fetch --prune origin "$runtime_ref"');
+    expect(operatorLauncher).toContain('runtime_ref=${KAIZEN_RUNTIME_REF:-main}');
     expect(operatorLauncher).toContain('exec "$node_bin" "$runtime_dir/dist/cli.js" "$@"');
   });
 

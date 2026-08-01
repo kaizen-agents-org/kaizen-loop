@@ -22,6 +22,12 @@ kaizen_home=${KAIZEN_HOME:-"$HOME/.kaizen"}
 runtime_dir=${KAIZEN_RUNTIME_DIR:-"$kaizen_home/runtime/kaizen-loop"}
 lock_dir="$kaizen_home/runtime/update.lock"
 
+# Which upstream ref the runtime follows. Dogfood repositories track main so
+# they exercise unreleased code on purpose. External adopters set this to the
+# tag pinned by onboarding/versions.json, so a scheduled run can never pick up
+# code that has not been released.
+runtime_ref=${KAIZEN_RUNTIME_REF:-main}
+
 mkdir -p "$(dirname "$runtime_dir")"
 if ! mkdir "$lock_dir" 2>/dev/null; then
   lock_pid=''
@@ -44,11 +50,22 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 if [ ! -d "$runtime_dir/.git" ]; then
-  git clone --branch main --single-branch "$remote_url" "$runtime_dir" >&2
+  git clone --branch "$runtime_ref" --single-branch "$remote_url" "$runtime_dir" >&2
 fi
 
-git -C "$runtime_dir" fetch --prune origin main >&2
-git -C "$runtime_dir" checkout --detach origin/main >&2
+# A pinned tag is immutable, so fetch it by name and check out the tag itself;
+# a branch has to be followed through its remote-tracking ref.
+case "$runtime_ref" in
+  v[0-9]*)
+    git -C "$runtime_dir" fetch --prune origin \
+      "refs/tags/$runtime_ref:refs/tags/$runtime_ref" >&2
+    git -C "$runtime_dir" checkout --detach "refs/tags/$runtime_ref" >&2
+    ;;
+  *)
+    git -C "$runtime_dir" fetch --prune origin "$runtime_ref" >&2
+    git -C "$runtime_dir" checkout --detach "origin/$runtime_ref" >&2
+    ;;
+esac
 
 installed_launcher="$kaizen_home/bin/kaizen"
 runtime_launcher="$runtime_dir/scripts/kaizen-runtime.sh"

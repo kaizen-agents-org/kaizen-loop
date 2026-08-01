@@ -80,11 +80,18 @@ monitor checks, and other operator commands; add `$KAIZEN_HOME/bin` before globa
 npm locations on `PATH` if the short `kaizen` command is required. Both operator
 and scheduled commands refresh a dedicated runtime clone under
 `$KAIZEN_HOME/runtime/kaizen-loop` from `origin/main`. It installs dependencies and
-rebuilds only when the main commit changes, then runs the requested job with that
+rebuilds only when the tracked commit changes, then runs the requested job with that
 verified build. The dedicated clone keeps automatic updates from switching or
 resetting a developer checkout. An update or build failure stops the scheduled run
 or operator command instead of silently using stale code. `doctor --json` and
 `fleet --json` include the selected runtime commit and directory.
+
+`KAIZEN_RUNTIME_REF` selects which upstream ref that clone follows. It defaults to
+`main`, which is what dogfood repositories want: they exercise unreleased code on
+purpose. External adopters set it to the release tag pinned by
+`onboarding/versions.json` (for example `v0.1.0`), so a scheduled run cannot pick
+up code that has not been released. A value starting with `v` is fetched and
+checked out as a tag; anything else is followed as a branch.
 
 ## Quickstart
 
