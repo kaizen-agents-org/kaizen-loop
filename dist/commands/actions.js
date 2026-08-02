@@ -13,6 +13,8 @@ import { slugify } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 const MAX_PATCH_BYTES = 5 * 1024 * 1024;
+const ACTIONS_VERIFIER_REPOSITORY = 'https://github.com/kaizen-agents-org/verifier.git';
+const ACTIONS_VERIFIER_REF = 'refs/heads/main';
 const PROVIDER_OUTPUT_SCHEMA = {
     type: 'object',
     properties: {
@@ -61,6 +63,7 @@ export async function prepareActionsFix(options) {
     const command = options.runCommand ?? runCommand;
     const context = await loadActionsContext(options.cwd, options.issue, command);
     await assertAuthorized(context.github, context.repo, context.issue, context.config);
+    assertActionsVerifierTrustRoot(context.config);
     const git = new GitClient(command, options.cwd);
     const baseSha = await git.revParse('HEAD');
     const prompt = buildActionsFixPrompt({ repo: context.repo, issue: context.issue, config: context.config, attempt: 1 });
@@ -76,10 +79,19 @@ export async function prepareActionsFix(options) {
     }, null, 2)}\n`);
     return { repo: context.repo, issue: context.issue.number, baseSha, promptPath: path.join(options.outputDir, 'prompt.md') };
 }
+function assertActionsVerifierTrustRoot(config) {
+    if (config.verifier.expectedRepository !== ACTIONS_VERIFIER_REPOSITORY ||
+        config.verifier.expectedRef !== ACTIONS_VERIFIER_REF) {
+        throw new Error('The reusable Actions workflow supports only verifier.expectedRepository=' +
+            `${ACTIONS_VERIFIER_REPOSITORY} and verifier.expectedRef=${ACTIONS_VERIFIER_REF}; ` +
+            'custom verifier trust roots require a corresponding trusted workflow checkout.');
+    }
+}
 export async function verifyActionsFix(options) {
     const command = options.runCommand ?? runCommand;
     const context = await loadActionsContext(options.cwd, options.issue, command);
     await assertAuthorized(context.github, context.repo, context.issue, context.config);
+    assertActionsVerifierTrustRoot(context.config);
     const patch = await readBoundedPatch(options.patchPath);
     const provider = providerResultSchema.parse(JSON.parse(await fs.readFile(options.providerResultPath, 'utf8')));
     const builder = parseAgentResult(provider.finalMessage);

@@ -224,6 +224,41 @@ describe('GitHub Actions fix workflow', () => {
     await expect(fs.access(path.join(cwd, 'setup-ran'))).rejects.toThrow();
   });
 
+  it('rejects a custom verifier trust root in the reusable Actions path', async () => {
+    const cwd = await configuredRepo();
+    const config = parse(await fs.readFile(path.join(cwd, '.kaizen', 'config.yml'), 'utf8'));
+    config.verifier = {
+      ...config.verifier,
+      expectedRepository: 'https://github.com/example/custom-verifier.git',
+      expectedRef: 'refs/heads/release'
+    };
+    await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), stringify(config));
+    const fakeRun: CommandRunner = async (command, args) => {
+      if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
+      if (command === 'gh' && args[0] === 'issue') {
+        return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
+      }
+      if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
+        return result(command, args, JSON.stringify([[
+          { event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }
+        ]]));
+      }
+      if (command === 'gh' && args.at(-1)?.endsWith('/permission')) {
+        return result(command, args, JSON.stringify({ permission: 'write' }));
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    };
+
+    await expect(verifyActionsFix({
+      cwd,
+      issue: 199,
+      patchPath: path.join(cwd, 'unused.patch'),
+      providerResultPath: path.join(cwd, 'unused-provider.json'),
+      outputDir: path.join(cwd, 'verified'),
+      runCommand: fakeRun
+    })).rejects.toThrow('custom verifier trust roots require a corresponding trusted workflow checkout');
+  });
+
   it('verifies and publishes the exact authorized patch without executing publish hooks', async () => {
     const cwd = await configuredRepo();
     await fs.writeFile(path.join(cwd, 'README.md'), 'before\n');
