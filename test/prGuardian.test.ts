@@ -573,7 +573,7 @@ describe('runPrGuardianSkill', () => {
             headRefOid: 'abc123456789',
             comments: [{
               author: { login: 'chatgpt-codex-connector[bot]' },
-              updatedAt: new Date(Date.now() + 1_000).toISOString(),
+              updatedAt: new Date(Math.floor(Date.now() / 1_000) * 1_000).toISOString(),
               body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
             }]
           } : undefined),
@@ -832,6 +832,53 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
+  it('uses the newest current-head no-findings evidence after intervening activity', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const noFindings = (updatedAt: string) => ({
+      author: { login: 'chatgpt-codex-connector[bot]' },
+      updatedAt,
+      body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'abc123456789',
+          comments: [
+            noFindings('2026-07-13T01:16:20Z'),
+            {
+              author: { login: 'reviewer' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: 'Please recheck this.'
+            },
+            noFindings('2026-07-13T01:16:22Z')
+          ]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
   it('does not trust a mixed Codex message containing findings as no-findings evidence', async () => {
     const config = configSchema.parse({
       version: 1,
@@ -959,7 +1006,15 @@ describe('runPrGuardianSkill', () => {
               updatedAt: '2026-07-13T01:16:21Z',
               body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
             }],
-            statusCheckRollup: [{ context: 'CodeRabbit', state: 'SUCCESS' }]
+            statusCheckRollup: [
+              {
+                name: 'verify',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-13T01:16:22Z'
+              },
+              { context: 'CodeRabbit', state: 'SUCCESS' }
+            ]
           })
         : 'done',
       stderr: '',

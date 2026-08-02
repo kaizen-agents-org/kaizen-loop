@@ -749,7 +749,9 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
     codexNoFindingsAt: pullRequest.codexNoFindingsAt,
     latestAuditableActivityAt: latestTimestamp([
       pullRequest.latestAuditableActivityAt,
-      ...checkAnnotations.map((annotation) => annotation.checkCompletedAt)
+      ...checkAnnotations
+        .filter((annotation) => annotation.level === 'failure' || annotation.level === 'warning')
+        .map((annotation) => annotation.checkCompletedAt)
     ])
   };
 }
@@ -890,8 +892,7 @@ async function inspectPullRequest(
       ...(parsed.comments ?? [])
         .filter((comment) => comment !== codexEvidence?.comment)
         .flatMap((comment) => [comment.updatedAt, comment.createdAt]),
-      ...reviews.map((review) => review.submitted_at),
-      ...(parsed.statusCheckRollup ?? []).flatMap((check) => [check.completedAt, check.startedAt])
+      ...reviews.map((review) => review.submitted_at)
     ]),
     checks: requiredChecks
   };
@@ -987,6 +988,10 @@ function currentHeadCodexNoFindingsEvidence(parsed: PullRequestViewResponse): {
   observedAt: string;
 } | undefined {
   if (!parsed.headRefOid) return undefined;
+  const candidates: Array<{
+    comment: NonNullable<PullRequestViewResponse['comments']>[number];
+    observedAt: string;
+  }> = [];
   for (const comment of parsed.comments ?? []) {
     if (normalizeReviewerLogin(comment.author?.login) !== 'chatgpt-codex-connector') continue;
     const body = comment.body ?? '';
@@ -995,10 +1000,10 @@ function currentHeadCodexNoFindingsEvidence(parsed: PullRequestViewResponse): {
     );
     const observedAt = comment.updatedAt ?? comment.createdAt;
     if (match?.[1] && parsed.headRefOid.startsWith(match[1]) && observedAt && !Number.isNaN(Date.parse(observedAt))) {
-      return { comment, observedAt };
+      candidates.push({ comment, observedAt });
     }
   }
-  return undefined;
+  return candidates.sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))[0];
 }
 
 function normalizeReviewerLogin(login: string | undefined): string {
@@ -1012,7 +1017,7 @@ function isAuditedReady(gate: PrGateSummary, evidenceNotBefore?: number): boolea
   if (Number.isNaN(evidenceAt)) return false;
   const latestActivityAt = Date.parse(gate.latestAuditableActivityAt ?? '');
   if (!Number.isNaN(latestActivityAt) && evidenceAt < latestActivityAt) return false;
-  return evidenceNotBefore === undefined || evidenceAt >= evidenceNotBefore;
+  return evidenceNotBefore === undefined || evidenceAt >= Math.floor(evidenceNotBefore / 1_000) * 1_000;
 }
 
 function latestTimestamp(values: Array<string | undefined>): string | undefined {

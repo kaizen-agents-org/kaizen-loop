@@ -529,7 +529,9 @@ async function inspectPrGate(runCommand, req) {
         codexNoFindingsAt: pullRequest.codexNoFindingsAt,
         latestAuditableActivityAt: latestTimestamp([
             pullRequest.latestAuditableActivityAt,
-            ...checkAnnotations.map((annotation) => annotation.checkCompletedAt)
+            ...checkAnnotations
+                .filter((annotation) => annotation.level === 'failure' || annotation.level === 'warning')
+                .map((annotation) => annotation.checkCompletedAt)
         ])
     };
 }
@@ -648,8 +650,7 @@ async function inspectPullRequest(runCommand, req) {
             ...(parsed.comments ?? [])
                 .filter((comment) => comment !== codexEvidence?.comment)
                 .flatMap((comment) => [comment.updatedAt, comment.createdAt]),
-            ...reviews.map((review) => review.submitted_at),
-            ...(parsed.statusCheckRollup ?? []).flatMap((check) => [check.completedAt, check.startedAt])
+            ...reviews.map((review) => review.submitted_at)
         ]),
         checks: requiredChecks
     };
@@ -743,6 +744,7 @@ function hasCurrentHeadBotEvidence(login, parsed) {
 function currentHeadCodexNoFindingsEvidence(parsed) {
     if (!parsed.headRefOid)
         return undefined;
+    const candidates = [];
     for (const comment of parsed.comments ?? []) {
         if (normalizeReviewerLogin(comment.author?.login) !== 'chatgpt-codex-connector')
             continue;
@@ -750,10 +752,10 @@ function currentHeadCodexNoFindingsEvidence(parsed) {
         const match = body.trim().match(/^Codex Review:\s*Didn't find any (?:major )?issues\.\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`\s*$/i);
         const observedAt = comment.updatedAt ?? comment.createdAt;
         if (match?.[1] && parsed.headRefOid.startsWith(match[1]) && observedAt && !Number.isNaN(Date.parse(observedAt))) {
-            return { comment, observedAt };
+            candidates.push({ comment, observedAt });
         }
     }
-    return undefined;
+    return candidates.sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))[0];
 }
 function normalizeReviewerLogin(login) {
     return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
@@ -769,7 +771,7 @@ function isAuditedReady(gate, evidenceNotBefore) {
     const latestActivityAt = Date.parse(gate.latestAuditableActivityAt ?? '');
     if (!Number.isNaN(latestActivityAt) && evidenceAt < latestActivityAt)
         return false;
-    return evidenceNotBefore === undefined || evidenceAt >= evidenceNotBefore;
+    return evidenceNotBefore === undefined || evidenceAt >= Math.floor(evidenceNotBefore / 1_000) * 1_000;
 }
 function latestTimestamp(values) {
     return values
