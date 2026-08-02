@@ -544,35 +544,39 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
     }
     const runPages = JSON.parse(runsResult.stdout || '[]');
     const checkRuns = runPages.flatMap((page) => page.check_runs ?? []);
-    const annotations = [];
-    for (const checkRun of checkRuns.filter((run) => (run.output?.annotations_count ?? 0) > 0)) {
+    const annotatedRuns = checkRuns.filter((run) => (run.output?.annotations_count ?? 0) > 0);
+    for (const checkRun of annotatedRuns) {
         if (!checkRun.id)
             throw new Error('Could not inspect check annotations: check run id is missing.');
-        const result = await runCommand('gh', [
-            'api',
-            `repos/${req.repo}/check-runs/${checkRun.id}/annotations?per_page=100`,
-            '--paginate',
-            '--slurp'
-        ], {
-            cwd: req.workspaceDir,
-            env: githubCliEnv(),
-            timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
-            rejectOnNonZero: false
-        });
-        if (result.exitCode !== 0) {
-            throw new Error(`Could not inspect annotations for check ${checkRun.name ?? checkRun.id}: ${result.stderr || result.stdout}`);
-        }
-        const pages = JSON.parse(result.stdout || '[]');
-        for (const annotation of pages.flat()) {
-            annotations.push({
+    }
+    const annotations = [];
+    for (let index = 0; index < annotatedRuns.length; index += 4) {
+        const batch = await Promise.all(annotatedRuns.slice(index, index + 4).map(async (checkRun) => {
+            const result = await runCommand('gh', [
+                'api',
+                `repos/${req.repo}/check-runs/${checkRun.id}/annotations?per_page=100`,
+                '--paginate',
+                '--slurp'
+            ], {
+                cwd: req.workspaceDir,
+                env: githubCliEnv(),
+                timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+                rejectOnNonZero: false
+            });
+            if (result.exitCode !== 0) {
+                throw new Error(`Could not inspect annotations for check ${checkRun.name ?? checkRun.id}: ${result.stderr || result.stdout}`);
+            }
+            const pages = JSON.parse(result.stdout || '[]');
+            return pages.flat().map((annotation) => ({
                 checkName: checkRun.name ?? String(checkRun.id),
                 level: String(annotation.annotation_level ?? 'unknown').toLowerCase(),
                 path: annotation.path,
                 startLine: annotation.start_line,
                 message: annotation.message,
                 checkCompletedAt: checkRun.completed_at
-            });
-        }
+            }));
+        }));
+        annotations.push(...batch.flat());
     }
     return annotations;
 }
@@ -742,9 +746,16 @@ function currentHeadCodexNoFindingsEvidence(parsed) {
         if (normalizeReviewerLogin(comment.author?.login) !== 'chatgpt-codex-connector')
             continue;
         const body = comment.body ?? '';
-        const match = body.trim().match(/^Codex Review:\s*Didn't find any (?:major )?issues\.\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`\s*$/i);
+        const noFindings = body.match(/^Codex Review:\s*Didn['’]t find any (?:major )?issues\.([^\r\n]*)/i);
+        const reviewedCommit = body.match(/\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`/i);
+        const contradictoryTail = /\b(?:however|but|finding(?:s)?|found|issues? remain)\b/i.test(noFindings?.[1] ?? '');
         const observedAt = comment.updatedAt ?? comment.createdAt;
-        if (match?.[1] && parsed.headRefOid.startsWith(match[1]) && observedAt && !Number.isNaN(Date.parse(observedAt))) {
+        if (noFindings &&
+            !contradictoryTail &&
+            reviewedCommit?.[1] &&
+            parsed.headRefOid.startsWith(reviewedCommit[1]) &&
+            observedAt &&
+            !Number.isNaN(Date.parse(observedAt))) {
             candidates.push({ comment, observedAt });
         }
     }
@@ -766,7 +777,7 @@ function isAuditedReady(gate, evidenceNotBefore) {
     const latestActivityAt = Date.parse(gate.latestAuditableActivityAt ?? '');
     if (!Number.isNaN(latestActivityAt) && evidenceAt <= latestActivityAt)
         return false;
-    return evidenceNotBefore === undefined || evidenceAt >= Math.floor(evidenceNotBefore / 1_000) * 1_000;
+    return evidenceNotBefore === undefined || evidenceAt > Math.floor(evidenceNotBefore / 1_000) * 1_000;
 }
 function latestTimestamp(values) {
     return values
