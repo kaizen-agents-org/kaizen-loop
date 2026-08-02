@@ -120,6 +120,10 @@ verifier:
   # (旧 approved | pr_only | rejected も当面受け付ける)
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
+  # preflight はこの canonical branch を独立に解決し、build/runtime SHA と照合する
+  expectedRepository: "https://github.com/kaizen-agents-org/verifier.git"
+  expectedRef: "refs/heads/main"
+  freshnessTimeoutSeconds: 30
 
 guardian:
   # PR 作成後に skills/pr-guardian/SKILL.md を Codex で実行する

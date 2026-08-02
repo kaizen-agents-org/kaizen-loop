@@ -6,9 +6,42 @@ import { parse, stringify } from 'yaml';
 import { defaultConfigYaml as buildDefaultConfigYaml } from '../../src/config/config.js';
 import { saveRegistry as saveRegistryFile } from '../../src/config/registry.js';
 import type { GitHubIssue } from '../../src/github/types.js';
-import { applyImplementationBudget, runKaizen } from '../../src/orchestrator/run.js';
+import { applyImplementationBudget, runKaizen as runKaizenCore } from '../../src/orchestrator/run.js';
 import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../../src/utils/command.js';
+
+const testVerifierCommit = 'b'.repeat(40);
+
+async function runKaizen(options: Parameters<typeof runKaizenCore>[0]) {
+  if (!options.runCommand) return runKaizenCore(options);
+  const supplied = options.runCommand;
+  const runCommand: CommandRunner = async (command, args, commandOptions) => {
+    if (command === 'git' && args[0] === 'ls-remote') {
+      return result(command, args, commandOptions?.cwd, `${testVerifierCommit}\trefs/heads/main\n`);
+    }
+    try {
+      const response = await supplied(command, args, commandOptions);
+      if (command !== 'verifier' || args.join(' ') !== '--version --json') return response;
+      try {
+        const parsed = JSON.parse(response.stdout) as { name?: unknown; build?: unknown; runtime?: unknown };
+        if (parsed.name === 'verifier' && parsed.build && parsed.runtime) return response;
+      } catch {
+        // Older test doubles predate structured runtime provenance.
+      }
+    } catch (error) {
+      if (command !== 'verifier' || args.join(' ') !== '--version --json') throw error;
+    }
+    return result(command, args, commandOptions?.cwd, JSON.stringify({
+      name: 'verifier',
+      version: '0.0.0',
+      status: 'current',
+      stale: false,
+      build: { commit: testVerifierCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+      runtime: { commit: testVerifierCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+    }));
+  };
+  return runKaizenCore({ ...options, runCommand });
+}
 
 describe('runKaizen dry-run', () => {
   it('uses the fleet workspace config for scheduled dry runs', async () => {
@@ -875,6 +908,9 @@ describe('runKaizen PR flow', () => {
     });
 
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args[0] === 'ls-remote') {
+        return result(command, args, options?.cwd, `${'b'.repeat(40)}\trefs/heads/main\n`);
+      }
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
         return result(command, args, repo, JSON.stringify(issue()));
       }
@@ -907,7 +943,12 @@ describe('runKaizen PR flow', () => {
     const runsDir = path.join(home, 'projects', 'o-r', 'runs');
     const [run] = await fs.readdir(runsDir);
     const runtime = JSON.parse(await fs.readFile(path.join(runsDir, run, 'verifier-runtime.json'), 'utf8'));
-    expect(runtime).toMatchObject({ protocol: 'structured', status: 'stale', stale: true });
+    expect(runtime).toMatchObject({
+      protocol: 'structured',
+      status: 'stale',
+      stale: true,
+      freshness: { expectedCommit: 'b'.repeat(40), status: 'stale' }
+    });
   });
 
   it('loads run configuration from the synced workspace before selecting issues', async () => {

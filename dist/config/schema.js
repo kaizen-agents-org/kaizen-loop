@@ -178,14 +178,23 @@ export const configSchema = z
         enabled: z.boolean().default(true),
         command: z.string().default('verifier'),
         resultPath: z.string().default('.kaizen/verifier/verify-result.json'),
-        timeoutMinutes: z.number().int().positive().default(15)
+        timeoutMinutes: z.number().int().positive().default(15),
+        expectedRepository: z.string().url().default('https://github.com/kaizen-agents-org/verifier.git'),
+        expectedRef: z.string()
+            .regex(/^refs\/heads\/[A-Za-z0-9._/-]+$/)
+            .refine((value) => !value.includes('..') && !value.includes('//') && !value.endsWith('/'), 'expectedRef must be a canonical branch ref')
+            .default('refs/heads/main'),
+        freshnessTimeoutSeconds: z.number().int().positive().max(300).default(30)
     })
         .strict()
         .default({
         enabled: true,
         command: 'verifier',
         resultPath: '.kaizen/verifier/verify-result.json',
-        timeoutMinutes: 15
+        timeoutMinutes: 15,
+        expectedRepository: 'https://github.com/kaizen-agents-org/verifier.git',
+        expectedRef: 'refs/heads/main',
+        freshnessTimeoutSeconds: 30
     }),
     guardian: z
         .object({

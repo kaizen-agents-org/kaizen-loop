@@ -19,7 +19,7 @@ import {
   countConsecutiveRetryableBlocks,
   markedPullRequestNumbers
 } from '../report/comments.js';
-import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -497,7 +497,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 }
 
-async function preflightVerifier(options: {
+export async function preflightVerifier(options: {
   config: KaizenConfig;
   runCommand: CommandRunner;
   runDir: string;
@@ -508,11 +508,38 @@ async function preflightVerifier(options: {
     envAllowlist: options.config.safety.envAllowlist
   });
   const runtimePath = path.join(options.runDir, 'verifier-runtime.json');
+  const source = {
+    repository: options.config.verifier.expectedRepository,
+    ref: options.config.verifier.expectedRef
+  };
+  let expectedCommit: string | undefined;
   try {
+    expectedCommit = await resolveExpectedVerifierCommit(options);
     const runtime = await adapter.inspectRuntime();
-    await fs.writeFile(runtimePath, `${JSON.stringify(runtime, null, 2)}\n`);
+    const observedBuildCommit = runtime.protocol === 'structured' ? runtime.build.commit : null;
+    const observedRuntimeCommit = runtime.protocol === 'structured' ? runtime.runtime.commit : null;
+    const matchesExpected = observedBuildCommit === expectedCommit && observedRuntimeCommit === expectedCommit;
+    const clean = runtime.protocol === 'structured' && runtime.build.dirty === false && runtime.runtime.dirty === false;
+    const freshness = {
+      ...source,
+      resolvedAt: new Date().toISOString(),
+      expectedCommit,
+      observedBuildCommit,
+      observedRuntimeCommit,
+      status: runtime.protocol === 'structured' && matchesExpected && clean ? 'current' : 'stale'
+    };
+    await fs.writeFile(runtimePath, `${JSON.stringify({ ...runtime, freshness }, null, 2)}\n`);
+    if (runtime.protocol !== 'structured') {
+      return `Verifier preflight failed: ${runtime.command} does not provide structured build provenance. Install a current verifier build from ${source.repository} ${source.ref}.`;
+    }
     if (runtime.stale) {
       return `Verifier preflight failed: stale build (built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Rebuild and relink ${runtime.command}.`;
+    }
+    if (!matchesExpected) {
+      return `Verifier preflight failed: obsolete build (expected ${expectedCommit} from ${source.repository} ${source.ref}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Refresh, rebuild, and relink ${runtime.command}.`;
+    }
+    if (!clean) {
+      return `Verifier preflight failed: verifier build or runtime checkout is dirty at ${expectedCommit}. Rebuild and relink ${runtime.command} from a clean checkout.`;
     }
     return undefined;
   } catch (error) {
@@ -522,10 +549,42 @@ async function preflightVerifier(options: {
       command: options.config.verifier.command,
       status: 'unavailable',
       stale: null,
+      freshness: {
+        ...source,
+        resolvedAt: new Date().toISOString(),
+        expectedCommit: expectedCommit ?? null,
+        status: 'unverifiable'
+      },
       error: message
     }, null, 2)}\n`);
     return `Verifier preflight failed: ${message}`;
   }
+}
+
+async function resolveExpectedVerifierCommit(options: {
+  config: KaizenConfig;
+  runCommand: CommandRunner;
+}): Promise<string> {
+  const repository = options.config.verifier.expectedRepository;
+  const ref = options.config.verifier.expectedRef;
+  const result = await options.runCommand('git', ['ls-remote', '--exit-code', repository, ref], {
+    timeoutMs: options.config.verifier.freshnessTimeoutSeconds * 1_000,
+    rejectOnNonZero: false,
+    env: buildAllowlistedEnv(process.env, options.config.safety.envAllowlist)
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not resolve trusted verifier revision ${repository} ${ref}: ${result.stderr || result.stdout || `git exited with code ${result.exitCode}`}`);
+  }
+  const exact = result.stdout
+    .trim()
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/, 2))
+    .find(([, candidateRef]) => candidateRef === ref);
+  const commit = exact?.[0];
+  if (!commit || !/^[0-9a-f]{40}$/i.test(commit)) {
+    throw new Error(`Trusted verifier revision ${repository} ${ref} did not resolve to one exact 40-character commit.`);
+  }
+  return commit.toLowerCase();
 }
 
 export function applyImplementationBudget(selection: RunIssueSelection, maxIssues: number): RunIssueSelection {

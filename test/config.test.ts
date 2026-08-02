@@ -36,6 +36,9 @@ describe('configSchema', () => {
     expect(config.builder.resultPath).toBe('.kaizen/builder/build-result.json');
     expect(config.verifier.enabled).toBe(true);
     expect(config.verifier.command).toBe('verifier');
+    expect(config.verifier.expectedRepository).toBe('https://github.com/kaizen-agents-org/verifier.git');
+    expect(config.verifier.expectedRef).toBe('refs/heads/main');
+    expect(config.verifier.freshnessTimeoutSeconds).toBe(30);
     expect(config.guardian.enabled).toBe(true);
     expect(config.guardian.command).toBe('codex');
     expect(config.goal.maxIterations).toBe(5);
