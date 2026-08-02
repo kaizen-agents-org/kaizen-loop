@@ -1,0 +1,21 @@
+# Pilot profile for Python repositories.
+#
+# Pilot profiles throttle throughput while an adopter builds confidence: one
+# issue per run, one open Kaizen pull request, and no direct commits. Graduate
+# to standard.yml once weekly metrics are stable.
+#
+# Verification commands are intentionally absent. `kaizen init` proposes them
+# from stack detection and the operator confirms them, so a profile must not
+# silently decide what "verified" means for a repository it has never seen.
+#
+# policy.mode, verifier.enabled, and safety.operationMode are fixed by the
+# organization safety floor and cannot be set here.
+run:
+  maxIssuesPerNight: 1
+  maxOpenPullRequests: 1
+safety:
+  wipLimit: 2
+policy:
+  directCommit:
+    maxChangedLines: 0
+    maxChangedFiles: 0

@@ -40,6 +40,7 @@ program
   .option('--agent <agent>', 'agent to use: claude or codex')
   .option('--schedule <HH:MM>', 'scheduled run time', '02:00')
   .option('--yes', 'overwrite generated files when they already exist', false)
+  .option('--profile <name|path>', 'onboarding profile overlay applied to the generated config')
   .option('--json', 'print machine-readable output')
   .action(async (options) => {
     const globals = program.opts<{ json?: boolean }>();
@@ -48,8 +49,12 @@ program
       agent: parseAgent(options.agent),
       schedule: parseSchedule(options.schedule),
       yes: Boolean(options.yes),
+      profile: typeof options.profile === 'string' ? options.profile : undefined,
       runCommand
     });
+    for (const correction of result.safetyFloorCorrections) {
+      console.error(`warning: profile weakened the organization safety floor; ${correction}`);
+    }
     print({
       message: 'Kaizen Loop initialized.',
       ...result

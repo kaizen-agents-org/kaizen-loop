@@ -36,5 +36,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Build
-        run: npm run build
+      # Rebuilds dist/ and fails when the committed output is stale. dist/ is
+      # committed so a tagged GitHub install needs no build step, so a stale
+      # commit would ship the wrong CLI to adopters.
+      - name: Check generated dist
+        run: npm run check:dist

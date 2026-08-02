@@ -1,0 +1,637 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { parse, stringify } from 'yaml';
+import { z } from 'zod';
+import { requiredLabels } from './doctor.js';
+import { loadConfig } from '../config/config.js';
+import { loadRegistry, loadRegistryForRecovery, registryTransaction, resolveProject, updateRegistry } from '../config/registry.js';
+import { configSchema } from '../config/schema.js';
+import { GitHubClient } from '../github/client.js';
+import { RunLock } from '../orchestrator/lock.js';
+import { enableScheduler } from '../scheduler/scheduler.js';
+import { KaizenError } from '../utils/errors.js';
+import { projectStateDir, workspaceDir } from '../utils/paths.js';
+import { assertProjectSlug, repoFromRemote, slugFromRepo } from '../utils/slug.js';
+import { runtimeIdentity } from '../utils/runtime.js';
+import { GitClient } from '../workspace/git.js';
+import { WorkspaceManager } from '../workspace/manager.js';
+export async function syncFleet(options) {
+    if (options.manifestPath && (options.root || options.owner || options.repos?.length)) {
+        throw new KaizenError('--manifest cannot be combined with --root, --owner, or --repo.');
+    }
+    if (options.prune && !options.manifestPath && !options.repos?.length) {
+        throw new KaizenError('--prune requires --manifest or an explicit --repo expected set.');
+    }
+    const manifest = options.manifestPath ? await loadFleetManifest(options.manifestPath) : undefined;
+    const root = manifest
+        ? path.dirname(path.resolve(options.manifestPath))
+        : await resolveFleetRoot(options.cwd, options.root, options.runCommand);
+    const owner = manifest?.owner ?? options.owner ?? await ownerFromCwd(options.cwd, options.runCommand);
+    const discovered = manifest
+        ? await discoverManifestProjects(manifest, options.manifestPath, options.runCommand)
+        : await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
+    assertExactRequestedSet(discovered, owner, options.repos);
+    const prepared = await prepareFleetProjects(discovered);
+    const preflightFailures = prepared
+        .filter((item) => item.error)
+        .map((item) => fleetProjectError(item.project, item.error));
+    if (preflightFailures.length > 0) {
+        return { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
+    }
+    const baselineRegistry = options.prune || options.syncScheduler
+        ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
+        : undefined;
+    const staged = { version: 1, projects: {} };
+    const projects = [];
+    for (const project of discovered) {
+        const item = prepared.find((entry) => entry.project.slug === project.slug);
+        const projectResult = await syncFleetProject({
+            ...options,
+            registry: staged,
+            project,
+            config: item.config,
+            migrated: item.migrated,
+            migratedContent: item.migratedContent
+        });
+        if (options.syncScheduler && !options.dryRun) {
+            const previouslyEnabled = baselineRegistry?.projects[project.slug]?.enabled ?? false;
+            const stagedProject = staged.projects[project.slug];
+            if (stagedProject)
+                stagedProject.enabled = previouslyEnabled;
+            projectResult.enabled = previouslyEnabled;
+        }
+        projects.push(projectResult);
+    }
+    const value = { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects, pruned: [] };
+    if (fleetHasFailures(value))
+        return value;
+    const seen = new Set(discovered.map((project) => project.slug));
+    const applyTopology = (registry) => {
+        const candidate = structuredClone(registry);
+        const projectCount = Object.keys(registry.projects).length;
+        if (options.prune && discovered.length === 0 && projectCount > 0) {
+            throw new KaizenError(`Refusing to prune ${projectCount} registered project(s) because fleet discovery under ${root} found no projects.`);
+        }
+        for (const [slug, project] of Object.entries(staged.projects))
+            candidate.projects[slug] = project;
+        const pruned = [];
+        if (options.prune) {
+            for (const slug of Object.keys(candidate.projects)) {
+                if (seen.has(slug))
+                    continue;
+                pruned.push(slug);
+                delete candidate.projects[slug];
+            }
+        }
+        return { registry: candidate, pruned };
+    };
+    if (options.dryRun) {
+        const registry = baselineRegistry ?? await loadRegistry();
+        return { ...value, pruned: applyTopology(registry).pruned };
+    }
+    const result = await registryTransaction(async (registry) => {
+        if (options.prune && !isDeepStrictEqual(registry.projects, baselineRegistry.projects)) {
+            throw new KaizenError('Registry changed during fleet operation; rerun fleet before pruning.');
+        }
+        const applied = applyTopology(registry);
+        return { registry: applied.registry, value: { ...value, pruned: applied.pruned } };
+    }, undefined, { recoverInvalid: Boolean(options.manifestPath && options.prune) });
+    if (options.syncScheduler && !fleetHasFailures(result)) {
+        for (const projectResult of result.projects) {
+            const project = discovered.find((item) => item.slug === projectResult.slug);
+            const config = prepared.find((item) => item.project.slug === projectResult.slug).config;
+            try {
+                await enableScheduler({
+                    slug: project.slug,
+                    project: projectRegistryEntry(project, config, true),
+                    config,
+                    runCommand: options.runCommand
+                });
+                await updateRegistry((registry) => {
+                    const registered = registry.projects[project.slug];
+                    if (registered)
+                        registered.enabled = true;
+                });
+                projectResult.schedulerSynced = true;
+                projectResult.enabled = true;
+            }
+            catch (error) {
+                projectResult.error = error instanceof Error ? error.message : String(error);
+            }
+        }
+    }
+    return result;
+}
+export function fleetHasFailures(result) {
+    return result.projects.some((project) => Object.hasOwn(project, 'error') || project.verifyPassed === false);
+}
+export async function refreshFleet(options) {
+    const targets = await refreshTargets(options.project, options.cwd);
+    const projects = [];
+    for (const [slug, project] of targets) {
+        projects.push(await refreshProject(slug, project, Boolean(options.sync), options.runCommand));
+    }
+    return {
+        runtime: runtimeIdentity(),
+        ok: projects.length > 0 && projects.every((project) => project.ok),
+        sync: Boolean(options.sync),
+        projects
+    };
+}
+async function syncFleetProject(options) {
+    const result = {
+        slug: options.project.slug,
+        repo: options.project.repo,
+        localPath: options.project.localPath,
+        configMigrated: false,
+        workspaceEnsured: false,
+        labelsEnsured: false,
+        schedulerSynced: false,
+        lockRepaired: false,
+        verified: false,
+        enabled: options.syncScheduler && options.dryRun
+    };
+    try {
+        const config = options.config;
+        result.configMigrated = options.migrated;
+        if (options.migrated && options.migrateConfig && !options.dryRun) {
+            await fs.writeFile(path.join(options.project.localPath, '.kaizen', 'config.yml'), options.migratedContent);
+        }
+        const registryProject = projectRegistryEntry(options.project, config, options.syncScheduler && options.dryRun);
+        if (!options.dryRun)
+            options.registry.projects[options.project.slug] = registryProject;
+        if (options.repairLocks) {
+            result.lockRepaired = await repairStaleRunLock(options.project.slug, options.dryRun);
+        }
+        if (options.ensureWorkspace) {
+            result.workspaceEnsured = true;
+            if (!options.dryRun) {
+                await new WorkspaceManager(options.runCommand, registryProject.workspacePath, options.project.remoteUrl).ensure();
+            }
+        }
+        if (options.ensureLabels) {
+            result.labelsEnsured = true;
+            if (!options.dryRun) {
+                await new GitHubClient(options.runCommand, options.project.localPath).createLabels(requiredLabels(config));
+            }
+        }
+        if (options.verify) {
+            result.verified = true;
+            if (!options.dryRun) {
+                const workspace = new WorkspaceManager(options.runCommand, registryProject.workspacePath, options.project.remoteUrl);
+                await workspace.ensure();
+                await workspace.sync(config.git.defaultBranch);
+                const setupResult = await workspace.runSetup(config);
+                if (setupResult) {
+                    result.setupResult = setupResult;
+                    if (!setupResult.ok) {
+                        result.verifyPassed = false;
+                        result.verifyResults = [];
+                        return result;
+                    }
+                }
+                const verifyResults = await workspace.runVerify(config);
+                result.verifyResults = verifyResults;
+                result.verifyPassed = verifyResults.every((item) => item.ok);
+            }
+        }
+        if (options.syncScheduler && options.dryRun)
+            result.schedulerSynced = true;
+    }
+    catch (error) {
+        result.error = error instanceof Error ? error.message : String(error);
+    }
+    return result;
+}
+async function refreshTargets(projectSlug, cwd) {
+    if (projectSlug) {
+        const resolved = await resolveProject(projectSlug, cwd);
+        return [[resolved.slug, resolved.project]];
+    }
+    const registry = await loadRegistry();
+    return Object.entries(registry.projects);
+}
+async function refreshProject(slug, project, sync, runCommand) {
+    const steps = [];
+    let config;
+    try {
+        config = await loadConfig(project.localPath);
+        steps.push({ name: 'config', ok: true });
+    }
+    catch (error) {
+        steps.push({ name: 'config', ok: false, message: String(error) });
+    }
+    if (config) {
+        let lock;
+        try {
+            lock = await RunLock.acquire(projectStateDir(slug));
+            const remoteUrl = sync ? await resolveFleetRemote(runCommand, project) : githubRemote(project.repo);
+            const workspace = new WorkspaceManager(runCommand, project.workspacePath, remoteUrl || githubRemote(project.repo));
+            await refreshWorkspace(steps, slug, project, sync, workspace, config);
+        }
+        catch (error) {
+            if (RunLock.isActiveError(error)) {
+                steps.push({ name: 'workspace', ok: false, message: 'skipped because run is already active' });
+                if (sync)
+                    steps.push({ name: 'sync', ok: false, message: 'skipped because run is already active' });
+                steps.push({ name: 'setup', ok: false, message: 'skipped because run is already active' });
+                steps.push({ name: 'verify', ok: false, message: 'skipped because run is already active' });
+            }
+            else {
+                throw error;
+            }
+        }
+        finally {
+            await lock?.release();
+        }
+    }
+    return {
+        slug,
+        repo: project.repo,
+        localPath: project.localPath,
+        workspacePath: project.workspacePath,
+        defaultBranch: config?.git.defaultBranch,
+        ok: steps.every((step) => step.ok),
+        steps
+    };
+}
+async function resolveFleetRemote(runCommand, project) {
+    try {
+        return await new GitClient(runCommand, project.localPath).remoteUrl('origin');
+    }
+    catch {
+        return githubRemote(project.repo);
+    }
+}
+async function refreshWorkspace(steps, slug, project, sync, workspace, config) {
+    let workspaceReady = false;
+    if (sync) {
+        const workspaceOk = await runStep(steps, 'workspace', async () => {
+            assertSafeWorkspacePath(slug, project.workspacePath);
+            await workspace.ensure();
+        });
+        const syncOk = workspaceOk
+            ? await runStep(steps, 'sync', async () => {
+                await workspace.sync(config.git.defaultBranch);
+            })
+            : false;
+        workspaceReady = workspaceOk && syncOk;
+    }
+    else {
+        workspaceReady = await runStep(steps, 'workspace', async () => {
+            assertSafeWorkspacePath(slug, project.workspacePath);
+            await fs.access(path.join(project.workspacePath, '.git'));
+        });
+    }
+    if (workspaceReady) {
+        const setupOk = await runSetupStep(steps, workspace, config);
+        if (setupOk) {
+            await runVerifySteps(steps, workspace, config);
+        }
+        else {
+            steps.push({ name: 'verify', ok: false, message: 'skipped because setup failed' });
+        }
+    }
+    else {
+        steps.push({ name: 'setup', ok: false, message: 'skipped because workspace is not ready' });
+        steps.push({ name: 'verify', ok: false, message: 'skipped because workspace is not ready' });
+    }
+}
+async function runSetupStep(steps, workspace, config) {
+    if (!config.commands.setup) {
+        steps.push({ name: 'setup', ok: true, message: 'not configured' });
+        return true;
+    }
+    try {
+        const result = await workspace.runSetup(config);
+        const ok = Boolean(result?.ok);
+        steps.push({
+            name: 'setup',
+            ok,
+            command: config.commands.setup,
+            output: result?.output
+        });
+        return ok;
+    }
+    catch (error) {
+        steps.push({ name: 'setup', ok: false, command: config.commands.setup, message: String(error) });
+        return false;
+    }
+}
+async function runVerifySteps(steps, workspace, config) {
+    if (config.commands.verify.length === 0) {
+        steps.push({ name: 'verify', ok: true, message: 'not configured' });
+        return;
+    }
+    try {
+        const results = await workspace.runVerify(config);
+        for (const result of results) {
+            steps.push({
+                name: 'verify',
+                ok: result.ok,
+                command: result.command,
+                output: result.output
+            });
+        }
+    }
+    catch (error) {
+        steps.push({ name: 'verify', ok: false, message: String(error) });
+    }
+}
+async function runStep(steps, name, fn) {
+    try {
+        await fn();
+        steps.push({ name, ok: true });
+        return true;
+    }
+    catch (error) {
+        steps.push({ name, ok: false, message: String(error) });
+        return false;
+    }
+}
+const fleetManifestSchema = z.object({
+    version: z.literal(1),
+    owner: z.string().min(1),
+    projects: z.array(z.object({
+        repo: z.string().min(1),
+        localPath: z.string().min(1)
+    }).strict()).min(1)
+}).strict();
+export async function loadFleetManifest(filePath) {
+    try {
+        return fleetManifestSchema.parse(parse(await fs.readFile(path.resolve(filePath), 'utf8')));
+    }
+    catch (error) {
+        throw new KaizenError(`Invalid fleet manifest at ${path.resolve(filePath)}: ${String(error)}`);
+    }
+}
+async function discoverManifestProjects(manifest, manifestPath, runCommand) {
+    const base = path.dirname(path.resolve(manifestPath));
+    const projects = [];
+    for (const entry of manifest.projects) {
+        const repo = entry.repo.includes('/') ? entry.repo : `${manifest.owner}/${entry.repo}`;
+        if (!repo.startsWith(`${manifest.owner}/`)) {
+            throw new KaizenError(`Fleet manifest repository ${repo} does not belong to owner ${manifest.owner}.`);
+        }
+        const localPath = path.resolve(base, entry.localPath);
+        if (!await exists(path.join(localPath, '.git')) || !await exists(path.join(localPath, '.kaizen', 'config.yml'))) {
+            throw new KaizenError(`Fleet manifest project ${repo} is missing a checkout or .kaizen/config.yml at ${localPath}.`);
+        }
+        const remoteUrl = await new GitClient(runCommand, localPath).remoteUrl('origin');
+        const remoteRepo = repoFromRemote(remoteUrl);
+        if (remoteRepo !== repo) {
+            throw new KaizenError(`Fleet manifest expected ${repo} at ${localPath}, but origin is ${remoteRepo ?? remoteUrl}.`);
+        }
+        projects.push({ slug: slugFromRepo(repo), repo, localPath, remoteUrl });
+    }
+    const slugs = projects.map((project) => project.slug);
+    if (new Set(slugs).size !== slugs.length)
+        throw new KaizenError('Fleet manifest contains duplicate repositories.');
+    return projects.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+async function prepareFleetProjects(projects) {
+    return Promise.all(projects.map(async (project) => {
+        try {
+            const prepared = await loadFleetConfig(project.localPath);
+            return { project, ...prepared };
+        }
+        catch (error) {
+            return { project, error: error instanceof Error ? error.message : String(error) };
+        }
+    }));
+}
+function assertExactRequestedSet(projects, owner, repos) {
+    if (!repos?.length)
+        return;
+    const requested = new Set(repos.map((repo) => repo.includes('/') ? repo : `${owner ?? ''}/${repo}`));
+    const discovered = new Set(projects.map((project) => project.repo));
+    const missing = [...requested].filter((repo) => !discovered.has(repo));
+    if (missing.length > 0) {
+        throw new KaizenError(`Refusing fleet apply because requested repositories were not discovered: ${missing.join(', ')}.`);
+    }
+}
+function fleetProjectError(project, error) {
+    return {
+        slug: project.slug,
+        repo: project.repo,
+        localPath: project.localPath,
+        configMigrated: false,
+        workspaceEnsured: false,
+        labelsEnsured: false,
+        schedulerSynced: false,
+        lockRepaired: false,
+        verified: false,
+        enabled: false,
+        error
+    };
+}
+async function discoverFleetProjects(options) {
+    const requested = new Set((options.repos ?? []).map((repo) => repo.includes('/') ? repo : `${options.owner ?? ''}/${repo}`));
+    const entries = await fs.readdir(options.root, { withFileTypes: true });
+    const candidates = [];
+    for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('_'))
+            continue;
+        const localPath = path.join(options.root, entry.name);
+        if (!await exists(path.join(localPath, '.git')) || !await exists(path.join(localPath, '.kaizen', 'config.yml')))
+            continue;
+        const git = new GitClient(options.runCommand, localPath);
+        const remoteUrl = await git.remoteUrl('origin');
+        const repo = repoFromRemote(remoteUrl);
+        if (!repo)
+            continue;
+        if (options.owner && !repo.startsWith(`${options.owner}/`))
+            continue;
+        if (requested.size > 0 && !requested.has(repo))
+            continue;
+        candidates.push({ slug: slugFromRepo(repo), repo, localPath, remoteUrl });
+    }
+    const projects = chooseCanonicalCheckouts(candidates);
+    projects.sort((a, b) => a.slug.localeCompare(b.slug));
+    return projects;
+}
+function chooseCanonicalCheckouts(candidates) {
+    const bySlug = new Map();
+    for (const candidate of candidates) {
+        bySlug.set(candidate.slug, [...(bySlug.get(candidate.slug) ?? []), candidate]);
+    }
+    return [...bySlug.values()].map((items) => {
+        const exact = items.find((item) => path.basename(item.localPath) === item.repo.split('/')[1]);
+        return exact ?? items.sort((a, b) => a.localPath.localeCompare(b.localPath))[0];
+    });
+}
+async function loadFleetConfig(repoDir) {
+    const configPath = path.join(repoDir, '.kaizen', 'config.yml');
+    const raw = await fs.readFile(configPath, 'utf8');
+    const parsed = parse(raw);
+    const migrated = migrateLegacySchedulerConfig(parsed);
+    const config = configSchema.parse(parsed);
+    return { config, migrated, migratedContent: migrated ? stringify(parsed) : undefined };
+}
+export function migrateLegacySchedulerConfig(config) {
+    const scheduler = record(config.scheduler);
+    if (!scheduler || record(scheduler.jobs))
+        return false;
+    const provider = typeof scheduler.provider === 'string' ? scheduler.provider : undefined;
+    const nightly = legacyTimeJob(scheduler.nightly);
+    const afternoon = legacyTimeJob(scheduler.afternoon);
+    const poll = legacyPollJob(scheduler.poll);
+    const maintenanceJobs = [nightly, afternoon].filter((job) => Boolean(job));
+    const maintenanceTimes = maintenanceJobs.filter((job) => job.enabled).map((job) => job.time);
+    const jobs = {};
+    if (maintenanceTimes.length === 1) {
+        jobs.maintenance = {
+            enabled: true,
+            schedule: { type: 'daily', time: maintenanceTimes[0] },
+            run: { mode: 'maintenance', lateStartGuard: true }
+        };
+    }
+    else if (maintenanceTimes.length > 1) {
+        jobs.maintenance = {
+            enabled: true,
+            schedule: { type: 'times', times: [...new Set(maintenanceTimes)] },
+            run: { mode: 'maintenance', lateStartGuard: false }
+        };
+    }
+    else if (maintenanceJobs.some((job) => !job.enabled)) {
+        jobs.maintenance = {
+            enabled: false,
+            schedule: legacyMaintenanceSchedule(maintenanceJobs),
+            run: { mode: 'maintenance', lateStartGuard: true }
+        };
+    }
+    jobs['issue-watch'] = {
+        enabled: Boolean(poll?.enabled),
+        schedule: { type: 'interval', everyMinutes: poll?.intervalMinutes ?? 5 },
+        run: { mode: 'watch', skipIfRunning: poll?.skipIfRunning ?? true }
+    };
+    if (!jobs.maintenance) {
+        jobs.maintenance = {
+            enabled: true,
+            schedule: { type: 'daily', time: '02:00' },
+            run: { mode: 'maintenance', lateStartGuard: true }
+        };
+    }
+    config.scheduler = provider ? { provider, jobs } : { jobs };
+    return true;
+}
+function projectRegistryEntry(project, config, enabled) {
+    return {
+        repo: project.repo,
+        localPath: project.localPath,
+        workspacePath: workspaceDir(project.slug),
+        schedule: primarySchedule(config),
+        enabled,
+        createdAt: new Date().toISOString()
+    };
+}
+function primarySchedule(config) {
+    const maintenance = config.scheduler.jobs.maintenance?.schedule;
+    if (!maintenance)
+        return '02:00';
+    if (maintenance.type === 'daily')
+        return maintenance.time;
+    if (maintenance.type === 'times')
+        return maintenance.times[0] ?? '02:00';
+    if (maintenance.type === 'interval' && maintenance.anchorTime)
+        return maintenance.anchorTime;
+    return '02:00';
+}
+async function resolveFleetRoot(cwd, root, runCommand) {
+    if (root)
+        return path.resolve(root);
+    try {
+        const repoRoot = await new GitClient(runCommand, cwd).root();
+        return path.dirname(repoRoot);
+    }
+    catch {
+        return path.resolve(cwd);
+    }
+}
+async function ownerFromCwd(cwd, runCommand) {
+    try {
+        const remoteUrl = await new GitClient(runCommand, cwd).remoteUrl('origin');
+        return repoFromRemote(remoteUrl)?.split('/')[0];
+    }
+    catch {
+        return undefined;
+    }
+}
+async function repairStaleRunLock(slug, dryRun) {
+    const lockPath = path.join(projectStateDir(slug), 'run.lock');
+    try {
+        const raw = await fs.readFile(lockPath, 'utf8');
+        const pid = JSON.parse(raw).pid;
+        const stale = !pid || !isPidAlive(pid);
+        if (!stale)
+            return false;
+        if (!dryRun)
+            await fs.rm(lockPath, { force: true });
+        return true;
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return false;
+        if (!dryRun)
+            await fs.rm(lockPath, { force: true });
+        return true;
+    }
+}
+function isPidAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function legacyTimeJob(value) {
+    const item = record(value);
+    if (!item)
+        return undefined;
+    const time = typeof item.time === 'string' ? item.time : undefined;
+    return { enabled: item.enabled !== false, time: time ?? '02:00' };
+}
+function legacyMaintenanceSchedule(jobs) {
+    const times = [...new Set(jobs.map((job) => job.time))];
+    if (times.length > 1)
+        return { type: 'times', times };
+    return { type: 'daily', time: times[0] ?? '02:00' };
+}
+function legacyPollJob(value) {
+    const item = record(value);
+    if (!item)
+        return undefined;
+    const intervalMinutes = typeof item.intervalMinutes === 'number' ? item.intervalMinutes : 5;
+    return {
+        enabled: item.enabled === true,
+        intervalMinutes,
+        skipIfRunning: item.skipIfRunning !== false
+    };
+}
+function record(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : undefined;
+}
+async function exists(filePath) {
+    try {
+        await fs.access(filePath);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function githubRemote(repo) {
+    if (/^(?:[a-z]+:\/\/|git@)/i.test(repo))
+        return repo;
+    return `https://github.com/${repo}.git`;
+}
+function assertSafeWorkspacePath(slug, projectWorkspacePath) {
+    assertProjectSlug(slug);
+    if (path.resolve(projectWorkspacePath) !== path.resolve(workspaceDir(slug))) {
+        throw new Error(`Refusing to refresh unsafe workspace path for ${slug}: ${projectWorkspacePath}`);
+    }
+}
+//# sourceMappingURL=fleet.js.map

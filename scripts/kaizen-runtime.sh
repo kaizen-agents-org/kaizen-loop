@@ -22,6 +22,12 @@ kaizen_home=${KAIZEN_HOME:-"$HOME/.kaizen"}
 runtime_dir=${KAIZEN_RUNTIME_DIR:-"$kaizen_home/runtime/kaizen-loop"}
 lock_dir="$kaizen_home/runtime/update.lock"
 
+# Which upstream ref the runtime follows. Dogfood repositories track main so
+# they exercise unreleased code on purpose. External adopters set this to the
+# tag pinned by onboarding/versions.json, so a scheduled run can never pick up
+# code that has not been released.
+runtime_ref=${KAIZEN_RUNTIME_REF:-main}
+
 mkdir -p "$(dirname "$runtime_dir")"
 if ! mkdir "$lock_dir" 2>/dev/null; then
   lock_pid=''
@@ -44,11 +50,31 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 if [ ! -d "$runtime_dir/.git" ]; then
-  git clone --branch main --single-branch "$remote_url" "$runtime_dir" >&2
+  git clone --branch "$runtime_ref" --single-branch "$remote_url" "$runtime_dir" >&2
 fi
 
-git -C "$runtime_dir" fetch --prune origin main >&2
-git -C "$runtime_dir" checkout --detach origin/main >&2
+# A pinned tag is immutable, so fetch it by name and check out the tag itself;
+# a branch has to be followed through its remote-tracking ref.
+#
+# Reset instead of checking out: dist/ is tracked, so any local rebuild leaves
+# modified tracked files and a plain checkout would abort ("commit your changes
+# or stash them"), wedging every later update. This clone is disposable build
+# output, so discarding local modifications is always correct here.
+case "$runtime_ref" in
+  v[0-9]*)
+    git -C "$runtime_dir" fetch --prune origin \
+      "refs/tags/$runtime_ref:refs/tags/$runtime_ref" >&2
+    git -C "$runtime_dir" reset --hard "refs/tags/$runtime_ref" >&2
+    ;;
+  *)
+    # Name the destination explicitly. The clone is --single-branch, so fetching
+    # a different branch by name alone updates only FETCH_HEAD and never creates
+    # origin/<ref>, leaving the reset below with nothing to resolve.
+    git -C "$runtime_dir" fetch --prune origin \
+      "+refs/heads/$runtime_ref:refs/remotes/origin/$runtime_ref" >&2
+    git -C "$runtime_dir" reset --hard "refs/remotes/origin/$runtime_ref" >&2
+    ;;
+esac
 
 installed_launcher="$kaizen_home/bin/kaizen"
 runtime_launcher="$runtime_dir/scripts/kaizen-runtime.sh"
@@ -73,11 +99,18 @@ if [ -f "$runtime_dir/.kaizen-built-commit" ]; then
   built_commit=$(sed -n '1p' "$runtime_dir/.kaizen-built-commit")
 fi
 
+# dist/ is committed, so a checked-out commit normally already carries a usable
+# CLI and only runtime dependencies are missing. Install those, and build only
+# when the commit genuinely lacks dist/ (an older commit from before dist was
+# tracked, or a partial checkout).
 if [ "$commit" != "$built_commit" ] || [ ! -f "$runtime_dir/dist/cli.js" ]; then
   (
     cd "$runtime_dir"
-    npm ci
-    npm run build
+    npm ci --omit=dev
+    if [ ! -f dist/cli.js ]; then
+      npm install --include=dev --no-save
+      npm run build
+    fi
   ) >&2
   printf '%s\n' "$commit" > "$runtime_dir/.kaizen-built-commit"
 fi

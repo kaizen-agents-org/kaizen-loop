@@ -11,6 +11,7 @@
   },
   "files": [
     "dist",
+    "profiles",
     "scripts/kaizen-runtime.sh",
     "scripts/run-scheduled.sh",
     "README.md",
@@ -18,6 +19,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "check:dist": "node scripts/check-dist.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "dev": "tsx src/cli.ts",
