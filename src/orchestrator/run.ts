@@ -2576,11 +2576,16 @@ function shortSummary(summary: string): string {
   return (summary || 'fix issue').split('\n')[0].slice(0, 80);
 }
 
-function resultFor(issues: RunIssueSummary[]): RunSummary['result'] {
+export function resultFor(issues: RunIssueSummary[]): RunSummary['result'] {
   if (issues.length === 0) return 'success';
-  if (issues.every((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit')) return 'success';
-  if (issues.some((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit')) return 'partial';
+  if (issues.every(issueCompletedSuccessfully)) return 'success';
+  if (issues.some(issueCompletedSuccessfully)) return 'partial';
   return 'failed';
+}
+
+function issueCompletedSuccessfully(issue: RunIssueSummary): boolean {
+  const delivered = issue.outcome === 'pr-created' || issue.outcome === 'direct-commit';
+  return delivered && issue.guardian?.status !== 'failed';
 }
 
 async function persistRunSummary(slug: string, summary: RunSummary): Promise<RunSummary> {

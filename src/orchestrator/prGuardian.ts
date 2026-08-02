@@ -378,6 +378,21 @@ export async function runPrGuardianSkill(
         durationMs: Date.now() - startMs
       };
     }
+    if (req.config.guardian.reviewSettleSeconds > 0) {
+      const initialGate = await inspectPrGate(runCommand, req);
+      const settledInitialGate = initialGate.isReady
+        ? await waitForStablePrGate(runCommand, req, initialGate)
+        : await waitForInitiallyReadyPrGate(runCommand, req);
+      if (settledInitialGate?.isReady) {
+        return {
+          status: 'success',
+          summary: successSummary(settledInitialGate),
+          raw: '',
+          durationMs: Date.now() - startMs
+        };
+      }
+      rawOutputs.push(`PR was not stably merge-ready before the first guardian pass:\n${summarizeGate(settledInitialGate ?? initialGate)}`);
+    }
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (attempt > 1) {
         const preflight = await inspectPrGate(runCommand, req);
@@ -397,24 +412,54 @@ export async function runPrGuardianSkill(
         }
       }
 
-      const result = await runCommand(
-        req.config.guardian.command,
-        [
-          'exec',
-          '--cd',
-          req.workspaceDir,
-          '--dangerously-bypass-approvals-and-sandbox',
-          buildPrompt(req, attempt)
-        ],
-        {
-          cwd: req.workspaceDir,
-          env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
-          timeoutMs: boundedTimeoutMs(req.config.guardian.timeoutMinutes * 60_000, req.runDeadlineAt),
-          rejectOnNonZero: false
+      let result: Awaited<ReturnType<CommandRunner>>;
+      try {
+        result = await runCommand(
+          req.config.guardian.command,
+          [
+            'exec',
+            '--cd',
+            req.workspaceDir,
+            '--dangerously-bypass-approvals-and-sandbox',
+            buildPrompt(req, attempt)
+          ],
+          {
+            cwd: req.workspaceDir,
+            env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
+            timeoutMs: boundedTimeoutMs(req.config.guardian.timeoutMinutes * 60_000, req.runDeadlineAt),
+            rejectOnNonZero: false
+          }
+        );
+      } catch (error) {
+        const failure = error instanceof Error ? error.message : String(error);
+        rawOutputs.push(failure);
+        const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs);
+        if (reconciled) {
+          return {
+            status: 'success',
+            summary: successSummary(reconciled),
+            raw: rawOutputs.join('\n'),
+            durationMs: Date.now() - startMs
+          };
         }
-      );
+        return {
+          status: 'failed',
+          summary: failure,
+          raw: rawOutputs.join('\n'),
+          durationMs: Date.now() - startMs
+        };
+      }
       rawOutputs.push(`${result.stdout}${result.stderr}`);
       if (result.exitCode !== 0) {
+        const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs);
+        if (reconciled) {
+          return {
+            status: 'success',
+            summary: successSummary(reconciled),
+            raw: rawOutputs.join('\n'),
+            durationMs: Date.now() - startMs
+          };
+        }
         return {
           status: 'failed',
           summary: `PR guardian skill exited with code ${result.exitCode}.`,
@@ -895,6 +940,41 @@ async function waitForStablePrGate(
     return { ...second, isReady: false, blockers: ['PR activity changed during stabilization'] };
   }
   return second;
+}
+
+async function waitForInitiallyReadyPrGate(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest
+): Promise<PrGateSummary | undefined> {
+  const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
+  if (settleMs <= 0) return undefined;
+  await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
+  const gate = await inspectPrGate(runCommand, req);
+  if (!gate.isReady) return gate;
+  return waitForStablePrGate(runCommand, req, gate);
+}
+
+async function reconcileReadyPrGate(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest,
+  rawOutputs: string[]
+): Promise<PrGateSummary | undefined> {
+  try {
+    const gate = await inspectPrGate(runCommand, req);
+    if (!gate.isReady) {
+      rawOutputs.push(`PR remained blocked after guardian command failure:\n${summarizeGate(gate)}`);
+      return undefined;
+    }
+    const stable = await waitForStablePrGate(runCommand, req, gate);
+    if (!stable.isReady) {
+      rawOutputs.push(`PR was not stably merge-ready after guardian command failure:\n${summarizeGate(stable)}`);
+      return undefined;
+    }
+    return stable;
+  } catch (error) {
+    rawOutputs.push(`Could not reconcile PR state after guardian command failure: ${String(error)}`);
+    return undefined;
+  }
 }
 
 function boundedTimeoutMs(configuredTimeoutMs: number, runDeadlineAt: number | undefined): number {

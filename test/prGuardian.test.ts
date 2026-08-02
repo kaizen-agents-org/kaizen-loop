@@ -322,7 +322,7 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(4);
   });
 
-  it('waits once for late bot review threads before declaring success', async () => {
+  it('does not miss a late bot review during the initial settle window', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 1 }
@@ -382,8 +382,117 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('failed');
-    expect(result.raw).toContain('bot review settle wait');
+    expect(result.raw).toContain('before the first guardian pass');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
+  it('skips Codex when a pending PR becomes stably ready during the initial settle window', async () => {
+    vi.useFakeTimers();
+    try {
+      const config = configSchema.parse({
+        version: 1,
+        guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 1 }
+      });
+      let prViews = 0;
+      const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+        if (command === 'gh' && isPrView(args)) prViews += 1;
+        const statusCheckRollup = [{
+          name: 'test',
+          status: prViews < 3 ? 'IN_PROGRESS' : 'COMPLETED',
+          conclusion: prViews < 3 ? null : 'SUCCESS'
+        }];
+        return {
+          command,
+          args,
+          cwd: options?.cwd,
+          exitCode: 0,
+          stdout: command === 'gh' ? ghResponse(args, [], { statusCheckRollup }) : 'guardian pass complete',
+          stderr: '',
+          durationMs: 1
+        };
+      });
+
+      const pending = runPrGuardianSkill(runner, {
+        config,
+        workspaceDir: '/tmp/workspace',
+        repo: 'o/r',
+        prUrl: 'https://github.com/o/r/pull/4',
+        prNumber: 4,
+        branch: 'kaizen/issue-1-fix',
+        baseBranch: 'main'
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      const result = await pending;
+
+      expect(result.status).toBe('success');
+      expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles a thrown guardian timeout when GitHub is stably ready', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') throw new Error('Command timed out after 60000ms');
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: ghResponse(args, []),
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.raw).toContain('Command timed out');
+  });
+
+  it('preserves a real review blocker after a thrown guardian timeout', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') throw new Error('Command timed out after 60000ms');
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: ghResponse(args, [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please fix this.' }]),
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.raw).toContain('unresolved review thread');
   });
 
   it('requires two unchanged stabilization snapshots', async () => {
