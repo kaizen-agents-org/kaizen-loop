@@ -2188,6 +2188,7 @@ describe('runKaizen PR flow', () => {
       }
     });
 
+    let pendingGuardianComment = true;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
       if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
@@ -2208,6 +2209,12 @@ describe('runKaizen PR flow', () => {
         }));
       }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'view' && pendingGuardianComment) {
+        const readiness = githubReadinessResult(command, args, repo);
+        const pullRequest = JSON.parse(readiness.stdout);
+        pullRequest.comments = [{ id: 'human-comment', author: { login: 'reviewer' }, body: 'Please audit.' }];
+        return result(command, args, repo, JSON.stringify(pullRequest));
+      }
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
@@ -2228,6 +2235,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
       if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      if (command === 'codex') pendingGuardianComment = false;
       return result(command, args, options?.cwd, '');
     });
 

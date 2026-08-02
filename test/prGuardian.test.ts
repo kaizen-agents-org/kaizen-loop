@@ -25,7 +25,9 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
+      stdout: command === 'gh'
+        ? ghResponse(args, [], { comments: [{ id: 'human-comment', author: { login: 'reviewer' }, body: 'Please audit this.' }] })
+        : 'done',
       stderr: '',
       durationMs: 1
     }));
@@ -88,7 +90,7 @@ describe('runPrGuardianSkill', () => {
     expect(result.summary).toContain('unresolved review thread');
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
-    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(4);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(5);
   });
 
   it('treats outdated unresolved review threads as blockers', async () => {
@@ -431,19 +433,60 @@ describe('runPrGuardianSkill', () => {
     }
   });
 
+  it('does not treat a generated CodeRabbit summary as an unaudited PR comment', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          comments: [{
+            id: 'summary',
+            author: { login: 'coderabbitai' },
+            body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nWalkthrough'
+          }]
+        })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
   it('reconciles a thrown guardian timeout when GitHub is stably ready', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
     });
+    let reviewFetches = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'codex') throw new Error('Command timed out after 60000ms');
+      if (command === 'gh' && args.join(' ').startsWith('api graphql')) reviewFetches += 1;
       return {
         command,
         args,
         cwd: options?.cwd,
         exitCode: 0,
-        stdout: ghResponse(args, []),
+        stdout: ghResponse(args, reviewFetches === 1
+          ? [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Pending review.' }]
+          : []),
         stderr: '',
         durationMs: 1
       };
@@ -507,7 +550,7 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: 0,
       stdout: command === 'gh'
-        ? ghResponse(args, [], { headRefOid: isPrView(args) && ++views === 4 ? 'new-head' : 'old-head' })
+        ? ghResponse(args, [], { headRefOid: isPrView(args) && ++views % 2 === 0 ? 'new-head' : 'old-head' })
         : 'done',
       stderr: '',
       durationMs: 1
@@ -657,7 +700,7 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('success');
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
     expect(result.summary).not.toContain('not for current PR head');
   });
 
@@ -764,7 +807,7 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
   it('continues pending jobs when an old successful pull request is inaccessible', async () => {
@@ -886,7 +929,7 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', headSha: 'new-head', reactivationCount: 1 });
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
   it('enqueues only marked same-repository generated sync pull requests', async () => {

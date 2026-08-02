@@ -378,21 +378,19 @@ export async function runPrGuardianSkill(
         durationMs: Date.now() - startMs
       };
     }
-    if (req.config.guardian.reviewSettleSeconds > 0) {
-      const initialGate = await inspectPrGate(runCommand, req);
-      const settledInitialGate = initialGate.isReady
-        ? await waitForStablePrGate(runCommand, req, initialGate)
-        : await waitForInitiallyReadyPrGate(runCommand, req);
-      if (settledInitialGate?.isReady) {
-        return {
-          status: 'success',
-          summary: successSummary(settledInitialGate),
-          raw: '',
-          durationMs: Date.now() - startMs
-        };
-      }
-      rawOutputs.push(`PR was not stably merge-ready before the first guardian pass:\n${summarizeGate(settledInitialGate ?? initialGate)}`);
+    const initialGate = await inspectPrGate(runCommand, req);
+    const settledInitialGate = initialGate.isReady
+      ? await waitForStablePrGate(runCommand, req, initialGate)
+      : await waitForInitiallyReadyPrGate(runCommand, req, initialGate);
+    if (settledInitialGate.isReady) {
+      return {
+        status: 'success',
+        summary: successSummary(settledInitialGate),
+        raw: '',
+        durationMs: Date.now() - startMs
+      };
     }
+    rawOutputs.push(`PR was not stably merge-ready before the first guardian pass:\n${summarizeGate(settledInitialGate)}`);
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (attempt > 1) {
         const preflight = await inspectPrGate(runCommand, req);
@@ -433,39 +431,17 @@ export async function runPrGuardianSkill(
       } catch (error) {
         const failure = error instanceof Error ? error.message : String(error);
         rawOutputs.push(failure);
-        const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs);
-        if (reconciled) {
-          return {
-            status: 'success',
-            summary: successSummary(reconciled),
-            raw: rawOutputs.join('\n'),
-            durationMs: Date.now() - startMs
-          };
-        }
-        return {
-          status: 'failed',
-          summary: failure,
-          raw: rawOutputs.join('\n'),
-          durationMs: Date.now() - startMs
-        };
+        return finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, failure);
       }
       rawOutputs.push(`${result.stdout}${result.stderr}`);
       if (result.exitCode !== 0) {
-        const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs);
-        if (reconciled) {
-          return {
-            status: 'success',
-            summary: successSummary(reconciled),
-            raw: rawOutputs.join('\n'),
-            durationMs: Date.now() - startMs
-          };
-        }
-        return {
-          status: 'failed',
-          summary: `PR guardian skill exited with code ${result.exitCode}.`,
-          raw: rawOutputs.join('\n'),
-          durationMs: Date.now() - startMs
-        };
+        return finishAfterGuardianCommandFailure(
+          runCommand,
+          req,
+          rawOutputs,
+          startMs,
+          `PR guardian skill exited with code ${result.exitCode}.`
+        );
       }
 
       const gate = await inspectPrGate(runCommand, req);
@@ -795,7 +771,10 @@ async function inspectPullRequest(
       reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
       comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
     }),
-    reviewBlockers: currentHeadReviewBlockers(parsed, reviews),
+    reviewBlockers: [
+      ...currentHeadReviewBlockers(parsed, reviews),
+      ...commentAuditBlockers(parsed)
+    ],
     checks: requiredChecks
   };
 }
@@ -896,6 +875,19 @@ function normalizeReviewerLogin(login: string | undefined): string {
   return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
 }
 
+function commentAuditBlockers(parsed: PullRequestViewResponse): string[] {
+  if (parsed.state === 'MERGED') return [];
+  return (parsed.comments ?? []).flatMap((comment) => {
+    const login = normalizeReviewerLogin(comment.author?.login);
+    const body = comment.body ?? '';
+    if (login.includes('coderabbit') && /<!-- This is an auto-generated comment: (?:summarize|rate limited) by coderabbit\.ai -->/i.test(body)) {
+      return [];
+    }
+    if (login.includes('codex') && hasCurrentHeadBotEvidence(login, parsed)) return [];
+    return [`PR comment ${comment.id ?? '(unknown id)'} by ${login} requires Guardian audit`];
+  });
+}
+
 function mergeabilityBlockers(state: Omit<PrGateSummary, 'isReady' | 'blockers'>): string[] {
   const blockers: string[] = [];
   if (state.state === 'MERGED') return blockers;
@@ -944,14 +936,31 @@ async function waitForStablePrGate(
 
 async function waitForInitiallyReadyPrGate(
   runCommand: CommandRunner,
-  req: PrGuardianSkillRequest
-): Promise<PrGateSummary | undefined> {
+  req: PrGuardianSkillRequest,
+  initial: PrGateSummary
+): Promise<PrGateSummary> {
   const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
-  if (settleMs <= 0) return undefined;
+  if (settleMs <= 0) return initial;
   await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
   const gate = await inspectPrGate(runCommand, req);
   if (!gate.isReady) return gate;
   return waitForStablePrGate(runCommand, req, gate);
+}
+
+async function finishAfterGuardianCommandFailure(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest,
+  rawOutputs: string[],
+  startMs: number,
+  failureSummary: string
+): Promise<PrGuardianSkillResult> {
+  const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs);
+  return {
+    status: reconciled ? 'success' : 'failed',
+    summary: reconciled ? successSummary(reconciled) : failureSummary,
+    raw: rawOutputs.join('\n'),
+    durationMs: Date.now() - startMs
+  };
 }
 
 async function reconcileReadyPrGate(
