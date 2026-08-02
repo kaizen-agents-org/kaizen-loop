@@ -498,6 +498,7 @@ async function inspectPrGate(runCommand, req) {
     const checkAnnotations = pullRequest.headRefOid
         ? await listCheckAnnotations(runCommand, req, pullRequest.headRefOid)
         : [];
+    const auditableCheckAnnotations = checkAnnotations.filter((annotation) => annotation.level === 'failure' || annotation.level === 'warning');
     const terminal = pullRequest.state === 'MERGED';
     const blockers = [
         ...mergeabilityBlockers(pullRequest),
@@ -518,12 +519,11 @@ async function inspectPrGate(runCommand, req) {
         blockers,
         isReady: blockers.length === 0,
         hasCurrentHeadCodexNoFindings: pullRequest.hasCurrentHeadCodexNoFindings,
+        hasUndatedAuditableActivity: auditableCheckAnnotations.some((annotation) => !annotation.checkCompletedAt),
         codexNoFindingsAt: pullRequest.codexNoFindingsAt,
         latestAuditableActivityAt: latestTimestamp([
             pullRequest.latestAuditableActivityAt,
-            ...checkAnnotations
-                .filter((annotation) => annotation.level === 'failure' || annotation.level === 'warning')
-                .map((annotation) => annotation.checkCompletedAt)
+            ...auditableCheckAnnotations.map((annotation) => annotation.checkCompletedAt)
         ])
     };
 }
@@ -637,6 +637,7 @@ async function inspectPullRequest(runCommand, req) {
             ...currentHeadReviewBlockers(parsed, reviews)
         ],
         hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
+        hasUndatedAuditableActivity: false,
         codexNoFindingsAt: codexEvidence?.observedAt,
         latestAuditableActivityAt: latestTimestamp([
             ...(parsed.comments ?? [])
@@ -760,8 +761,10 @@ function isAuditedReady(gate, evidenceNotBefore) {
     const evidenceAt = Date.parse(gate.codexNoFindingsAt ?? '');
     if (Number.isNaN(evidenceAt))
         return false;
+    if (gate.hasUndatedAuditableActivity)
+        return false;
     const latestActivityAt = Date.parse(gate.latestAuditableActivityAt ?? '');
-    if (!Number.isNaN(latestActivityAt) && evidenceAt < latestActivityAt)
+    if (!Number.isNaN(latestActivityAt) && evidenceAt <= latestActivityAt)
         return false;
     return evidenceNotBefore === undefined || evidenceAt >= Math.floor(evidenceNotBefore / 1_000) * 1_000;
 }

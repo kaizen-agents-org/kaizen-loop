@@ -785,7 +785,7 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.find(([command, args]) => command === 'gh' && isReviewApi(args))?.[1]).toContain('--paginate');
   });
 
-  it('runs Guardian when a PR comment is newer than current-head no-findings evidence', async () => {
+  it('runs Guardian when later PR activity shares the no-findings timestamp second', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
@@ -808,7 +808,7 @@ describe('runPrGuardianSkill', () => {
             {
               id: 'later-human-comment',
               author: { login: 'reviewer' },
-              updatedAt: '2026-07-13T01:16:22Z',
+              updatedAt: '2026-07-13T01:16:21Z',
               body: 'Please inspect the generated artifact.'
             }
           ]
@@ -939,6 +939,56 @@ describe('runPrGuardianSkill', () => {
           path: 'src/file.ts',
           start_line: 12,
           message: 'Generated output is stale.'
+        }]]);
+      } else {
+        stdout = command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          })
+          : 'guardian pass complete';
+      }
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('runs Guardian for an auditable annotation without a check completion time', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      let stdout: string;
+      if (command === 'gh' && isCheckRunsApi(args)) {
+        stdout = JSON.stringify([{ check_runs: [{
+          id: 99,
+          name: 'optional-lint',
+          completed_at: null,
+          output: { annotations_count: 1 }
+        }] }]);
+      } else if (command === 'gh' && isCheckAnnotationsApi(args)) {
+        stdout = JSON.stringify([[{
+          annotation_level: 'warning',
+          path: 'src/file.ts',
+          start_line: 12,
+          message: 'Review this warning.'
         }]]);
       } else {
         stdout = command === 'gh'
