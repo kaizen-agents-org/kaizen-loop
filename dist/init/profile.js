@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { ConfigError } from '../utils/errors.js';
 /**
@@ -8,7 +9,9 @@ import { ConfigError } from '../utils/errors.js';
  * `profiles/` is synced from it.
  */
 export function bundledProfilesDir() {
-    return path.join(import.meta.dirname, '..', '..', 'profiles');
+    // import.meta.dirname only exists from Node 20.11, but engines allows >=20,
+    // so derive the directory from the module URL instead.
+    return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'profiles');
 }
 /**
  * Organization safety floor for onboarded repositories.
@@ -27,11 +30,19 @@ export const SAFETY_FLOOR_PROTECTED_PATHS = [
 ];
 export const SAFETY_FLOOR_FORBIDDEN_PATHS = ['**/.git/**'];
 export const SAFETY_FLOOR_MAX_WIP_LIMIT = 5;
-/** Keys an overlay may not set at all, because they decide the trust model. */
+/**
+ * Keys an overlay may not set at all, because they decide the trust model.
+ *
+ * `commands.verify` belongs here for the same reason the profiles omit it: what
+ * counts as verified is repository-specific and operator-confirmed, and the
+ * merge replaces arrays wholesale, so a profile could otherwise substitute its
+ * own gate — or an empty one — for the detected commands.
+ */
 const REJECTED_OVERLAY_PATHS = [
     'policy.mode',
     'verifier.enabled',
-    'safety.operationMode'
+    'safety.operationMode',
+    'commands.verify'
 ];
 export function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -74,19 +85,33 @@ export async function loadProfile(profile, profilesDir) {
         throw new ConfigError(`Profile at ${source} must be a YAML mapping of config overrides.`);
     }
     for (const rejected of REJECTED_OVERLAY_PATHS) {
-        if (hasPath(parsed, rejected)) {
+        if (touchesPath(parsed, rejected)) {
             throw new ConfigError(`Profile at ${source} sets ${rejected}, which is fixed by the organization safety floor and cannot be overridden by a profile.`);
         }
     }
     return { name: path.basename(source).replace(/\.ya?ml$/, ''), source, values: parsed };
 }
-function hasPath(value, dottedPath) {
+/**
+ * Report whether an overlay touches a protected path.
+ *
+ * Setting an ancestor of the path counts as touching it. `verifier:` with no
+ * value parses to null, and the merge replaces whole non-mapping values, so an
+ * overlay that stops short of the protected leaf can still destroy it. Treating
+ * only an exact leaf match as "touched" would let that through.
+ */
+function touchesPath(value, dottedPath) {
     const segments = dottedPath.split('.');
     let cursor = value;
     for (const segment of segments) {
-        if (!isPlainObject(cursor) || !Object.prototype.hasOwnProperty.call(cursor, segment))
+        if (!isPlainObject(cursor))
+            return false;
+        if (!Object.prototype.hasOwnProperty.call(cursor, segment))
             return false;
         cursor = cursor[segment];
+        // The overlay set this ancestor to something that is not a mapping, so
+        // merging it removes everything below, including the protected leaf.
+        if (!isPlainObject(cursor))
+            return true;
     }
     return true;
 }

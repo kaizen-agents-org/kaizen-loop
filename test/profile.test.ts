@@ -62,6 +62,32 @@ describe('loadProfile', () => {
     await expect(loadProfile('bad', dir)).rejects.toThrow(/verifier\.enabled/);
   });
 
+  it.each([
+    ['a bare key that YAML parses as null', 'verifier:\n', /verifier\.enabled/],
+    ['an ancestor replaced with a scalar', 'verifier: false\n', /verifier\.enabled/],
+    ['an ancestor replaced with a list', 'policy:\n  - mode\n', /policy\.mode/],
+    ['a safety ancestor set to null', 'safety:\n', /safety\.operationMode/]
+  ])('rejects %s, which would delete a protected leaf', async (_name, body, expected) => {
+    const dir = await writeProfile('sneaky', body);
+    await expect(loadProfile('sneaky', dir)).rejects.toThrow(expected);
+  });
+
+  it('rejects a profile that sets its own verification commands', async () => {
+    const dir = await writeProfile('verify', 'commands:\n  verify:\n    - "true"\n');
+    await expect(loadProfile('verify', dir)).rejects.toThrow(/commands\.verify/);
+  });
+
+  it('rejects a profile that empties the verification commands', async () => {
+    const dir = await writeProfile('empty', 'commands:\n  verify: []\n');
+    await expect(loadProfile('empty', dir)).rejects.toThrow(/commands\.verify/);
+  });
+
+  it('still accepts an overlay that leaves protected paths alone', async () => {
+    const dir = await writeProfile('fine', 'safety:\n  wipLimit: 2\nrun:\n  maxIssuesPerNight: 1\n');
+    const overlay = await loadProfile('fine', dir);
+    expect(overlay.values).toEqual({ safety: { wipLimit: 2 }, run: { maxIssuesPerNight: 1 } });
+  });
+
   it('reports a missing profile with its resolved path', async () => {
     await expect(loadProfile('absent', workDir)).rejects.toThrow(/Profile not found/);
   });
@@ -104,6 +130,25 @@ describe('applySafetyFloor', () => {
   it('reports no corrections for a compliant config', () => {
     const base = defaultConfigObject({ agent: 'claude', setup: null, verify: [] });
     expect(applySafetyFloor(base).corrections).toEqual([]);
+  });
+});
+
+describe('merged configuration validity', () => {
+  it.each([
+    ['a non-numeric run limit', 'run:\n  maxIssuesPerNight: many\n'],
+    ['an unknown key', 'safety:\n  notARealSetting: true\n'],
+    ['a wrongly typed timeout', 'run:\n  issueTimeoutMinutes: "soon"\n']
+  ])('detects %s in a merged profile before init writes anything', async (_name, body) => {
+    const dir = await writeProfile('bad-shape', body);
+    const overlay = await loadProfile('bad-shape', dir);
+    const merged = mergeOverlay(
+      defaultConfigObject({ agent: 'claude', setup: null, verify: [] }),
+      overlay.values
+    ) as Record<string, unknown>;
+    const { config } = applySafetyFloor(merged);
+    // init parses the safety-floored result before any write or side effect, so
+    // this must throw rather than produce a config later commands reject.
+    expect(() => configSchema.parse(config)).toThrow();
   });
 });
 

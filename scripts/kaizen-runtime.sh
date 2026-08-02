@@ -67,8 +67,12 @@ case "$runtime_ref" in
     git -C "$runtime_dir" reset --hard "refs/tags/$runtime_ref" >&2
     ;;
   *)
-    git -C "$runtime_dir" fetch --prune origin "$runtime_ref" >&2
-    git -C "$runtime_dir" reset --hard "origin/$runtime_ref" >&2
+    # Name the destination explicitly. The clone is --single-branch, so fetching
+    # a different branch by name alone updates only FETCH_HEAD and never creates
+    # origin/<ref>, leaving the reset below with nothing to resolve.
+    git -C "$runtime_dir" fetch --prune origin \
+      "+refs/heads/$runtime_ref:refs/remotes/origin/$runtime_ref" >&2
+    git -C "$runtime_dir" reset --hard "refs/remotes/origin/$runtime_ref" >&2
     ;;
 esac
 

@@ -79,7 +79,8 @@ Scheduler synchronization installs a stable operator launcher at
 monitor checks, and other operator commands; add `$KAIZEN_HOME/bin` before global
 npm locations on `PATH` if the short `kaizen` command is required. Both operator
 and scheduled commands refresh a dedicated runtime clone under
-`$KAIZEN_HOME/runtime/kaizen-loop` from `origin/main`. Because `dist/` is committed,
+`$KAIZEN_HOME/runtime/kaizen-loop` from the ref selected by `KAIZEN_RUNTIME_REF`
+(`main` by default). Because `dist/` is committed,
 a refresh normally installs runtime dependencies and runs the CLI that ships with
 the commit; it builds only when the checked-out commit has no `dist/`. The clone is
 hard-reset to the target ref, so it is disposable build output and never a developer

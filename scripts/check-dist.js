@@ -87,6 +87,11 @@ try {
       console.error("Generated dist files are stale:");
       if (compareCommittedOutput) {
         process.stderr.write(result.stdout);
+      } else {
+        // Locally the pre-build snapshot may hold uncommitted work, and the
+        // snapshot directory is deleted in the finally block. Put it back
+        // rather than leaving the rebuild in its place.
+        restoreOriginalDist();
       }
       console.error("Run `npm run build` and commit the regenerated dist/ files.");
       process.exitCode = 1;

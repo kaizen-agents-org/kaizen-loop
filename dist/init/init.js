@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stringify } from 'yaml';
 import { defaultConfigObject } from '../config/config.js';
+import { configSchema } from '../config/schema.js';
 import { upsertProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
 import { ConfigError } from '../utils/errors.js';
@@ -36,6 +37,17 @@ export async function initProject(options) {
     const floored = applySafetyFloor(config);
     config = floored.config;
     corrections = floored.corrections;
+    // Validate before any write or external side effect. A profile can carry a
+    // schema-invalid override, and without this init would create labels, a
+    // workspace, and a registry entry, report success, and leave every later
+    // command rejecting the config it just wrote.
+    try {
+        configSchema.parse(config);
+    }
+    catch (error) {
+        const source = profileName ? `profile "${profileName}"` : 'generated configuration';
+        throw new ConfigError(`The ${source} produces an invalid .kaizen/config.yml; nothing was written: ${String(error)}`);
+    }
     await writeFileOnce(configPath, stringify(config), options.yes);
     await writeFileOnce(templatePath, issueTemplateYaml(), options.yes);
     await github.createLabels();

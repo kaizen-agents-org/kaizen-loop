@@ -116,8 +116,8 @@ exit 99
     {
       name: 'follows the main branch by default so dogfood repositories stay on unreleased code',
       ref: undefined,
-      expectFetch: 'fetch --prune origin main',
-      expectUpdate: 'reset --hard origin/main'
+      expectFetch: 'fetch --prune origin +refs/heads/main:refs/remotes/origin/main',
+      expectUpdate: 'reset --hard refs/remotes/origin/main'
     },
     {
       name: 'pins to a release tag when KAIZEN_RUNTIME_REF names one',
