@@ -136,6 +136,44 @@ describe('doctorProject', () => {
     expect(runtimeCheck?.message).toContain('Builder agent exited with code 1.');
     expect(runtimeCheck?.message).toContain('usage limit');
   });
+
+  it('reports a self-consistent verifier that is behind the canonical ref', async () => {
+    const { repo, workspace } = await setupProject();
+    for (const root of [repo, workspace]) {
+      const configPath = path.join(root, '.kaizen', 'config.yml');
+      const config = parse(await fs.readFile(configPath, 'utf8')) as Record<string, any>;
+      config.verifier.enabled = true;
+      await fs.writeFile(configPath, stringify(config));
+    }
+    const oldCommit = 'a'.repeat(40);
+    const expectedCommit = 'b'.repeat(40);
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+        });
+      }
+      if (command === 'git' && args[0] === 'ls-remote') {
+        return result(command, args, options?.cwd, `${expectedCommit}\trefs/heads/main\n`);
+      }
+      if (command === 'verifier' && args.join(' ') === '--version --json') {
+        return result(command, args, options?.cwd, JSON.stringify({
+          name: 'verifier', version: '0.0.0', status: 'current', stale: false,
+          build: { commit: oldCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+          runtime: { commit: oldCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+        }));
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
+
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: runner });
+
+    expect(output.ok).toBe(false);
+    expect(output.checks.find((item) => item.name === 'verifier agent')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining(`obsolete build: expected ${expectedCommit}`)
+    });
+  });
 });
 
 async function setupProject(options: { createWorkspace?: boolean } = {}) {

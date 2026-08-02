@@ -10,6 +10,7 @@ import type { KaizenConfig } from '../config/schema.js';
 import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
+import { resolveExpectedVerifierCommit } from '../orchestrator/run.js';
 import type { CommandRunner } from '../utils/command.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
@@ -83,8 +84,18 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!loaded) throw new Error('config unavailable');
     if (!loaded.verifier.enabled) return;
     const runtime = await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).inspectRuntime();
+    const expectedCommit = await resolveExpectedVerifierCommit({ config: loaded, runCommand: options.runCommand });
+    if (runtime.protocol !== 'structured') {
+      throw new Error(`legacy verifier cannot be checked against ${loaded.verifier.expectedRepository} ${loaded.verifier.expectedRef}`);
+    }
     if (runtime.stale) {
       throw new Error(`stale build: built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}`);
+    }
+    if (runtime.build.commit !== expectedCommit || runtime.runtime.commit !== expectedCommit) {
+      throw new Error(`obsolete build: expected ${expectedCommit}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}`);
+    }
+    if (runtime.build.dirty !== false || runtime.runtime.dirty !== false) {
+      throw new Error(`dirty verifier build or runtime at ${expectedCommit}`);
     }
   });
   await check(checks, 'pr guardian skill runner', async () => {

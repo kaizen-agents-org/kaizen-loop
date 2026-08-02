@@ -452,7 +452,7 @@ export async function preflightVerifier(options) {
         return `Verifier preflight failed: ${message}`;
     }
 }
-async function resolveExpectedVerifierCommit(options) {
+export async function resolveExpectedVerifierCommit(options) {
     const repository = options.config.verifier.expectedRepository;
     const ref = options.config.verifier.expectedRef;
     const result = await options.runCommand('git', ['ls-remote', '--exit-code', repository, ref], {

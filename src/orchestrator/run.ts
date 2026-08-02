@@ -561,7 +561,7 @@ export async function preflightVerifier(options: {
   }
 }
 
-async function resolveExpectedVerifierCommit(options: {
+export async function resolveExpectedVerifierCommit(options: {
   config: KaizenConfig;
   runCommand: CommandRunner;
 }): Promise<string> {
