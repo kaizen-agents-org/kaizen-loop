@@ -280,7 +280,7 @@ export async function runPrGuardianSkill(runCommand, req) {
         const settledInitialGate = initialGate.isReady
             ? await waitForStablePrGate(runCommand, req, initialGate)
             : await waitForInitiallyReadyPrGate(runCommand, req, initialGate);
-        if (settledInitialGate.isReady) {
+        if (isAuditedReady(settledInitialGate)) {
             return {
                 status: 'success',
                 summary: successSummary(settledInitialGate),
@@ -292,9 +292,9 @@ export async function runPrGuardianSkill(runCommand, req) {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             if (attempt > 1) {
                 const preflight = await inspectPrGate(runCommand, req);
-                if (preflight.isReady) {
+                if (isAuditedReady(preflight)) {
                     const stablePreflight = await waitForStablePrGate(runCommand, req, preflight);
-                    if (stablePreflight.isReady) {
+                    if (isAuditedReady(stablePreflight)) {
                         return {
                             status: 'success',
                             summary: successSummary(stablePreflight),
@@ -511,7 +511,8 @@ async function inspectPrGate(runCommand, req) {
             unresolvedThreads
         }),
         blockers,
-        isReady: blockers.length === 0
+        isReady: blockers.length === 0,
+        hasCurrentHeadCodexNoFindings: pullRequest.hasCurrentHeadCodexNoFindings
     };
 }
 async function inspectPullRequestTerminalState(runCommand, req) {
@@ -571,9 +572,9 @@ async function inspectPullRequest(runCommand, req) {
             comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
         }),
         reviewBlockers: [
-            ...currentHeadReviewBlockers(parsed, reviews),
-            ...commentAuditBlockers(parsed)
+            ...currentHeadReviewBlockers(parsed, reviews)
         ],
+        hasCurrentHeadCodexNoFindings: hasCurrentHeadCodexNoFindings(parsed),
         checks: requiredChecks
     };
 }
@@ -670,22 +671,23 @@ function hasCurrentHeadBotEvidence(login, parsed) {
     }
     return false;
 }
+function hasCurrentHeadCodexNoFindings(parsed) {
+    if (!parsed.headRefOid)
+        return false;
+    return (parsed.comments ?? []).some((comment) => {
+        if (normalizeReviewerLogin(comment.author?.login) !== 'chatgpt-codex-connector')
+            return false;
+        const body = comment.body ?? '';
+        const reviewedCommit = body.match(/Reviewed commit:\*{0,2}\s*`([0-9a-f]{7,40})`/i)?.[1];
+        const noFindings = /did(?:n't| not) find any (?:major )?issues/i.test(body);
+        return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit) && noFindings);
+    });
+}
 function normalizeReviewerLogin(login) {
     return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
 }
-function commentAuditBlockers(parsed) {
-    if (parsed.state === 'MERGED')
-        return [];
-    return (parsed.comments ?? []).flatMap((comment) => {
-        const login = normalizeReviewerLogin(comment.author?.login);
-        const body = comment.body ?? '';
-        if (login === 'coderabbitai' && /<!-- This is an auto-generated comment: (?:summarize|rate limited) by coderabbit\.ai -->/i.test(body)) {
-            return [];
-        }
-        if (login === 'chatgpt-codex-connector' && hasCurrentHeadBotEvidence(login, parsed))
-            return [];
-        return [`PR comment ${comment.id ?? '(unknown id)'} by ${login} requires Guardian audit`];
-    });
+function isAuditedReady(gate) {
+    return gate.isReady && (gate.state === 'MERGED' || gate.hasCurrentHeadCodexNoFindings);
 }
 function mergeabilityBlockers(state) {
     const blockers = [];
@@ -757,12 +759,12 @@ async function finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, st
 async function reconcileReadyPrGate(runCommand, req, rawOutputs) {
     try {
         const gate = await inspectPrGate(runCommand, req);
-        if (!gate.isReady) {
+        if (!isAuditedReady(gate)) {
             rawOutputs.push(`PR remained blocked after guardian command failure:\n${summarizeGate(gate)}`);
             return undefined;
         }
         const stable = await waitForStablePrGate(runCommand, req, gate);
-        if (!stable.isReady) {
+        if (!isAuditedReady(stable)) {
             rawOutputs.push(`PR was not stably merge-ready after guardian command failure:\n${summarizeGate(stable)}`);
             return undefined;
         }

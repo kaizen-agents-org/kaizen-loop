@@ -388,7 +388,7 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
-  it('skips Codex when a pending PR becomes stably ready during the initial settle window', async () => {
+  it('runs Guardian when a pending PR becomes ready without complete audit evidence', async () => {
     vi.useFakeTimers();
     try {
       const config = configSchema.parse({
@@ -427,13 +427,13 @@ describe('runPrGuardianSkill', () => {
       const result = await pending;
 
       expect(result.status).toBe('success');
-      expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+      expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('does not treat a generated CodeRabbit summary as an unaudited PR comment', async () => {
+  it('still runs Guardian when only a generated CodeRabbit summary is present', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
@@ -467,7 +467,7 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('success');
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
   it('does not trust a CodeRabbit marker from a lookalike actor', async () => {
@@ -549,8 +549,12 @@ describe('runPrGuardianSkill', () => {
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
     });
     let reviewFetches = 0;
+    let guardianAttempted = false;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
-      if (command === 'codex') throw new Error('Command timed out after 60000ms');
+      if (command === 'codex') {
+        guardianAttempted = true;
+        throw new Error('Command timed out after 60000ms');
+      }
       if (command === 'gh' && args.join(' ').startsWith('api graphql')) reviewFetches += 1;
       return {
         command,
@@ -559,7 +563,13 @@ describe('runPrGuardianSkill', () => {
         exitCode: 0,
         stdout: ghResponse(args, reviewFetches === 1
           ? [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Pending review.' }]
-          : []),
+          : [], guardianAttempted ? {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          } : undefined),
         stderr: '',
         durationMs: 1
       };
@@ -880,7 +890,7 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
   it('continues pending jobs when an old successful pull request is inaccessible', async () => {
@@ -1002,7 +1012,7 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', headSha: 'new-head', reactivationCount: 1 });
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
   it('enqueues only marked same-repository generated sync pull requests', async () => {
