@@ -55,15 +55,20 @@ fi
 
 # A pinned tag is immutable, so fetch it by name and check out the tag itself;
 # a branch has to be followed through its remote-tracking ref.
+#
+# Reset instead of checking out: dist/ is tracked, so any local rebuild leaves
+# modified tracked files and a plain checkout would abort ("commit your changes
+# or stash them"), wedging every later update. This clone is disposable build
+# output, so discarding local modifications is always correct here.
 case "$runtime_ref" in
   v[0-9]*)
     git -C "$runtime_dir" fetch --prune origin \
       "refs/tags/$runtime_ref:refs/tags/$runtime_ref" >&2
-    git -C "$runtime_dir" checkout --detach "refs/tags/$runtime_ref" >&2
+    git -C "$runtime_dir" reset --hard "refs/tags/$runtime_ref" >&2
     ;;
   *)
     git -C "$runtime_dir" fetch --prune origin "$runtime_ref" >&2
-    git -C "$runtime_dir" checkout --detach "origin/$runtime_ref" >&2
+    git -C "$runtime_dir" reset --hard "origin/$runtime_ref" >&2
     ;;
 esac
 
@@ -90,11 +95,18 @@ if [ -f "$runtime_dir/.kaizen-built-commit" ]; then
   built_commit=$(sed -n '1p' "$runtime_dir/.kaizen-built-commit")
 fi
 
+# dist/ is committed, so a checked-out commit normally already carries a usable
+# CLI and only runtime dependencies are missing. Install those, and build only
+# when the commit genuinely lacks dist/ (an older commit from before dist was
+# tracked, or a partial checkout).
 if [ "$commit" != "$built_commit" ] || [ ! -f "$runtime_dir/dist/cli.js" ]; then
   (
     cd "$runtime_dir"
-    npm ci
-    npm run build
+    npm ci --omit=dev
+    if [ ! -f dist/cli.js ]; then
+      npm install --include=dev --no-save
+      npm run build
+    fi
   ) >&2
   printf '%s\n' "$commit" > "$runtime_dir/.kaizen-built-commit"
 fi

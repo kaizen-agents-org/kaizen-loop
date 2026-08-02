@@ -79,12 +79,18 @@ Scheduler synchronization installs a stable operator launcher at
 monitor checks, and other operator commands; add `$KAIZEN_HOME/bin` before global
 npm locations on `PATH` if the short `kaizen` command is required. Both operator
 and scheduled commands refresh a dedicated runtime clone under
-`$KAIZEN_HOME/runtime/kaizen-loop` from `origin/main`. It installs dependencies and
-rebuilds only when the tracked commit changes, then runs the requested job with that
-verified build. The dedicated clone keeps automatic updates from switching or
-resetting a developer checkout. An update or build failure stops the scheduled run
-or operator command instead of silently using stale code. `doctor --json` and
-`fleet --json` include the selected runtime commit and directory.
+`$KAIZEN_HOME/runtime/kaizen-loop` from `origin/main`. Because `dist/` is committed,
+a refresh normally installs runtime dependencies and runs the CLI that ships with
+the commit; it builds only when the checked-out commit has no `dist/`. The clone is
+hard-reset to the target ref, so it is disposable build output and never a developer
+checkout. An update or build failure stops the scheduled run or operator command
+instead of silently using stale code. `doctor --json` and `fleet --json` include the
+selected runtime commit and directory.
+
+`dist/` is committed so that `npm install -g "github:kaizen-agents-org/kaizen-loop#<tag>"`
+yields a working CLI with no build step on the adopter's machine. `npm run check:dist`
+rebuilds and fails when the committed output is stale; CI runs it on every change.
+Run `npm run build` and commit the regenerated files when it reports a difference.
 
 `KAIZEN_RUNTIME_REF` selects which upstream ref that clone follows. It defaults to
 `main`, which is what dogfood repositories want: they exercise unreleased code on
