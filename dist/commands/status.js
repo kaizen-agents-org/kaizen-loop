@@ -1,0 +1,546 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { loadRegistry, resolveProject } from '../config/registry.js';
+import { loadOperationalConfig } from '../config/operational.js';
+import { GitHubClient } from '../github/client.js';
+import { projectStateDir } from '../utils/paths.js';
+import { GitClient } from '../workspace/git.js';
+import { listPrGuardianJobs } from '../orchestrator/prGuardian.js';
+import { listImplementationStates } from '../orchestrator/implementationState.js';
+import { GENERATED_PULL_REQUEST_FETCH_LIMIT, isGeneratedPullRequest, summarizeGeneratedPullRequestBacklog } from '../orchestrator/wipLimit.js';
+const PULL_REQUEST_RECONCILIATION_CONCURRENCY = 4;
+export async function statusProject(options) {
+    const resolved = await resolveProject(options.project, options.cwd);
+    const operationalConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: true });
+    const config = operationalConfig.config;
+    const github = new GitHubClient(options.runCommand, operationalConfig.path);
+    const issues = await github.listIssues(config.issues.label);
+    const openPullRequests = await github.listOpenPullRequests();
+    const generatedPullRequestMetrics = options.metrics
+        ? await collectGeneratedPullRequestMetrics({
+            github,
+            owner: resolved.project.repo.split('/')[0],
+            repo: resolved.project.repo,
+            wipLimit: config.safety.wipLimit
+        })
+        : undefined;
+    const stateDir = projectStateDir(resolved.slug);
+    const lastRun = await readLastRun(stateDir);
+    const lastSummary = await readLatestSummary(stateDir);
+    const queue = currentQueueStatus(issues.length, lastSummary?.queue ?? lastRun?.queue);
+    const guardianJobs = await listPrGuardianJobs(stateDir);
+    const implementationStates = await listImplementationStates(stateDir);
+    const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
+    const pullRequestReconciliation = await reconcilePullRequestStates({
+        guardianJobs,
+        implementationStates,
+        openPullRequestNumbers,
+        defaultBranch: config.git.defaultBranch,
+        github
+    });
+    const reconciledGuardianJobs = guardianJobs.map((job) => pullRequestReconciliation.merged.has(job.prNumber)
+        ? { ...job, status: 'success', lastBlocker: undefined }
+        : job);
+    const reconciledImplementationStates = implementationStates.map((state) => state.pr && pullRequestReconciliation.merged.has(state.pr)
+        ? { ...state, phase: 'complete', lastFailure: undefined }
+        : state);
+    return {
+        slug: resolved.slug,
+        repo: resolved.project.repo,
+        configuration: {
+            source: operationalConfig.source,
+            path: operationalConfig.path
+        },
+        pullRequestReconciliation: {
+            merged: [...pullRequestReconciliation.merged].sort((a, b) => a - b),
+            unknown: [...pullRequestReconciliation.unknown].sort((a, b) => a - b)
+        },
+        enabled: resolved.project.enabled,
+        schedule: resolved.project.schedule,
+        lastRun: lastRun ?? resolved.project.lastRun ?? lastSummary,
+        queue,
+        issues: {
+            open: issues.length,
+            selectionMode: config.issues.selection.mode,
+            queued: countLabel(issues, config.issues.selection.includeLabel),
+            p0: countLabel(issues, 'kaizen:P0'),
+            p1: countLabel(issues, 'kaizen:P1'),
+            p2: countLabel(issues, 'kaizen:P2'),
+            needsHuman: countLabel(issues, 'kaizen:needs-human'),
+            retryable: countLabel(issues, 'kaizen:retryable'),
+            blocked: countLabel(issues, 'kaizen:blocked'),
+            upstreamFirst: countLabel(issues, 'kaizen:upstream-first'),
+            notActionable: countLabel(issues, 'kaizen:not-actionable'),
+            attemptsExhausted: countLabel(issues, 'kaizen:attempts-exhausted')
+        },
+        pullRequests: {
+            open: openPullRequests.length
+        },
+        guardian: {
+            jobs: reconciledGuardianJobs.length,
+            pending: countJobs(reconciledGuardianJobs, 'pending'),
+            running: countJobs(reconciledGuardianJobs, 'running'),
+            success: countJobs(reconciledGuardianJobs, 'success'),
+            blocked: countJobs(reconciledGuardianJobs, 'blocked'),
+            skipped: countJobs(reconciledGuardianJobs, 'skipped'),
+            stale: reconciledGuardianJobs.filter((job) => isStaleGuardianJob(job, openPullRequestNumbers)).length,
+            latest: reconciledGuardianJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0)
+        },
+        implementations: {
+            jobs: reconciledImplementationStates.length,
+            active: reconciledImplementationStates.filter((state) => ['implementing', 'verifying', 'publishing', 'guardian'].includes(state.phase)).length,
+            needsAttention: reconciledImplementationStates.filter(isImplementationNeedsAttention).length,
+            stale: reconciledImplementationStates.filter(isStaleImplementationState).length,
+            latest: [...reconciledImplementationStates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).at(0),
+            items: reconciledImplementationStates.sort((a, b) => a.issue - b.issue)
+        },
+        branchHygiene: await collectBranchHygiene({
+            runCommand: options.runCommand,
+            workspacePath: resolved.project.workspacePath,
+            defaultBranch: config.git.defaultBranch,
+            repoOwner: resolved.project.repo.split('/')[0].toLowerCase(),
+            openPullRequestHeads: openPullRequests
+                .filter((pr) => Boolean(pr.headRefName))
+                .map((pr) => ({
+                branch: pr.headRefName,
+                repositoryOwner: pr.headRepositoryOwner?.login?.toLowerCase()
+            }))
+        }),
+        metrics: options.metrics ? await collectMetrics(stateDir, generatedPullRequestMetrics) : undefined
+    };
+}
+async function reconcilePullRequestStates(options) {
+    const candidates = new Set();
+    const issueNumbersByPullRequest = new Map();
+    for (const job of options.guardianJobs) {
+        if (!options.openPullRequestNumbers.has(job.prNumber) && job.status !== 'success' && job.status !== 'skipped') {
+            candidates.add(job.prNumber);
+            if (job.issueNumber)
+                addIssueNumber(issueNumbersByPullRequest, job.prNumber, job.issueNumber);
+        }
+    }
+    for (const state of options.implementationStates) {
+        if (state.pr && state.phase !== 'complete' && !options.openPullRequestNumbers.has(state.pr)) {
+            candidates.add(state.pr);
+            addIssueNumber(issueNumbersByPullRequest, state.pr, state.issue);
+        }
+    }
+    const resolutions = [];
+    const candidateNumbers = [...candidates];
+    for (let offset = 0; offset < candidateNumbers.length; offset += PULL_REQUEST_RECONCILIATION_CONCURRENCY) {
+        const batch = candidateNumbers.slice(offset, offset + PULL_REQUEST_RECONCILIATION_CONCURRENCY);
+        resolutions.push(...await Promise.all(batch.map(async (number) => {
+            try {
+                return { number, resolution: await options.github.getPullRequestResolution(number) };
+            }
+            catch {
+                return { number, resolution: undefined };
+            }
+        })));
+    }
+    return {
+        merged: new Set(resolutions
+            .filter(({ number, resolution }) => {
+            const trackedIssues = issueNumbersByPullRequest.get(number);
+            return (resolution?.state === 'MERGED' || Boolean(resolution?.mergedAt)) &&
+                resolution?.baseRefName === options.defaultBranch &&
+                Boolean(trackedIssues?.size) &&
+                [...(trackedIssues ?? [])].every((issueNumber) => resolution.closingIssuesReferences.some((issue) => issue.number === issueNumber));
+        })
+            .map(({ number }) => number)),
+        unknown: new Set(resolutions
+            .filter(({ resolution }) => !resolution)
+            .map(({ number }) => number))
+    };
+}
+function addIssueNumber(target, prNumber, issueNumber) {
+    const issueNumbers = target.get(prNumber) ?? new Set();
+    issueNumbers.add(issueNumber);
+    target.set(prNumber, issueNumbers);
+}
+function isStaleImplementationState(state) {
+    if (state.phase === 'complete')
+        return false;
+    const updatedAt = Date.parse(state.updatedAt);
+    return !Number.isFinite(updatedAt) || Date.now() - updatedAt > 24 * 60 * 60 * 1000;
+}
+function isImplementationNeedsAttention(state) {
+    return state.phase === 'failed' || state.phase === 'infrastructure-failure' || state.phase === 'blocked' || Boolean(state.lastFailure);
+}
+export async function listProjects() {
+    const registry = await loadRegistry();
+    const projects = await Promise.all(Object.entries(registry.projects).map(async ([slug, project]) => {
+        const lastRun = await readLastRun(projectStateDir(slug)) ?? project.lastRun;
+        return [slug, { ...project, lastRun, queueHealth: lastRun?.queue?.health }];
+    }));
+    const projectEntries = Object.fromEntries(projects);
+    const starvedRepositories = Object.entries(projectEntries)
+        .filter(([, project]) => project.queueHealth?.state === 'starved')
+        .map(([slug, project]) => ({
+        slug,
+        repo: project.repo,
+        since: project.queueHealth?.since,
+        warning: project.queueHealth?.warning
+    }));
+    return {
+        ...registry,
+        health: {
+            state: starvedRepositories.length > 0 ? 'starved' : 'healthy',
+            starvedRepositories
+        },
+        projects: projectEntries
+    };
+}
+function currentQueueStatus(openBacklog, latest) {
+    if (openBacklog === 0) {
+        return {
+            backlogCount: 0,
+            eligibleCount: 0,
+            processedCount: 0,
+            skipReasons: [],
+            health: { state: 'idle', consecutiveZeroThroughputRuns: 0 }
+        };
+    }
+    if (latest?.health.state === 'idle')
+        return undefined;
+    return latest;
+}
+async function readLatestSummary(stateDir) {
+    try {
+        const runsDir = path.join(stateDir, 'runs');
+        const runs = (await fs.readdir(runsDir)).sort();
+        const latest = runs.at(-1);
+        if (!latest)
+            return undefined;
+        return JSON.parse(await fs.readFile(path.join(runsDir, latest, 'summary.json'), 'utf8'));
+    }
+    catch {
+        return undefined;
+    }
+}
+async function readLastRun(stateDir) {
+    try {
+        return JSON.parse(await fs.readFile(path.join(stateDir, 'last-run.json'), 'utf8'));
+    }
+    catch {
+        return undefined;
+    }
+}
+async function collectMetrics(stateDir, generatedPullRequests) {
+    const reviewWindowSince = generatedPullRequests
+        ? new Date(generatedPullRequests.reviewWindow.since)
+        : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const now = generatedPullRequests ? new Date(generatedPullRequests.reviewWindow.until) : new Date();
+    const loaded = await readRunSummaries(stateDir);
+    const summaries = loaded.flatMap((item) => (item.summary ? [item.summary] : []));
+    const unreadableRuns = loaded.filter((item) => !item.summary).length;
+    const cumulative = summarizeRunIssues(summaries);
+    const reviewWindowSummaries = summaries.filter((summary) => {
+        const startedAt = Date.parse(summary.startedAt);
+        return Number.isFinite(startedAt) && startedAt >= reviewWindowSince.getTime() && startedAt <= now.getTime();
+    });
+    const reviewWindow = summarizeRunIssues(reviewWindowSummaries);
+    const sandboxSmoke = await collectSandboxSmokeMetrics(stateDir, reviewWindowSince, now);
+    return {
+        ...cumulative,
+        readableRuns: summaries.length,
+        unreadableRuns,
+        reviewWindow: {
+            since: reviewWindowSince.toISOString(),
+            until: now.toISOString(),
+            ...reviewWindow,
+            sandboxSmoke
+        },
+        wipLimit: generatedPullRequests?.wipLimit,
+        generatedPullRequests: generatedPullRequests
+            ? {
+                open: generatedPullRequests.open,
+                reviewWindow: generatedPullRequests.reviewWindow
+            }
+            : undefined
+    };
+}
+async function readRunSummaries(stateDir) {
+    const runsDir = path.join(stateDir, 'runs');
+    try {
+        const runs = await fs.readdir(runsDir);
+        return Promise.all(runs.map((run) => readRunSummary(runsDir, run)));
+    }
+    catch {
+        return [];
+    }
+}
+async function collectGeneratedPullRequestMetrics(options) {
+    const now = new Date();
+    const reviewWindowSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const [openPullRequests, mergedPullRequests] = await Promise.all([
+        options.github.searchOpenPullRequestsForOwner(options.owner, GENERATED_PULL_REQUEST_FETCH_LIMIT),
+        options.github.searchMergedPullRequestsForOwner(options.owner, reviewWindowSince.toISOString().slice(0, 10), GENERATED_PULL_REQUEST_FETCH_LIMIT)
+    ]);
+    const openGeneratedPullRequests = openPullRequests.filter(isGeneratedPullRequest);
+    const mergedGeneratedPullRequests = mergedPullRequests.filter((pullRequest) => {
+        if (!isGeneratedPullRequest(pullRequest))
+            return false;
+        const mergedAt = Date.parse(pullRequest.mergedAt ?? '');
+        return Number.isFinite(mergedAt) && mergedAt >= reviewWindowSince.getTime() && mergedAt <= now.getTime();
+    });
+    const sourcePullRequests = mergedGeneratedPullRequests.map(toMergedGeneratedPullRequestMetric);
+    return {
+        wipLimit: summarizeGeneratedPullRequestBacklog({
+            pullRequests: openPullRequests,
+            repo: options.repo,
+            wipLimit: options.wipLimit
+        }),
+        open: {
+            count: openGeneratedPullRequests.length,
+            sourcePullRequests: openGeneratedPullRequests.map(toOpenGeneratedPullRequestMetric)
+        },
+        reviewWindow: {
+            since: reviewWindowSince.toISOString(),
+            until: now.toISOString(),
+            merged: {
+                count: sourcePullRequests.length,
+                humanEditFree: sourcePullRequests.filter((pullRequest) => pullRequest.humanOrNonAutomationFollowUpCommits.length === 0)
+                    .length,
+                humanOrNonAutomationFollowUp: sourcePullRequests.filter((pullRequest) => pullRequest.humanOrNonAutomationFollowUpCommits.length > 0).length,
+                humanOrNonAutomationFollowUpCommits: sourcePullRequests.reduce((sum, pullRequest) => sum + pullRequest.humanOrNonAutomationFollowUpCommits.length, 0),
+                sourcePullRequests
+            }
+        }
+    };
+}
+async function readRunSummary(runsDir, run) {
+    try {
+        const summary = JSON.parse(await fs.readFile(path.join(runsDir, run, 'summary.json'), 'utf8'));
+        return { run, summary };
+    }
+    catch {
+        return { run };
+    }
+}
+async function collectSandboxSmokeMetrics(stateDir, since, until) {
+    const smokeDir = path.join(stateDir, 'smoke-runs');
+    let files;
+    try {
+        files = (await fs.readdir(smokeDir)).filter((file) => file.endsWith('.json')).sort();
+    }
+    catch {
+        return emptySandboxSmokeMetrics();
+    }
+    const loaded = await Promise.all(files.map(async (file) => {
+        const artifactPath = path.join(smokeDir, file);
+        try {
+            const artifact = JSON.parse(await fs.readFile(artifactPath, 'utf8'));
+            if (typeof artifact.startedAt !== 'string' || typeof artifact.result !== 'string') {
+                throw new Error('invalid artifact');
+            }
+            const startedAtMs = Date.parse(artifact.startedAt);
+            if (!Number.isFinite(startedAtMs))
+                throw new Error('invalid startedAt');
+            return {
+                artifact: {
+                    file,
+                    startedAt: artifact.startedAt,
+                    startedAtMs,
+                    result: artifact.result
+                }
+            };
+        }
+        catch {
+            try {
+                return { unreadableAtMs: (await fs.stat(artifactPath)).mtimeMs };
+            }
+            catch {
+                return {};
+            }
+        }
+    }));
+    const inWindow = loaded
+        .flatMap((item) => (item.artifact ? [item.artifact] : []))
+        .filter((artifact) => artifact.startedAtMs >= since.getTime() && artifact.startedAtMs <= until.getTime())
+        .sort((left, right) => left.startedAtMs - right.startedAtMs || left.file.localeCompare(right.file));
+    const latest = inWindow.at(-1);
+    return {
+        runs: inWindow.length,
+        passed: inWindow.filter((artifact) => artifact.result === 'success').length,
+        failed: inWindow.filter((artifact) => artifact.result !== 'success').length,
+        unreadable: loaded.filter((item) => item.unreadableAtMs !== undefined &&
+            item.unreadableAtMs >= since.getTime() &&
+            item.unreadableAtMs <= until.getTime()).length,
+        latestRunAt: latest?.startedAt ?? null,
+        latestResult: latest ? (latest.result === 'success' ? 'pass' : 'fail') : null
+    };
+}
+function emptySandboxSmokeMetrics() {
+    return {
+        runs: 0,
+        passed: 0,
+        failed: 0,
+        unreadable: 0,
+        latestRunAt: null,
+        latestResult: null
+    };
+}
+function summarizeRunIssues(summaries) {
+    const issues = summaries.flatMap((summary) => summary.issues ?? []);
+    const topLevelSkipped = summaries.reduce((sum, summary) => sum + (summary.skipped?.length ?? 0), 0);
+    const metrics = emptyRunMetrics();
+    metrics.runs = summaries.length;
+    metrics.processed = issues.length;
+    metrics.prCreated = countOutcome(issues, 'pr-created');
+    metrics.directCommit = countOutcome(issues, 'direct-commit');
+    metrics.failed = countOutcome(issues, 'failed');
+    metrics.infrastructureFailed = countOutcome(issues, 'infrastructure-failure');
+    metrics.blocked = countOutcome(issues, 'blocked');
+    metrics.skipped = countOutcome(issues, 'skipped') + topLevelSkipped;
+    metrics.verificationFailed = countReasonPrefix(issues, 'Verification failed:');
+    metrics.verifierBlocked = countReasonPrefix(issues, 'Verifier blocked PR:');
+    metrics.verifierNeedsContext = countReasonPrefix(issues, 'Verifier needs context:');
+    metrics.verifierFailed = countReasonPrefix(issues, 'Verifier failed:');
+    metrics.guardian = {
+        eligible: issues.filter((issue) => Boolean(issue.guardian)).length,
+        success: countGuardian(issues, 'success'),
+        failed: countGuardian(issues, 'failed'),
+        queued: countGuardian(issues, 'queued'),
+        skipped: countGuardian(issues, 'skipped')
+    };
+    return metrics;
+}
+function emptyRunMetrics() {
+    return {
+        runs: 0,
+        processed: 0,
+        prCreated: 0,
+        directCommit: 0,
+        failed: 0,
+        infrastructureFailed: 0,
+        blocked: 0,
+        skipped: 0,
+        verificationFailed: 0,
+        verifierBlocked: 0,
+        verifierNeedsContext: 0,
+        verifierFailed: 0,
+        guardian: emptyGuardianMetrics()
+    };
+}
+function emptyGuardianMetrics() {
+    return {
+        eligible: 0,
+        success: 0,
+        failed: 0,
+        queued: 0,
+        skipped: 0
+    };
+}
+function toOpenGeneratedPullRequestMetric(pullRequest) {
+    return {
+        number: pullRequest.number,
+        url: pullRequest.url,
+        repository: pullRequest.repository?.nameWithOwner,
+        headRefName: pullRequest.headRefName,
+        createdAt: pullRequest.createdAt,
+        ageDays: pullRequest.createdAt ? elapsedDaysSince(pullRequest.createdAt) : undefined,
+        authorLogin: pullRequest.author?.login,
+        authorType: pullRequest.author?.type
+    };
+}
+function toMergedGeneratedPullRequestMetric(pullRequest) {
+    const commits = (pullRequest.commits ?? []).map(toCommitMetric);
+    const createdAt = Date.parse(pullRequest.createdAt ?? '');
+    return {
+        number: pullRequest.number,
+        url: pullRequest.url,
+        repository: pullRequest.repository?.nameWithOwner,
+        headRefName: pullRequest.headRefName,
+        createdAt: pullRequest.createdAt,
+        mergedAt: pullRequest.mergedAt,
+        authorLogin: pullRequest.author?.login,
+        authorType: pullRequest.author?.type,
+        commitCount: pullRequest.commitCount,
+        commits,
+        humanOrNonAutomationFollowUpCommits: commits.filter((commit) => {
+            const committedAt = Date.parse(commit.committedDate ?? '');
+            return !isAutomationCommitMetric(commit)
+                && Number.isFinite(createdAt)
+                && Number.isFinite(committedAt)
+                && committedAt > createdAt;
+        })
+    };
+}
+function toCommitMetric(commit) {
+    return {
+        oid: commit.oid,
+        committedDate: commit.committedDate,
+        authorName: commit.author?.name,
+        authorEmail: commit.author?.email,
+        authorLogin: commit.author?.login,
+        authorType: commit.author?.type
+    };
+}
+function isAutomationCommitMetric(commit) {
+    const login = commit.authorLogin?.toLowerCase();
+    const email = commit.authorEmail?.toLowerCase();
+    return commit.authorType?.toLowerCase() === 'bot'
+        || login?.endsWith('[bot]') === true
+        || email?.includes('[bot]') === true;
+}
+function elapsedDaysSince(isoDate) {
+    const startedAt = Date.parse(isoDate);
+    if (!Number.isFinite(startedAt))
+        return undefined;
+    return Math.max(0, Math.floor((Date.now() - startedAt) / (24 * 60 * 60 * 1000)));
+}
+function countOutcome(issues, outcome) {
+    return issues.filter((issue) => issue.outcome === outcome).length;
+}
+function countReasonPrefix(issues, prefix) {
+    return issues.filter((issue) => issue.reason?.startsWith(prefix)).length;
+}
+function countGuardian(issues, status) {
+    return issues.filter((issue) => issue.guardian?.status === status).length;
+}
+function countLabel(issues, label) {
+    return issues.filter((issue) => issue.labels.some((item) => item.name === label)).length;
+}
+function countJobs(jobs, status) {
+    return jobs.filter((job) => job.status === status).length;
+}
+function isStaleGuardianJob(job, openPullRequestNumbers) {
+    return !openPullRequestNumbers.has(job.prNumber) && job.status !== 'success' && job.status !== 'skipped';
+}
+async function collectBranchHygiene(options) {
+    try {
+        const git = new GitClient(options.runCommand, options.workspacePath);
+        await git.fetchPrune();
+        const openPullRequestBranches = new Set(options.openPullRequestHeads
+            .filter((head) => head.repositoryOwner === options.repoOwner)
+            .map((head) => head.branch));
+        const defaultRemoteRef = `origin/${options.defaultBranch}`;
+        const unreviewedRemoteBranches = [];
+        for (const branch of await git.remoteBranches('origin')) {
+            if (branch.ref === 'origin/HEAD' || branch.ref === defaultRemoteRef || branch.name === options.defaultBranch)
+                continue;
+            if (openPullRequestBranches.has(branch.name))
+                continue;
+            const divergence = await git.divergence(defaultRemoteRef, branch.ref);
+            if (divergence.ahead === 0)
+                continue;
+            unreviewedRemoteBranches.push({
+                branch: branch.name,
+                remoteRef: branch.ref,
+                headSha: branch.sha,
+                ahead: divergence.ahead,
+                behind: divergence.behind
+            });
+        }
+        return { checked: true, unreviewedRemoteBranches };
+    }
+    catch (error) {
+        return {
+            checked: false,
+            unreviewedRemoteBranches: [],
+            error: error instanceof Error ? error.message : String(error)
+        };
+    }
+}
+//# sourceMappingURL=status.js.map

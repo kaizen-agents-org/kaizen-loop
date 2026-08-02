@@ -1,0 +1,388 @@
+import { reportIssue } from '../commands/report.js';
+import { loadConfig } from '../config/config.js';
+import { resolveProject } from '../config/registry.js';
+import { GitHubClient } from '../github/client.js';
+import { runKaizen } from '../orchestrator/run.js';
+import { buildAllowlistedEnv } from '../utils/command.js';
+import { KaizenError } from '../utils/errors.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
+import { GitClient } from '../workspace/git.js';
+import { goalDir, loadGoalState, saveGoalState, touchGoal } from './state.js';
+import { GoalAgentAdapter } from './agent.js';
+import { GoalLock } from './lock.js';
+import { buildGoalEvaluatorPrompt, buildGoalPlannerPrompt } from './prompts.js';
+const GOAL_MECHANICAL_EVALUATION_OUTPUT_MAX_CHARS = 8_000;
+export async function runGoal(options) {
+    const resolved = await resolveProject(options.project, options.cwd);
+    const config = await loadConfig(resolved.project.localPath);
+    let goal = await loadGoalState(resolved.slug, options.goalId);
+    if (goal.status !== 'active') {
+        throw new KaizenError(`Goal ${goal.id} is ${goal.status}; only active goals can run.`, 2);
+    }
+    const agent = new GoalAgentAdapter(options.runCommand, {
+        ...config.goal.agent,
+        envAllowlist: config.safety.envAllowlist
+    });
+    const stateDir = goalDir(resolved.slug, goal.id);
+    const lock = await GoalLock.acquire(stateDir);
+    try {
+        goal = await loadGoalState(resolved.slug, options.goalId);
+        if (goal.status !== 'active') {
+            throw new KaizenError(`Goal ${goal.id} is ${goal.status}; only active goals can run.`, 2);
+        }
+        while (goal.status === 'active' && goal.iterations.length < goal.maxIterations) {
+            const iterationNumber = goal.iterations.length + 1;
+            const startedAt = new Date().toISOString();
+            let plan;
+            try {
+                plan = await planNextIteration({
+                    goal,
+                    agent,
+                    cwd: resolved.project.localPath,
+                    stateDir
+                });
+            }
+            catch (error) {
+                goal = await finishGoal(resolved.slug, goal, 'failed', `Goal planner failed: ${String(error)}`);
+                break;
+            }
+            if (plan.status === 'succeeded') {
+                goal = await finishGoal(resolved.slug, goal, 'succeeded', plan.reason);
+                break;
+            }
+            if (plan.status === 'blocked') {
+                goal = await finishGoal(resolved.slug, goal, 'blocked', plan.reason);
+                break;
+            }
+            const issuePlan = plan.nextIssue;
+            if (!issuePlan) {
+                goal = await finishGoal(resolved.slug, goal, 'blocked', 'Goal planner did not provide nextIssue.');
+                break;
+            }
+            let issue;
+            try {
+                issue = await createGoalIssue({
+                    project: options.project,
+                    cwd: options.cwd,
+                    repoDir: resolved.project.localPath,
+                    goal,
+                    issue: issuePlan,
+                    iterationNumber,
+                    issueLabel: config.goal.issueLabel,
+                    mechanicalEvaluation: goal.iterations.at(-1)?.mechanicalEvaluation,
+                    runCommand: options.runCommand
+                });
+            }
+            catch (error) {
+                goal = await finishGoal(resolved.slug, goal, 'failed', `Goal issue creation failed: ${String(error)}`);
+                break;
+            }
+            goal.iterations.push({
+                number: iterationNumber,
+                startedAt,
+                issue: issue.number,
+                outcome: 'planned',
+                summary: `Created issue #${issue.number}: ${issue.title}`
+            });
+            goal = touchGoal(goal);
+            await saveGoalState(resolved.slug, goal);
+            let runSummary;
+            let mechanicalEvaluation;
+            let evaluation;
+            try {
+                runSummary = await runSingleGoalIssue({
+                    cwd: options.cwd,
+                    project: options.project,
+                    issue: issue.number,
+                    agent: options.agent,
+                    json: options.json,
+                    assumeYes: Boolean(options.assumeYes),
+                    confirmDirectCommit: options.confirmDirectCommit,
+                    runCommand: options.runCommand
+                });
+                const unsuccessfulRun = evaluationForUnsuccessfulRun(runSummary, issue.number);
+                if (unsuccessfulRun) {
+                    evaluation = unsuccessfulRun;
+                }
+                else {
+                    mechanicalEvaluation = await runMechanicalEvaluation({
+                        config,
+                        workspacePath: resolved.project.workspacePath,
+                        runSummary,
+                        issueNumber: issue.number,
+                        runCommand: options.runCommand
+                    });
+                    evaluation = enforceMechanicalEvaluation(await evaluateIteration({
+                        goal,
+                        runSummary,
+                        mechanicalEvaluation,
+                        agent,
+                        cwd: resolved.project.localPath,
+                        stateDir
+                    }), mechanicalEvaluation, goal);
+                }
+            }
+            catch (error) {
+                goal = await failCurrentIteration({
+                    projectSlug: resolved.slug,
+                    goal,
+                    reason: String(error)
+                });
+                break;
+            }
+            goal.iterations[goal.iterations.length - 1] = {
+                ...goal.iterations[goal.iterations.length - 1],
+                finishedAt: new Date().toISOString(),
+                runSummary,
+                mechanicalEvaluation,
+                outcome: outcomeForEvaluation(evaluation),
+                summary: evaluation.reason,
+                evaluation
+            };
+            goal = touchGoal(goal);
+            await saveGoalState(resolved.slug, goal);
+            if (evaluation.status === 'succeeded') {
+                goal = await finishGoal(resolved.slug, goal, 'succeeded', evaluation.reason);
+                break;
+            }
+            if (evaluation.status === 'blocked' || evaluation.status === 'failed') {
+                goal = await finishGoal(resolved.slug, goal, evaluation.status, evaluation.reason);
+                break;
+            }
+        }
+        if (goal.status === 'active' && goal.iterations.length >= goal.maxIterations) {
+            goal = await finishGoal(resolved.slug, goal, 'blocked', `maxIterations(${goal.maxIterations}) reached`);
+        }
+        return goal;
+    }
+    finally {
+        await lock.release();
+    }
+}
+async function planNextIteration(options) {
+    const latest = options.goal.iterations.at(-1)?.evaluation;
+    if (latest?.status === 'continue' && latest.nextIssue) {
+        return { status: 'issue', reason: latest.reason, nextIssue: latest.nextIssue };
+    }
+    return options.agent.plan({
+        cwd: options.cwd,
+        stateDir: options.stateDir,
+        prompt: buildGoalPlannerPrompt(options.goal)
+    });
+}
+async function evaluateIteration(options) {
+    return options.agent.evaluate({
+        cwd: options.cwd,
+        stateDir: options.stateDir,
+        prompt: buildGoalEvaluatorPrompt({
+            goal: options.goal,
+            runSummary: options.runSummary,
+            mechanicalEvaluation: options.mechanicalEvaluation
+        })
+    });
+}
+async function runMechanicalEvaluation(options) {
+    const command = options.config.goal.evaluation.command;
+    if (!command)
+        return undefined;
+    const issue = options.runSummary.issues.find((item) => item.number === options.issueNumber);
+    if (!issue?.branch) {
+        return {
+            command,
+            ok: false,
+            output: `Goal evaluation command could not run because issue #${options.issueNumber} has no produced branch.`
+        };
+    }
+    const git = new GitClient(options.runCommand, options.workspacePath);
+    await git.fetch();
+    await git.checkout(issue.branch, { ignoreOtherWorktrees: true });
+    try {
+        const result = await options.runCommand(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
+            cwd: options.workspacePath,
+            env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, options.config.safety.envAllowlist), options.workspacePath),
+            timeoutMs: options.config.goal.evaluation.timeoutMinutes * 60_000,
+            rejectOnNonZero: false
+        });
+        return {
+            command,
+            ok: result.exitCode === 0,
+            output: `${result.stdout}${result.stderr}`
+        };
+    }
+    finally {
+        await git.checkout(options.config.git.defaultBranch, { ignoreOtherWorktrees: true });
+        await git.resetHard(`origin/${options.config.git.defaultBranch}`);
+    }
+}
+function evaluationForUnsuccessfulRun(runSummary, issueNumber) {
+    const issue = runSummary.issues.find((item) => item.number === issueNumber);
+    if (!issue) {
+        return {
+            status: 'failed',
+            confidence: 1,
+            reason: `Goal issue #${issueNumber} did not appear in the run summary.`,
+            satisfiedCriteria: [],
+            missingCriteria: ['Issue was not processed']
+        };
+    }
+    if (issue.outcome === 'blocked') {
+        return {
+            status: 'blocked',
+            confidence: 1,
+            reason: issue.reason ?? `Goal issue #${issueNumber} was blocked.`,
+            satisfiedCriteria: [],
+            missingCriteria: ['Issue blocked before Goal completion']
+        };
+    }
+    if (issue.outcome === 'failed' || runSummary.result === 'failed') {
+        return {
+            status: 'failed',
+            confidence: 1,
+            reason: issue.reason ?? `Goal issue #${issueNumber} failed.`,
+            satisfiedCriteria: [],
+            missingCriteria: ['Issue pipeline failed']
+        };
+    }
+    return undefined;
+}
+function enforceMechanicalEvaluation(evaluation, mechanicalEvaluation, goal) {
+    if (!mechanicalEvaluation || mechanicalEvaluation.ok || evaluation.status !== 'succeeded')
+        return evaluation;
+    return {
+        status: 'continue',
+        confidence: 0,
+        reason: `Goal evaluation command failed: ${mechanicalEvaluation.command}`,
+        satisfiedCriteria: evaluation.satisfiedCriteria,
+        missingCriteria: evaluation.missingCriteria.length ? evaluation.missingCriteria : goal.successCriteria,
+        nextIssue: evaluation.nextIssue
+    };
+}
+async function createGoalIssue(options) {
+    const github = new GitHubClient(options.runCommand, options.repoDir);
+    const marker = `<!-- kaizen-loop:goal ${JSON.stringify({ goalId: options.goal.id, iteration: options.iterationNumber })} -->`;
+    const existingMatches = await github.findOpenIssuesByBodyMarker(marker);
+    if (existingMatches.length > 0) {
+        const canonical = existingMatches[0];
+        for (const duplicate of existingMatches.slice(1)) {
+            await github.closeIssue(duplicate.number, `Closing duplicate Goal issue; canonical issue is #${canonical.number}.`);
+        }
+        return canonical;
+    }
+    await github.createLabels([options.issueLabel]);
+    const created = await reportIssue({
+        cwd: options.cwd,
+        project: options.project,
+        title: options.issue.title,
+        body: goalIssueBody(options.goal, options.issue, options.iterationNumber, options.mechanicalEvaluation),
+        priority: options.issue.priority,
+        queue: true,
+        extraLabels: [options.issueLabel],
+        runCommand: options.runCommand
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const matches = await github.findOpenIssuesByBodyMarker(marker);
+    const canonical = matches[0] ?? created;
+    for (const duplicate of matches.slice(1)) {
+        await github.closeIssue(duplicate.number, `Closing duplicate Goal issue; canonical issue is #${canonical.number}.`);
+    }
+    return canonical;
+}
+function goalIssueBody(goal, issue, iterationNumber, mechanicalEvaluation) {
+    return [
+        `<!-- kaizen-loop:goal ${JSON.stringify({ goalId: goal.id, iteration: iterationNumber })} -->`,
+        '',
+        '## Goal',
+        goal.title,
+        '',
+        goal.description || '(no description)',
+        '',
+        '## Success Criteria',
+        ...goal.successCriteria.map((criterion) => `- ${criterion}`),
+        '',
+        '## This Iteration',
+        issue.body || '(no body)',
+        '',
+        ...previousMechanicalEvaluationFailureSection(mechanicalEvaluation),
+        '## Constraints',
+        ...(goal.constraints.length ? goal.constraints : ['Follow the repository Kaizen safety policy.']).map((constraint) => `- ${constraint}`)
+    ].join('\n');
+}
+function previousMechanicalEvaluationFailureSection(mechanicalEvaluation) {
+    if (!mechanicalEvaluation || mechanicalEvaluation.ok)
+        return [];
+    const output = truncateText(mechanicalEvaluation.output.trim(), GOAL_MECHANICAL_EVALUATION_OUTPUT_MAX_CHARS) || '(no output)';
+    return [
+        '## Previous Mechanical Evaluation Failure',
+        '',
+        '### Command',
+        '',
+        indentCodeBlock(mechanicalEvaluation.command),
+        '',
+        '### Output',
+        '',
+        indentCodeBlock(output),
+        ''
+    ];
+}
+function indentCodeBlock(value) {
+    return value.split(/\r?\n/).map((line) => `    ${line}`).join('\n');
+}
+function truncateText(text, maxChars) {
+    if (text.length <= maxChars)
+        return text;
+    return `[truncated to last ${maxChars} characters]\n\n${text.slice(-maxChars)}`;
+}
+async function runSingleGoalIssue(options) {
+    const result = await runKaizen({
+        cwd: options.cwd,
+        project: options.project,
+        scheduled: false,
+        trigger: 'instant',
+        issue: options.issue,
+        dryRun: false,
+        maxIssues: 1,
+        agent: options.agent,
+        json: options.json,
+        assumeYes: options.assumeYes,
+        confirmDirectCommit: options.confirmDirectCommit,
+        runCommand: options.runCommand
+    });
+    if (!('issues' in result))
+        throw new Error('Goal run expected a run summary, but got issue selection.');
+    return result;
+}
+async function finishGoal(projectSlug, goal, status, reason) {
+    const next = touchGoal({
+        ...goal,
+        status,
+        finalReason: reason
+    });
+    await saveGoalState(projectSlug, next);
+    return next;
+}
+async function failCurrentIteration(options) {
+    const iterations = [...options.goal.iterations];
+    const index = iterations.length - 1;
+    if (index >= 0) {
+        iterations[index] = {
+            ...iterations[index],
+            finishedAt: new Date().toISOString(),
+            outcome: 'failed',
+            summary: options.reason
+        };
+    }
+    const failed = touchGoal({
+        ...options.goal,
+        status: 'failed',
+        finalReason: options.reason,
+        iterations
+    });
+    await saveGoalState(options.projectSlug, failed);
+    return failed;
+}
+function outcomeForEvaluation(evaluation) {
+    if (evaluation.status === 'continue')
+        return 'processed';
+    return evaluation.status;
+}
+//# sourceMappingURL=runner.js.map

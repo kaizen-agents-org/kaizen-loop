@@ -1,0 +1,251 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { registryPath } from '../utils/paths.js';
+import { ConfigError } from '../utils/errors.js';
+import { isProjectSlug } from '../utils/slug.js';
+import { registrySchema } from './schema.js';
+export async function loadRegistry(filePath = registryPath()) {
+    try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        return registrySchema.parse(JSON.parse(raw));
+    }
+    catch (error) {
+        if (error.code === 'ENOENT') {
+            return { version: 1, projects: {} };
+        }
+        throw new ConfigError(`Invalid registry at ${filePath}: ${String(error)}`);
+    }
+}
+export async function saveRegistry(registry, filePath = registryPath()) {
+    await registryTransaction(async () => ({ registry, value: undefined }), filePath);
+}
+export async function updateRegistry(update, filePath = registryPath()) {
+    return registryTransaction(async (registry) => {
+        await update(registry);
+        return { registry, value: registry };
+    }, filePath);
+}
+export async function registryTransaction(transact, filePath = registryPath(), options = {}) {
+    return withRegistryLock(filePath, async () => {
+        const current = options.recoverInvalid ? await loadRegistryForRecovery(filePath) : await loadRegistry(filePath);
+        const transaction = await transact(current);
+        if (transaction.registry)
+            await writeRegistryAtomically(transaction.registry, filePath);
+        return transaction.value;
+    });
+}
+export async function loadRegistryForRecovery(filePath = registryPath()) {
+    let raw;
+    try {
+        raw = await fs.readFile(filePath, 'utf8');
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return { version: 1, projects: {} };
+        throw new ConfigError(`Invalid registry at ${filePath}: ${String(error)}`);
+    }
+    try {
+        return registrySchema.parse(JSON.parse(raw));
+    }
+    catch {
+        return { version: 1, projects: {} };
+    }
+}
+export async function upsertProject(slug, project) {
+    validateProjectSlug(slug);
+    return updateRegistry((registry) => {
+        registry.projects[slug] = project;
+    });
+}
+export async function findProjectByCwd(cwd) {
+    const registry = await loadRegistry();
+    const entries = Object.entries(registry.projects);
+    const normalizedCwd = path.resolve(cwd);
+    const match = entries.find(([, project]) => normalizedCwd.startsWith(path.resolve(project.localPath)));
+    if (!match)
+        return undefined;
+    return { slug: match[0], project: match[1] };
+}
+export async function resolveProject(projectSlug, cwd) {
+    const registry = await loadRegistry();
+    if (projectSlug) {
+        validateProjectSlug(projectSlug);
+        const project = registry.projects[projectSlug];
+        if (!project)
+            throw new ConfigError(`Unknown Kaizen project: ${projectSlug}`);
+        return { slug: projectSlug, project };
+    }
+    const byCwd = await findProjectByCwd(cwd);
+    if (byCwd)
+        return byCwd;
+    throw new ConfigError('Could not resolve project. Pass --project <slug> or run inside a registered project.');
+}
+function validateProjectSlug(slug) {
+    if (!isProjectSlug(slug))
+        throw new ConfigError(`Invalid Kaizen project slug: ${slug}`);
+}
+async function writeRegistryAtomically(registry, filePath) {
+    const parsed = registrySchema.parse(registry);
+    const directory = path.dirname(filePath);
+    const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+    await fs.mkdir(directory, { recursive: true });
+    try {
+        const handle = await fs.open(temporaryPath, 'wx', 0o600);
+        try {
+            await handle.writeFile(`${JSON.stringify(parsed, null, 2)}\n`);
+            await handle.sync();
+        }
+        finally {
+            await handle.close();
+        }
+        await fs.rename(temporaryPath, filePath);
+    }
+    catch (error) {
+        await fs.rm(temporaryPath, { force: true });
+        throw error;
+    }
+}
+async function withRegistryLock(filePath, action) {
+    const lockPath = `${filePath}.lock`;
+    const ownerPath = path.join(lockPath, 'owner.json');
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    for (let attempt = 0; attempt < 18_000; attempt += 1) {
+        try {
+            await fs.mkdir(lockPath);
+        }
+        catch (error) {
+            if (error.code !== 'EEXIST')
+                throw error;
+            if (await removeStaleLock(lockPath))
+                continue;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            continue;
+        }
+        const createdAt = Date.now();
+        await writeLockOwner(ownerPath, { pid: process.pid, createdAt, heartbeatAt: createdAt });
+        let heartbeatWrite = Promise.resolve();
+        const heartbeat = setInterval(() => {
+            heartbeatWrite = heartbeatWrite
+                .then(() => writeLockOwner(ownerPath, { pid: process.pid, createdAt, heartbeatAt: Date.now() }))
+                .catch(() => { });
+        }, 30_000);
+        heartbeat.unref();
+        try {
+            return await action();
+        }
+        finally {
+            clearInterval(heartbeat);
+            await heartbeatWrite;
+            await fs.rm(lockPath, { recursive: true, force: true });
+        }
+    }
+    throw new ConfigError(`Timed out waiting for registry lock: ${lockPath}`);
+}
+async function writeLockOwner(ownerPath, owner) {
+    const temporaryPath = `${ownerPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+        await fs.writeFile(temporaryPath, JSON.stringify(owner), { flag: 'wx' });
+        await fs.rename(temporaryPath, ownerPath);
+    }
+    catch (error) {
+        await fs.rm(temporaryPath, { force: true });
+        throw error;
+    }
+}
+async function removeStaleLock(lockPath) {
+    let observedStats;
+    try {
+        observedStats = await fs.stat(lockPath);
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return true;
+        throw error;
+    }
+    try {
+        const owner = JSON.parse(await fs.readFile(path.join(lockPath, 'owner.json'), 'utf8'));
+        if (owner.pid) {
+            const leaseTimestamp = owner.heartbeatAt ?? owner.createdAt;
+            const expired = typeof leaseTimestamp !== 'number' || Date.now() - leaseTimestamp > 10 * 60 * 1000;
+            if (isPidAlive(owner.pid) && !expired)
+                return false;
+        }
+        else {
+            const expired = typeof owner.createdAt !== 'number' || Date.now() - owner.createdAt > 10 * 60 * 1000;
+            if (!expired)
+                return false;
+        }
+    }
+    catch (error) {
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError))
+            throw error;
+        if (Date.now() - observedStats.mtimeMs < 5_000)
+            return false;
+    }
+    const reaperPath = path.join(lockPath, '.reaper');
+    try {
+        await fs.writeFile(reaperPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), { flag: 'wx' });
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === 'ENOENT')
+            return true;
+        if (code === 'EEXIST') {
+            await removeStaleReaper(reaperPath);
+            return false;
+        }
+        throw error;
+    }
+    try {
+        const currentStats = await fs.stat(lockPath);
+        if (currentStats.dev !== observedStats.dev || currentStats.ino !== observedStats.ino)
+            return false;
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return true;
+        throw error;
+    }
+    await fs.rm(lockPath, { recursive: true, force: true });
+    return true;
+}
+async function removeStaleReaper(reaperPath) {
+    let observedStats;
+    try {
+        observedStats = await fs.stat(reaperPath);
+        const reaper = JSON.parse(await fs.readFile(reaperPath, 'utf8'));
+        const recent = typeof reaper.createdAt === 'number' && Date.now() - reaper.createdAt < 5_000;
+        if (recent && reaper.pid && isPidAlive(reaper.pid))
+            return;
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return;
+        if (!(error instanceof SyntaxError))
+            throw error;
+        observedStats ??= await fs.stat(reaperPath);
+        if (Date.now() - observedStats.mtimeMs < 5_000)
+            return;
+    }
+    try {
+        const currentStats = await fs.stat(reaperPath);
+        if (currentStats.dev !== observedStats.dev || currentStats.ino !== observedStats.ino)
+            return;
+        await fs.rm(reaperPath, { force: true });
+    }
+    catch (error) {
+        if (error.code !== 'ENOENT')
+            throw error;
+    }
+}
+function isPidAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+//# sourceMappingURL=registry.js.map
