@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BuilderAgentAdapter } from '../agents/builder.js';
 import { VerifierAgentAdapter, type VerifierResult } from '../agents/verifier.js';
+import { resolveExpectedVerifierCommit } from '../agents/verifierFreshness.js';
 import type { AgentAdapter, AgentResult, DiscoveredIssue } from '../agents/types.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
@@ -19,7 +20,7 @@ import {
   countConsecutiveRetryableBlocks,
   markedPullRequestNumbers
 } from '../report/comments.js';
-import { buildAllowlistedEnv, throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
+import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -559,32 +560,6 @@ export async function preflightVerifier(options: {
     }, null, 2)}\n`);
     return `Verifier preflight failed: ${message}`;
   }
-}
-
-export async function resolveExpectedVerifierCommit(options: {
-  config: KaizenConfig;
-  runCommand: CommandRunner;
-}): Promise<string> {
-  const repository = options.config.verifier.expectedRepository;
-  const ref = options.config.verifier.expectedRef;
-  const result = await options.runCommand('git', ['ls-remote', '--exit-code', repository, ref], {
-    timeoutMs: options.config.verifier.freshnessTimeoutSeconds * 1_000,
-    rejectOnNonZero: false,
-    env: buildAllowlistedEnv(process.env, options.config.safety.envAllowlist)
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(`Could not resolve trusted verifier revision ${repository} ${ref}: ${result.stderr || result.stdout || `git exited with code ${result.exitCode}`}`);
-  }
-  const exact = result.stdout
-    .trim()
-    .split('\n')
-    .map((line) => line.trim().split(/\s+/, 2))
-    .find(([, candidateRef]) => candidateRef === ref);
-  const commit = exact?.[0];
-  if (!commit || !/^[0-9a-f]{40}$/i.test(commit)) {
-    throw new Error(`Trusted verifier revision ${repository} ${ref} did not resolve to one exact 40-character commit.`);
-  }
-  return commit.toLowerCase();
 }
 
 export function applyImplementationBudget(selection: RunIssueSelection, maxIssues: number): RunIssueSelection {

@@ -2,14 +2,13 @@ import fs from 'node:fs/promises';
 import { BuilderAgentAdapter } from '../agents/builder.js';
 import { ClaudeCodeAdapter } from '../agents/claude.js';
 import { CodexAdapter } from '../agents/codex.js';
-import { VerifierAgentAdapter } from '../agents/verifier.js';
+import { assertVerifierRuntimeFresh } from '../agents/verifierFreshness.js';
 import { loadConfig } from '../config/config.js';
 import { configDrift } from '../config/operational.js';
 import { resolveProject } from '../config/registry.js';
 import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
-import { resolveExpectedVerifierCommit } from '../orchestrator/run.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
@@ -88,20 +87,7 @@ export async function doctorProject(options) {
             throw new Error('config unavailable');
         if (!loaded.verifier.enabled)
             return;
-        const runtime = await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).inspectRuntime();
-        const expectedCommit = await resolveExpectedVerifierCommit({ config: loaded, runCommand: options.runCommand });
-        if (runtime.protocol !== 'structured') {
-            throw new Error(`legacy verifier cannot be checked against ${loaded.verifier.expectedRepository} ${loaded.verifier.expectedRef}`);
-        }
-        if (runtime.stale) {
-            throw new Error(`stale build: built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}`);
-        }
-        if (runtime.build.commit !== expectedCommit || runtime.runtime.commit !== expectedCommit) {
-            throw new Error(`obsolete build: expected ${expectedCommit}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}`);
-        }
-        if (runtime.build.dirty !== false || runtime.runtime.dirty !== false) {
-            throw new Error(`dirty verifier build or runtime at ${expectedCommit}`);
-        }
+        await assertVerifierRuntimeFresh(loaded, options.runCommand);
     });
     await check(checks, 'pr guardian skill runner', async () => {
         const loaded = config;
@@ -126,9 +112,6 @@ export async function doctorProject(options) {
 }
 function builderOptions(config) {
     return { ...config.builder, envAllowlist: config.safety.envAllowlist };
-}
-function verifierOptions(config) {
-    return { ...config.verifier, envAllowlist: config.safety.envAllowlist };
 }
 async function checkWorkspaceTempDir(workspacePath) {
     await fs.access(workspacePath);

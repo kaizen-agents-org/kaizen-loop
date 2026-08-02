@@ -6,6 +6,7 @@ import { parseAgentResult } from '../agents/claude.js';
 import { buildActionsFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import type { AgentResult } from '../agents/types.js';
 import { VerifierAgentAdapter } from '../agents/verifier.js';
+import { assertVerifierRuntimeFresh } from '../agents/verifierFreshness.js';
 import { loadConfig } from '../config/config.js';
 import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
@@ -133,7 +134,7 @@ export async function verifyActionsFix(options: VerifyActionsFixOptions) {
     ...context.config.verifier,
     envAllowlist: context.config.safety.envAllowlist
   });
-  if (!(await verifier.isAvailable())) throw new Error(`Trusted verifier is unavailable: ${context.config.verifier.command}`);
+  await assertVerifierRuntimeFresh(context.config, command);
   const verdict = await verifier.run({
     workspaceDir: options.cwd,
     prompt: buildVerifierPrompt({ repo: context.repo, issue: context.issue, agentResult: builder, verifyResults: verification, diff, diffText })

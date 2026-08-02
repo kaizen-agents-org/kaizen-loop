@@ -243,6 +243,7 @@ describe('GitHub Actions fix workflow', () => {
     })));
     let authorizationChecks = 0;
     let liveBaseChecks = 0;
+    let verifierFreshnessChecks = 0;
     const fakeRun: CommandRunner = async (command, args, options) => {
       if (command === 'gh' && args[0] === 'repo' && args.includes('nameWithOwner')) return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'repo') return result(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
@@ -261,6 +262,18 @@ describe('GitHub Actions fix workflow', () => {
         return result(command, args, JSON.stringify({
           number: 7, url: 'https://github.com/owner/repo/pull/7', baseRefName: 'main', isDraft: false,
           closingIssuesReferences: [{ number: 199 }]
+        }));
+      }
+      if (command === 'git' && args[0] === 'ls-remote') {
+        verifierFreshnessChecks += 1;
+        return result(command, args, `${'b'.repeat(40)}\trefs/heads/main\n`);
+      }
+      if (command === 'verifier' && args.join(' ') === '--version --json') {
+        const commit = 'b'.repeat(40);
+        return result(command, args, JSON.stringify({
+          name: 'verifier', version: '0.0.0', status: 'current', stale: false,
+          build: { commit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+          runtime: { commit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
         }));
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, 'verifier 1\n');
@@ -285,6 +298,7 @@ describe('GitHub Actions fix workflow', () => {
     expect(published.body).toContain('Closes #199');
     expect(authorizationChecks).toBe(2);
     expect(liveBaseChecks).toBe(1);
+    expect(verifierFreshnessChecks).toBe(1);
     expect((await runCommand('git', ['show', 'HEAD:README.md'], { cwd })).stdout).toBe('after\n');
   });
 
@@ -299,6 +313,7 @@ describe('GitHub Actions fix workflow', () => {
     expect(workflow.jobs.publish.permissions).toEqual({ contents: 'write', issues: 'read', 'pull-requests': 'write' });
     expect(raw).toContain('openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56');
     expect(raw).toContain('anthropics/claude-code-action@273fe825408ddced56cb02b228a74c72bed8241e');
+    expect(raw).toContain('repository: kaizen-agents-org/verifier\n          ref: refs/heads/main');
     expect(workflow.jobs.provider_gate).toBeDefined();
     expect(raw).not.toContain('Fail Codex attempt without a patch');
     expect(raw).not.toContain('Fail Claude attempt without a patch');

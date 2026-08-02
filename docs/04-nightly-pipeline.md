@@ -173,7 +173,7 @@ builder-agent adapter([06-agents.md](./06-agents.md))に修正を依頼する。
 
 `verifier.enabled: true` のとき、機械的検証が通ったあとに verifier を呼ぶ。
 
-run 開始時に `verifier --version --json` を実行し、構造化された provenance を run の `verifier-runtime.json` に保存する。リンク先 checkout の commit がビルド時 commit と異なる場合は、builder-agent を起動する前に run を fail-closed で停止する。構造化 version を実装していない旧 verifier は互換モードとして継続し、その出力を同じ診断ファイルに残す。
+run 開始時に `verifier --version --json` を実行し、構造化された provenance を run の `verifier-runtime.json` に保存する。canonical repository/ref の期待 commit、build commit、runtime checkout commit が一致しない場合は、builder-agent を起動する前に run を fail-closed で停止する。構造化 provenance を実装していない旧 verifier は安全に鮮度を証明できないため使用不可であり、current verifier への更新が必要になる。通常 run、`kaizen doctor`、Actions patch 検証は同じ鮮度契約を適用する。
 
 verifier は「PR を作って良いか」だけを判断する保守的なゲート。マージ承認ではない。
 

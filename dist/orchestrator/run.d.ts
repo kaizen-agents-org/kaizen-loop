@@ -57,10 +57,6 @@ export declare function preflightVerifier(options: {
     runCommand: CommandRunner;
     runDir: string;
 }): Promise<string | undefined>;
-export declare function resolveExpectedVerifierCommit(options: {
-    config: KaizenConfig;
-    runCommand: CommandRunner;
-}): Promise<string>;
 export declare function applyImplementationBudget(selection: RunIssueSelection, maxIssues: number): RunIssueSelection;
 export declare function selectPreferredBackends(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined): Array<'claude' | 'codex'>;
 export {};
