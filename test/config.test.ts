@@ -88,6 +88,13 @@ describe('configSchema', () => {
     expect(() => configSchema.parse({ version: 1, run: { maxIssuesPerNight: 1, typo: true } })).toThrow();
   });
 
+  it('requires the trusted verifier repository to use HTTPS', () => {
+    expect(() => configSchema.parse({
+      version: 1,
+      verifier: { expectedRepository: 'file:///tmp/untrusted-verifier.git' }
+    })).toThrow('expectedRepository must use HTTPS');
+  });
+
   it('rejects invalid scheduler values', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:00' } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:00' } } })).toThrow();

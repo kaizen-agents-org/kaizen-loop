@@ -186,7 +186,9 @@ export const configSchema = z
         command: z.string().default('verifier'),
         resultPath: z.string().default('.kaizen/verifier/verify-result.json'),
         timeoutMinutes: z.number().int().positive().default(15),
-        expectedRepository: z.string().url().default('https://github.com/kaizen-agents-org/verifier.git'),
+        expectedRepository: z.string().url()
+          .refine((value) => value.startsWith('https://'), 'expectedRepository must use HTTPS')
+          .default('https://github.com/kaizen-agents-org/verifier.git'),
         expectedRef: z.string()
           .regex(/^refs\/heads\/[A-Za-z0-9._/-]+$/)
           .refine((value) => !value.includes('..') && !value.includes('//') && !value.endsWith('/'), 'expectedRef must be a canonical branch ref')

@@ -224,6 +224,8 @@ issues:
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `init` の manifest 検出表は package root から `STACK_DETECTION_TABLE` として公開する。verifier などの command inference はこの共有契約を利用し、manifest と verify command の対応を重複定義しない
 - 自動検出した `commands.setup` / `commands.verify` は提案であり、生成後に人間が確認・修正してから `.kaizen/config.yml` をコミットする。verify command は信頼の根幹なので自動確定しない
+- `verifier.expectedRepository` / `expectedRef` は Verifier の信頼ルートである。repository は HTTPS URL のみを許可し、変更時は maintainer review で canonical source を確認する
+- preflight は run 開始時に canonical ref を解決して期待 SHA を固定する。設定ファイルを含む `.kaizen/**` は protected path であり、解決不能・期待 SHA 不一致・dirty runtime の場合は builder 開始前に fail closed する
 - `safety.minFreeDiskMb` は workspace / worktree 作成前の空き容量 preflight。対象パスがまだ存在しない場合は既存の親ディレクトリを検査する
 - `safety.wipLimit` は owner 全体の open 生成 PR 数に対する自動 intake の WIP 上限。bot が作成した open PR が上限以上なら新しい Issue は選択せず、run summary に skip reason を残す。`kaizen status --metrics` は repository / organization の現在値、上限到達有無、最古の生成 PR の滞留日数を表示する
 - `safety.envAllowlist` は agent と shell command へ渡す環境変数名の allowlist。`KAIZEN_BUILD_RESULT_PATH` などの Kaizen 専用変数と短い Kaizen `TMPDIR` / `TMP` / `TEMP` は実行時に追加される。`KAIZEN_TMPDIR` を渡すと短い temp root を明示的に上書きでき、その配下に Kaizen 専用 child directory が作られる
