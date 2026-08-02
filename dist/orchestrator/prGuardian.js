@@ -679,10 +679,10 @@ function commentAuditBlockers(parsed) {
     return (parsed.comments ?? []).flatMap((comment) => {
         const login = normalizeReviewerLogin(comment.author?.login);
         const body = comment.body ?? '';
-        if (login.includes('coderabbit') && /<!-- This is an auto-generated comment: (?:summarize|rate limited) by coderabbit\.ai -->/i.test(body)) {
+        if (login === 'coderabbitai' && /<!-- This is an auto-generated comment: (?:summarize|rate limited) by coderabbit\.ai -->/i.test(body)) {
             return [];
         }
-        if (login.includes('codex') && hasCurrentHeadBotEvidence(login, parsed))
+        if (login === 'chatgpt-codex-connector' && hasCurrentHeadBotEvidence(login, parsed))
             return [];
         return [`PR comment ${comment.id ?? '(unknown id)'} by ${login} requires Guardian audit`];
     });
