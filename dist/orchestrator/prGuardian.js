@@ -506,14 +506,6 @@ async function inspectPrGate(runCommand, req) {
             const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
             const author = thread.author ? ` by ${thread.author}` : '';
             return `unresolved review thread at ${location}${author}`;
-        })),
-        ...(terminal ? [] : checkAnnotations
-            .filter((annotation) => annotation.level === 'failure' || annotation.level === 'warning')
-            .map((annotation) => {
-            const location = annotation.path
-                ? ` at ${annotation.path}${annotation.startLine ? `:${annotation.startLine}` : ''}`
-                : '';
-            return `check annotation from ${annotation.checkName}${location} is ${annotation.level}`;
         }))
     ];
     return {

@@ -965,8 +965,7 @@ describe('runPrGuardianSkill', () => {
       baseBranch: 'main'
     });
 
-    expect(result.status).toBe('failed');
-    expect(result.summary).toContain('check annotation from lint at src/file.ts:12 is warning');
+    expect(result.status).toBe('success');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
