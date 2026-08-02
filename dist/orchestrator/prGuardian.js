@@ -308,6 +308,7 @@ export async function runPrGuardianSkill(runCommand, req) {
                     rawOutputs.push(`PR still not merge-ready before guardian pass ${attempt}:\n${summarizeGate(preflight)}`);
                 }
             }
+            const guardianAttemptStartedAt = Date.now();
             let result;
             try {
                 result = await runCommand(req.config.guardian.command, [
@@ -326,11 +327,11 @@ export async function runPrGuardianSkill(runCommand, req) {
             catch (error) {
                 const failure = error instanceof Error ? error.message : String(error);
                 rawOutputs.push(failure);
-                return finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, failure);
+                return finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, guardianAttemptStartedAt, failure);
             }
             rawOutputs.push(`${result.stdout}${result.stderr}`);
             if (result.exitCode !== 0) {
-                return finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, `PR guardian skill exited with code ${result.exitCode}.`);
+                return finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, guardianAttemptStartedAt, `PR guardian skill exited with code ${result.exitCode}.`);
             }
             const gate = await inspectPrGate(runCommand, req);
             if (gate.isReady) {
@@ -494,6 +495,9 @@ async function inspectPrGate(runCommand, req) {
         inspectPullRequest(runCommand, req),
         listUnresolvedReviewThreads(runCommand, req)
     ]);
+    const checkAnnotations = pullRequest.headRefOid
+        ? await listCheckAnnotations(runCommand, req, pullRequest.headRefOid)
+        : [];
     const terminal = pullRequest.state === 'MERGED';
     const blockers = [
         ...mergeabilityBlockers(pullRequest),
@@ -502,18 +506,81 @@ async function inspectPrGate(runCommand, req) {
             const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
             const author = thread.author ? ` by ${thread.author}` : '';
             return `unresolved review thread at ${location}${author}`;
+        })),
+        ...(terminal ? [] : checkAnnotations
+            .filter((annotation) => annotation.level === 'failure' || annotation.level === 'warning')
+            .map((annotation) => {
+            const location = annotation.path
+                ? ` at ${annotation.path}${annotation.startLine ? `:${annotation.startLine}` : ''}`
+                : '';
+            return `check annotation from ${annotation.checkName}${location} is ${annotation.level}`;
         }))
     ];
     return {
         ...pullRequest,
         activityFingerprint: JSON.stringify({
             pullRequest: pullRequest.activityFingerprint,
-            unresolvedThreads
+            unresolvedThreads,
+            checkAnnotations
         }),
         blockers,
         isReady: blockers.length === 0,
-        hasCurrentHeadCodexNoFindings: pullRequest.hasCurrentHeadCodexNoFindings
+        hasCurrentHeadCodexNoFindings: pullRequest.hasCurrentHeadCodexNoFindings,
+        codexNoFindingsAt: pullRequest.codexNoFindingsAt,
+        latestAuditableActivityAt: latestTimestamp([
+            pullRequest.latestAuditableActivityAt,
+            ...checkAnnotations.map((annotation) => annotation.checkCompletedAt)
+        ])
     };
+}
+async function listCheckAnnotations(runCommand, req, headRefOid) {
+    const runsResult = await runCommand('gh', [
+        'api',
+        `repos/${req.repo}/commits/${headRefOid}/check-runs?per_page=100`,
+        '--paginate',
+        '--slurp'
+    ], {
+        cwd: req.workspaceDir,
+        env: githubCliEnv(),
+        timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+        rejectOnNonZero: false
+    });
+    if (runsResult.exitCode !== 0) {
+        throw new Error(`Could not inspect PR check runs: ${runsResult.stderr || runsResult.stdout}`);
+    }
+    const runPages = JSON.parse(runsResult.stdout || '[]');
+    const checkRuns = runPages.flatMap((page) => page.check_runs ?? []);
+    const annotations = [];
+    for (const checkRun of checkRuns.filter((run) => (run.output?.annotations_count ?? 0) > 0)) {
+        if (!checkRun.id)
+            throw new Error('Could not inspect check annotations: check run id is missing.');
+        const result = await runCommand('gh', [
+            'api',
+            `repos/${req.repo}/check-runs/${checkRun.id}/annotations?per_page=100`,
+            '--paginate',
+            '--slurp'
+        ], {
+            cwd: req.workspaceDir,
+            env: githubCliEnv(),
+            timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+            rejectOnNonZero: false
+        });
+        if (result.exitCode !== 0) {
+            throw new Error(`Could not inspect annotations for check ${checkRun.name ?? checkRun.id}: ${result.stderr || result.stdout}`);
+        }
+        const pages = JSON.parse(result.stdout || '[]');
+        for (const annotation of pages.flat()) {
+            annotations.push({
+                checkName: checkRun.name ?? String(checkRun.id),
+                level: String(annotation.annotation_level ?? 'unknown').toLowerCase(),
+                path: annotation.path,
+                startLine: annotation.start_line,
+                message: annotation.message,
+                checkCompletedAt: checkRun.completed_at
+            });
+        }
+    }
+    return annotations;
 }
 async function inspectPullRequestTerminalState(runCommand, req) {
     const result = await runCommand('gh', [
@@ -558,6 +625,7 @@ async function inspectPullRequest(runCommand, req) {
         throw new Error(`Could not inspect PR mergeability: ${result.stderr || result.stdout}`);
     }
     const parsed = JSON.parse(result.stdout || '{}');
+    const codexEvidence = currentHeadCodexNoFindingsEvidence(parsed);
     return {
         state: parsed.state,
         isDraft: parsed.isDraft,
@@ -574,7 +642,15 @@ async function inspectPullRequest(runCommand, req) {
         reviewBlockers: [
             ...currentHeadReviewBlockers(parsed, reviews)
         ],
-        hasCurrentHeadCodexNoFindings: hasCurrentHeadCodexNoFindings(parsed),
+        hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
+        codexNoFindingsAt: codexEvidence?.observedAt,
+        latestAuditableActivityAt: latestTimestamp([
+            ...(parsed.comments ?? [])
+                .filter((comment) => comment !== codexEvidence?.comment)
+                .flatMap((comment) => [comment.updatedAt, comment.createdAt]),
+            ...reviews.map((review) => review.submitted_at),
+            ...(parsed.statusCheckRollup ?? []).flatMap((check) => [check.completedAt, check.startedAt])
+        ]),
         checks: requiredChecks
     };
 }
@@ -654,7 +730,7 @@ function hasCurrentHeadBotEvidence(login, parsed) {
     if (!parsed.headRefOid)
         return false;
     if (login === 'chatgpt-codex-connector')
-        return hasCurrentHeadCodexNoFindings(parsed);
+        return Boolean(currentHeadCodexNoFindingsEvidence(parsed));
     if (login === 'coderabbitai') {
         return (parsed.statusCheckRollup ?? []).some((check) => {
             const name = `${check.name ?? ''} ${check.context ?? ''}`.toLowerCase();
@@ -664,23 +740,41 @@ function hasCurrentHeadBotEvidence(login, parsed) {
     }
     return false;
 }
-function hasCurrentHeadCodexNoFindings(parsed) {
+function currentHeadCodexNoFindingsEvidence(parsed) {
     if (!parsed.headRefOid)
-        return false;
-    return (parsed.comments ?? []).some((comment) => {
+        return undefined;
+    for (const comment of parsed.comments ?? []) {
         if (normalizeReviewerLogin(comment.author?.login) !== 'chatgpt-codex-connector')
-            return false;
+            continue;
         const body = comment.body ?? '';
-        const reviewedCommit = body.match(/Reviewed commit:\*{0,2}\s*`([0-9a-f]{7,40})`/i)?.[1];
-        const noFindings = /did(?:n't| not) find any (?:major )?issues/i.test(body);
-        return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit) && noFindings);
-    });
+        const match = body.trim().match(/^Codex Review:\s*Didn't find any (?:major )?issues\.\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`\s*$/i);
+        const observedAt = comment.updatedAt ?? comment.createdAt;
+        if (match?.[1] && parsed.headRefOid.startsWith(match[1]) && observedAt && !Number.isNaN(Date.parse(observedAt))) {
+            return { comment, observedAt };
+        }
+    }
+    return undefined;
 }
 function normalizeReviewerLogin(login) {
     return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
 }
-function isAuditedReady(gate) {
-    return gate.isReady && (gate.state === 'MERGED' || gate.hasCurrentHeadCodexNoFindings);
+function isAuditedReady(gate, evidenceNotBefore) {
+    if (!gate.isReady)
+        return false;
+    if (gate.state === 'MERGED')
+        return true;
+    const evidenceAt = Date.parse(gate.codexNoFindingsAt ?? '');
+    if (Number.isNaN(evidenceAt))
+        return false;
+    const latestActivityAt = Date.parse(gate.latestAuditableActivityAt ?? '');
+    if (!Number.isNaN(latestActivityAt) && evidenceAt < latestActivityAt)
+        return false;
+    return evidenceNotBefore === undefined || evidenceAt >= evidenceNotBefore;
+}
+function latestTimestamp(values) {
+    return values
+        .filter((value) => Boolean(value) && !Number.isNaN(Date.parse(value)))
+        .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
 }
 function mergeabilityBlockers(state) {
     const blockers = [];
@@ -740,8 +834,8 @@ async function waitForInitiallyReadyPrGate(runCommand, req, initial) {
         return gate;
     return waitForStablePrGate(runCommand, req, gate);
 }
-async function finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, failureSummary) {
-    const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs);
+async function finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, guardianAttemptStartedAt, failureSummary) {
+    const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs, guardianAttemptStartedAt);
     return {
         status: reconciled ? 'success' : 'failed',
         summary: reconciled ? successSummary(reconciled) : failureSummary,
@@ -749,15 +843,15 @@ async function finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, st
         durationMs: Date.now() - startMs
     };
 }
-async function reconcileReadyPrGate(runCommand, req, rawOutputs) {
+async function reconcileReadyPrGate(runCommand, req, rawOutputs, guardianAttemptStartedAt) {
     try {
         const gate = await inspectPrGate(runCommand, req);
-        if (!isAuditedReady(gate)) {
+        if (!isAuditedReady(gate, guardianAttemptStartedAt)) {
             rawOutputs.push(`PR remained blocked after guardian command failure:\n${summarizeGate(gate)}`);
             return undefined;
         }
         const stable = await waitForStablePrGate(runCommand, req, gate);
-        if (!isAuditedReady(stable)) {
+        if (!isAuditedReady(stable, guardianAttemptStartedAt)) {
             rawOutputs.push(`PR was not stably merge-ready after guardian command failure:\n${summarizeGate(stable)}`);
             return undefined;
         }
