@@ -653,16 +653,9 @@ function currentHeadReviewBlockers(parsed, reviews) {
 function hasCurrentHeadBotEvidence(login, parsed) {
     if (!parsed.headRefOid)
         return false;
-    if (login.includes('codex')) {
-        return (parsed.comments ?? []).some((comment) => {
-            if (!normalizeReviewerLogin(comment.author?.login).includes('codex'))
-                return false;
-            const reviewedCommit = comment.body?.match(/Reviewed commit:\*{0,2}\s*`([0-9a-f]{7,40})`/i)?.[1];
-            const noFindings = /did(?:n't| not) find any (?:major )?issues/i.test(comment.body ?? '');
-            return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit) && noFindings);
-        });
-    }
-    if (login.includes('coderabbit')) {
+    if (login === 'chatgpt-codex-connector')
+        return hasCurrentHeadCodexNoFindings(parsed);
+    if (login === 'coderabbitai') {
         return (parsed.statusCheckRollup ?? []).some((check) => {
             const name = `${check.name ?? ''} ${check.context ?? ''}`.toLowerCase();
             const result = String(check.conclusion ?? check.state ?? '').toUpperCase();
