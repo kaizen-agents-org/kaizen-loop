@@ -694,7 +694,13 @@ interface PullRequestViewResponse {
   mergeStateStatus?: string;
   mergeable?: string;
   reviewDecision?: string;
-  reviewRequests?: Array<{ login?: string }>;
+  reviewRequests?: Array<{
+    __typename?: string;
+    typename?: string;
+    login?: string;
+    slug?: string;
+    name?: string;
+  }>;
   headRefOid?: string;
   comments?: Array<{ id?: string; createdAt?: string; updatedAt?: string; author?: { login?: string } | null; body?: string }>;
   statusCheckRollup?: Array<{
@@ -1011,7 +1017,12 @@ async function inspectPullRequest(
         check.completedAt
       ]),
       reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
-      reviewRequests: (parsed.reviewRequests ?? []).map((request) => request.login),
+      reviewRequests: (parsed.reviewRequests ?? []).map((request) => [
+        request.__typename ?? request.typename,
+        request.login,
+        request.slug,
+        request.name
+      ]),
       reviewComments: reviewComments.map((comment) => [
         comment.id,
         comment.updated_at,
@@ -1187,6 +1198,9 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
     if (!current || String(review.submitted_at ?? '') > String(current.submitted_at ?? '')) latestByBot.set(login, review);
   }
   for (const request of parsed.reviewRequests ?? []) {
+    if ((request.__typename ?? request.typename)?.toLowerCase() === 'team' || (!request.login && (request.slug || request.name))) {
+      continue;
+    }
     const login = normalizeReviewerLogin(request.login);
     if (!isExpectedBotLogin(login)) continue;
     blockers.push(`${login} requested review is not terminal for current PR head ${parsed.headRefOid}`);

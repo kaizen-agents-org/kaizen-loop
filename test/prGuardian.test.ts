@@ -1612,7 +1612,7 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
-  it('does not treat a human reviewer with codex in the login as an expected bot', async () => {
+  it('does not treat human or team reviewers as expected bots', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
@@ -1625,7 +1625,10 @@ describe('runPrGuardianSkill', () => {
       stdout: command === 'gh'
         ? ghResponse(args, [], {
           headRefOid: 'abc123456789',
-          reviewRequests: [{ login: 'codex-maintainer' }],
+          reviewRequests: [
+            { login: 'codex-maintainer' },
+            { __typename: 'Team', slug: 'platform-reviewers', name: 'Platform Reviewers' }
+          ],
           comments: [{
             id: 1,
             author: { login: 'chatgpt-codex-connector[bot]' },
@@ -1799,18 +1802,20 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: 0,
       stdout: command === 'gh'
-        ? ghResponse(args, [], {
-          statusCheckRollup: [
-            { name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' },
-            {
-              name: 'optional-analysis',
-              status: 'COMPLETED',
-              conclusion: 'SUCCESS',
-              startedAt: optionalCheckStartedAt,
-              completedAt: optionalCheckStartedAt
-            }
-          ]
-        })
+        ? isRequiredChecks(args)
+          ? requiredChecksResponse([{ name: 'verify', conclusion: 'SUCCESS' }])
+          : ghResponse(args, [], {
+            statusCheckRollup: [
+              { name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' },
+              {
+                name: 'optional-analysis',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                startedAt: optionalCheckStartedAt,
+                completedAt: optionalCheckStartedAt
+              }
+            ]
+          })
         : 'done',
       stderr: '',
       durationMs: 1
@@ -2744,7 +2749,7 @@ function ghResponse(
     mergeStateStatus: string;
     mergeable: string;
     reviewDecision: string;
-    reviewRequests: Array<{ login?: string }>;
+    reviewRequests: Array<{ __typename?: string; typename?: string; login?: string; slug?: string; name?: string }>;
     statusCheckRollup: Array<Record<string, unknown>>;
     headRefOid: string;
     reviews: Array<Record<string, unknown>>;
@@ -2829,7 +2834,7 @@ function mergeablePrResponse(pr: Partial<{
   mergeStateStatus: string;
   mergeable: string;
   reviewDecision: string;
-  reviewRequests: Array<{ login?: string }>;
+  reviewRequests: Array<{ __typename?: string; typename?: string; login?: string; slug?: string; name?: string }>;
   statusCheckRollup: Array<Record<string, unknown>>;
   headRefOid: string;
   reviews: Array<Record<string, unknown>>;

@@ -743,7 +743,12 @@ async function inspectPullRequest(runCommand, req) {
                 check.completedAt
             ]),
             reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
-            reviewRequests: (parsed.reviewRequests ?? []).map((request) => request.login),
+            reviewRequests: (parsed.reviewRequests ?? []).map((request) => [
+                request.__typename ?? request.typename,
+                request.login,
+                request.slug,
+                request.name
+            ]),
             reviewComments: reviewComments.map((comment) => [
                 comment.id,
                 comment.updated_at,
@@ -906,6 +911,9 @@ function currentHeadReviewBlockers(parsed, reviews) {
             latestByBot.set(login, review);
     }
     for (const request of parsed.reviewRequests ?? []) {
+        if ((request.__typename ?? request.typename)?.toLowerCase() === 'team' || (!request.login && (request.slug || request.name))) {
+            continue;
+        }
         const login = normalizeReviewerLogin(request.login);
         if (!isExpectedBotLogin(login))
             continue;
