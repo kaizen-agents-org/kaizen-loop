@@ -735,7 +735,7 @@ async function inspectPullRequest(runCommand, req) {
         activityFingerprint: JSON.stringify({
             headRefOid: parsed.headRefOid,
             checks: requiredChecks,
-            checkRollup: (parsed.statusCheckRollup ?? []).map((check) => [
+            checkRollup: auditableCheckActivity.map((check) => [
                 check.name ?? check.context,
                 check.status ?? check.state,
                 check.conclusion,

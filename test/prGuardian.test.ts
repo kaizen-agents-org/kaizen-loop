@@ -1776,6 +1776,68 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
+  it('does not reactivate a successful job for a completed optional check rerun', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    let optionalCheckStartedAt = '2026-07-13T01:16:21Z';
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          statusCheckRollup: [
+            { name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' },
+            {
+              name: 'optional-analysis',
+              status: 'COMPLETED',
+              conclusion: 'SUCCESS',
+              startedAt: optionalCheckStartedAt,
+              completedAt: optionalCheckStartedAt
+            }
+          ]
+        })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const first = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+    expect(first[0].status).toBe('success');
+
+    optionalCheckStartedAt = '2026-07-13T01:17:21Z';
+    const second = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(second).toEqual([]);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
   it('reactivates a successful same-head job when a resolved thread receives a late reply', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
