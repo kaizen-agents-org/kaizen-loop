@@ -54,7 +54,7 @@ describe('verifier freshness preflight', () => {
   });
 
   it('refreshes an obsolete Verifier exactly once for opted-in dogfood', async () => {
-    const { failure, diagnostic, runner } = await inspect({
+    const { failure, diagnostic, runner, globalLink } = await inspect({
       expectedCommit: currentCommit,
       buildCommit: oldCommit,
       runtimeCommit: oldCommit,
@@ -67,6 +67,7 @@ describe('verifier freshness preflight', () => {
       recovery: { attempted: true, status: 'recovered' }
     });
     expect(runner.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'clone')).toHaveLength(1);
+    expect((await fs.stat(path.join(globalLink, 'dist', 'cli.js'))).mode & 0o111).not.toBe(0);
   });
 
   it('keeps pinned runtimes fail-closed without attempting an update', async () => {

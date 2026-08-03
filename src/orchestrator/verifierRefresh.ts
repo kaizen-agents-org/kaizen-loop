@@ -55,7 +55,12 @@ export async function refreshCanonicalVerifier(options: {
       }
       await options.runCommand('pnpm', ['install', '--frozen-lockfile'], { cwd: buildRoot, timeoutMs });
       await options.runCommand('pnpm', ['build'], { cwd: buildRoot, timeoutMs });
-      await fs.access(path.join(packageRoot, 'dist', 'cli.js'));
+      const cliPath = path.join(packageRoot, 'dist', 'cli.js');
+      await fs.access(cliPath);
+      await fs.chmod(cliPath, 0o755);
+      if (((await fs.stat(cliPath)).mode & 0o111) === 0) {
+        throw new Error(`built Verifier CLI is not executable: ${cliPath}`);
+      }
       await writeMarkerAtomically(buildRoot, options.expectedCommit);
       await replaceGlobalVerifierLink({
         globalLink,
