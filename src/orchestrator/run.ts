@@ -2385,6 +2385,18 @@ async function fileDiscoveredIssues(options: {
         failureClass: parseFailureClass(issue.evidence)
       });
       if (existing) {
+        await repairDiscoveredIssueBodyIfNeeded({
+          existing,
+          issue,
+          repo,
+          routingReason: routing.reason,
+          sourceIssue: options.sourceIssue,
+          sourceRepo: options.projectRepo,
+          runId: options.runId,
+          issueDir: options.issueDir,
+          github: options.github,
+          fingerprintMarker: fingerprint?.marker
+        });
         filed.push({ title: issue.title, repo, status: 'duplicate', url: existing.url });
         options.filedKeys.add(key);
         continue;
@@ -2404,21 +2416,28 @@ async function fileDiscoveredIssues(options: {
         labels: labelsForDiscoveredIssue(issue, requiredLabels),
         requiredLabels
       });
-      await options.github.updateIssueBody({
-        repo,
-        issue: created.number,
-        body: buildDiscoveredIssueBody({
-          issue,
-          repo,
-          routingReason: routing.reason,
-          sourceIssue: options.sourceIssue,
-          sourceRepo: options.projectRepo,
-          runId: options.runId,
-          createdIssueNumber: created.number
-        })
-      });
       filed.push({ title: issue.title, repo, status: 'created', url: created.url });
       options.filedKeys.add(key);
+      try {
+        await options.github.updateIssueBody({
+          repo,
+          issue: created.number,
+          body: buildDiscoveredIssueBody({
+            issue,
+            repo,
+            routingReason: routing.reason,
+            sourceIssue: options.sourceIssue,
+            sourceRepo: options.projectRepo,
+            runId: options.runId,
+            createdIssueNumber: created.number
+          })
+        });
+      } catch (error) {
+        await fs.appendFile(
+          path.join(options.issueDir, 'discovered-issues.log'),
+          `Created discovered issue ${repo}#${created.number}, but failed to add PR linkage guidance; a later duplicate check will retry the repair: ${String(error)}\n`
+        );
+      }
     } catch (error) {
       await fs.appendFile(
         path.join(options.issueDir, 'discovered-issues.log'),
@@ -2446,6 +2465,51 @@ These were reported by the builder agent as separate bugs and filed by kaizen-lo
   }
 
   return filed;
+}
+
+async function repairDiscoveredIssueBodyIfNeeded(options: {
+  existing: GitHubIssue;
+  issue: DiscoveredIssue;
+  repo: string;
+  routingReason: string;
+  sourceIssue: GitHubIssue;
+  sourceRepo: string;
+  runId: string;
+  issueDir: string;
+  github: GitHubClient;
+  fingerprintMarker?: string;
+}): Promise<void> {
+  if (options.existing.body.includes('## PR linkage requirement')) return;
+  const isGeneratedIssue = Boolean(
+    (options.fingerprintMarker && options.existing.body.includes(options.fingerprintMarker))
+    || (
+      options.existing.body.includes('## Routing')
+      && options.existing.body.includes(`while processing \`${options.sourceRepo}#${options.sourceIssue.number}\``)
+      && options.existing.body.includes('- Kaizen run:')
+    )
+  );
+  if (!isGeneratedIssue) return;
+
+  try {
+    await options.github.updateIssueBody({
+      repo: options.repo,
+      issue: options.existing.number,
+      body: buildDiscoveredIssueBody({
+        issue: options.issue,
+        repo: options.repo,
+        routingReason: options.routingReason,
+        sourceIssue: options.sourceIssue,
+        sourceRepo: options.sourceRepo,
+        runId: options.runId,
+        createdIssueNumber: options.existing.number
+      })
+    });
+  } catch (error) {
+    await fs.appendFile(
+      path.join(options.issueDir, 'discovered-issues.log'),
+      `Failed to repair PR linkage guidance on existing discovered issue ${options.repo}#${options.existing.number}; a later duplicate check will retry: ${String(error)}\n`
+    );
+  }
 }
 
 function buildDiscoveredIssueBody(options: {
