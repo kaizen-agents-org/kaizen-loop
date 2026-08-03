@@ -260,7 +260,7 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           repository: kaizen-agents-org/verifier
-          ref: refs/heads/main
+          ref: cca74b39287dbcaf74687ae4cacaeebfb3167c6e
           path: _verifier_runtime
           persist-credentials: false
 

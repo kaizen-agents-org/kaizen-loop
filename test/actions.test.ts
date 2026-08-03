@@ -348,7 +348,9 @@ describe('GitHub Actions fix workflow', () => {
     expect(workflow.jobs.publish.permissions).toEqual({ contents: 'write', issues: 'read', 'pull-requests': 'write' });
     expect(raw).toContain('openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56');
     expect(raw).toContain('anthropics/claude-code-action@273fe825408ddced56cb02b228a74c72bed8241e');
-    expect(raw).toContain('repository: kaizen-agents-org/verifier\n          ref: refs/heads/main');
+    expect(raw).toContain(
+      'repository: kaizen-agents-org/verifier\n          ref: cca74b39287dbcaf74687ae4cacaeebfb3167c6e'
+    );
     expect(workflow.jobs.provider_gate).toBeDefined();
     expect(raw).not.toContain('Fail Codex attempt without a patch');
     expect(raw).not.toContain('Fail Claude attempt without a patch');
