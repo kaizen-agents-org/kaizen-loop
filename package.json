@@ -18,7 +18,7 @@
     "docs"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
     "check:dist": "node scripts/check-dist.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
