@@ -358,6 +358,11 @@ describe('GitHub Actions fix workflow', () => {
     expect(raw).toContain(
       'repository: kaizen-agents-org/verifier\n          ref: cca74b39287dbcaf74687ae4cacaeebfb3167c6e'
     );
+    const prepareJob = JSON.stringify(workflow.jobs.prepare);
+    expect(prepareJob).toContain('kaizen-agents-org/verifier');
+    expect(prepareJob).toContain('cca74b39287dbcaf74687ae4cacaeebfb3167c6e');
+    expect(prepareJob).toContain('kaizen-bin/verifier');
+    expect(prepareJob).toContain('RUNNER_TEMP/kaizen-bin');
     expect(workflow.jobs.provider_gate).toBeDefined();
     expect(raw).not.toContain('Fail Codex attempt without a patch');
     expect(raw).not.toContain('Fail Claude attempt without a patch');
