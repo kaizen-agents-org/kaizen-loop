@@ -175,18 +175,32 @@ export declare function statusProject(options: {
 }>;
 export declare function listProjects(): Promise<{
     health: {
-        state: "healthy" | "starved";
+        state: "blocked" | "healthy" | "degraded" | "starved";
+        affectedRepositories: {
+            slug: string;
+            repo: string;
+            state: "blocked" | "degraded" | "starved";
+            since: string | undefined;
+            warning: string | undefined;
+            reasonCode: "run_failed" | "eligible_not_processed" | "repeated_gate" | "empty_queue" | undefined;
+        }[];
         starvedRepositories: {
             slug: string;
             repo: string;
-            since: any;
-            warning: any;
+            since: string | undefined;
+            warning: string | undefined;
         }[];
     };
     projects: {
         [k: string]: {
             readonly lastRun: any;
-            readonly queueHealth: any;
+            readonly queueHealth: {
+                state: "healthy" | "idle" | "degraded" | "starved" | "blocked";
+                consecutiveZeroThroughputRuns: number;
+                reasonCode?: "run_failed" | "eligible_not_processed" | "repeated_gate" | "empty_queue";
+                since?: string;
+                warning?: string;
+            } | undefined;
             readonly repo: string;
             readonly localPath: string;
             readonly workspacePath: string;

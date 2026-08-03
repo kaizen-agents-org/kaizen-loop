@@ -483,6 +483,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
         summary.queue = summarizeQueue({
           ...queueObservation,
           processedCount: summary.issues.length,
+          result: summary.result,
           skipped: summary.skipped,
           previousSummaries: await readPersistedRunSummaries(stateDir),
           starvationRuns: config.report.starvationRuns,

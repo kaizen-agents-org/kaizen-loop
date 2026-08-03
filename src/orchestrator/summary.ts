@@ -35,8 +35,9 @@ export interface RunQueueSummary {
   processedCount: number;
   skipReasons: Array<{ reason: string; count: number }>;
   health: {
-    state: 'healthy' | 'idle' | 'degraded' | 'starved';
+    state: 'healthy' | 'idle' | 'degraded' | 'starved' | 'blocked';
     consecutiveZeroThroughputRuns: number;
+    reasonCode?: 'run_failed' | 'eligible_not_processed' | 'repeated_gate' | 'empty_queue';
     since?: string;
     warning?: string;
   };
@@ -58,6 +59,7 @@ export function summarizeQueue(options: {
   backlogCount: number;
   eligibleCount: number;
   processedCount: number;
+  result: RunSummary['result'];
   skipped: Array<{ number: number; reason: string }>;
   previousSummaries: RunSummary[];
   starvationRuns: number;
@@ -68,8 +70,34 @@ export function summarizeQueue(options: {
     .reduce((groups, item) => groups.set(item.reason, (groups.get(item.reason) ?? 0) + 1), new Map<string, number>())]
     .map(([reason, count]) => ({ reason, count }))
     .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason));
+  if (options.result === 'failed') {
+    const failureReason = options.skipped.find((item) => item.number === 0)?.reason;
+    return queueSummary(
+      options,
+      skipReasons,
+      'blocked',
+      options.processedCount === 0 ? 1 : 0,
+      'run_failed',
+      options.processedCount === 0 ? options.observedAt : undefined,
+      failureReason
+        ? `Queue blocked because the run failed: ${failureReason}`
+        : 'Queue blocked because the run failed.'
+    );
+  }
   if (options.backlogCount === 0) {
-    return queueSummary(options, skipReasons, 'idle', 0);
+    return queueSummary(options, skipReasons, 'idle', 0, 'empty_queue');
+  }
+
+  if (options.eligibleCount > 0 && options.processedCount === 0) {
+    return queueSummary(
+      options,
+      skipReasons,
+      'degraded',
+      1,
+      'eligible_not_processed',
+      options.observedAt,
+      `Queue degraded because ${options.eligibleCount} eligible issue(s) were not processed.`
+    );
   }
 
   const gate = singleSkipGate(skipReasons, options.backlogCount);
@@ -103,6 +131,7 @@ export function summarizeQueue(options: {
     skipReasons,
     state,
     consecutive,
+    'repeated_gate',
     since,
     state === 'starved'
       ? `Queue starvation: ${options.backlogCount} backlog issue(s) skipped by "${displayedReason}" for ${consecutive} consecutive run(s).`
@@ -130,6 +159,7 @@ function queueSummary(
   skipReasons: RunQueueSummary['skipReasons'],
   state: RunQueueSummary['health']['state'],
   consecutiveZeroThroughputRuns: number,
+  reasonCode?: RunQueueSummary['health']['reasonCode'],
   since?: string,
   warning?: string
 ): RunQueueSummary {
@@ -138,6 +168,6 @@ function queueSummary(
     eligibleCount: options.eligibleCount,
     processedCount: options.processedCount,
     skipReasons,
-    health: { state, consecutiveZeroThroughputRuns, since, warning }
+    health: { state, consecutiveZeroThroughputRuns, reasonCode, since, warning }
   };
 }
