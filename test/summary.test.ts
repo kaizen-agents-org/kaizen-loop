@@ -12,6 +12,7 @@ describe('summarizeQueue', () => {
       backlogCount: 2,
       eligibleCount: 0,
       processedCount: 0,
+      result: 'success',
       skipped: [{ number: 1, reason }, { number: 2, reason }],
       previousSummaries: [first],
       starvationRuns: 2,
@@ -37,6 +38,7 @@ describe('summarizeQueue', () => {
       backlogCount: 0,
       eligibleCount: 0,
       processedCount: 0,
+      result: 'success',
       skipped: [],
       previousSummaries: [],
       starvationRuns: 2,
@@ -46,6 +48,7 @@ describe('summarizeQueue', () => {
     expect(queue.health).toEqual({
       state: 'idle',
       consecutiveZeroThroughputRuns: 0,
+      reasonCode: 'empty_queue',
       since: undefined,
       warning: undefined
     });
@@ -56,6 +59,7 @@ describe('summarizeQueue', () => {
       backlogCount: 2,
       eligibleCount: 0,
       processedCount: 0,
+      result: 'success',
       skipped: [
         { number: 1, reason: 'pending pull request' },
         { number: 2, reason: 'missing selection label: kaizen:ready' }
@@ -77,6 +81,7 @@ describe('summarizeQueue', () => {
       backlogCount: 2,
       eligibleCount: 0,
       processedCount: 0,
+      result: 'success',
       skipped: [
         { number: 1, reason: 'execution authorization could not be verified: actor bob lacks write permission' },
         { number: 2, reason: 'execution authorization could not be verified: actor carol lacks maintain permission' }
@@ -92,10 +97,51 @@ describe('summarizeQueue', () => {
     ]);
     expect(queue.health).toMatchObject({
       state: 'starved',
+      reasonCode: 'repeated_gate',
       consecutiveZeroThroughputRuns: 2,
       since: '2026-07-19T02:00:00.000Z'
     });
     expect(queue.health.warning).toContain('execution authorization could not be verified');
+  });
+
+  it('marks a failed run blocked even when eligible work was not processed', () => {
+    const queue = summarizeQueue({
+      backlogCount: 2,
+      eligibleCount: 2,
+      processedCount: 0,
+      result: 'failed',
+      skipped: [{ number: 0, reason: 'Verifier preflight failed: obsolete build' }],
+      previousSummaries: [],
+      starvationRuns: 2,
+      observedAt: '2026-08-04T02:00:00.000Z'
+    });
+
+    expect(queue.health).toMatchObject({
+      state: 'blocked',
+      reasonCode: 'run_failed',
+      consecutiveZeroThroughputRuns: 1
+    });
+    expect(queue.health.warning).toContain('run failed');
+  });
+
+  it('marks an unexplained successful eligible-zero-throughput run degraded', () => {
+    const queue = summarizeQueue({
+      backlogCount: 2,
+      eligibleCount: 2,
+      processedCount: 0,
+      result: 'success',
+      skipped: [],
+      previousSummaries: [],
+      starvationRuns: 2,
+      observedAt: '2026-08-04T02:00:00.000Z'
+    });
+
+    expect(queue.health).toMatchObject({
+      state: 'degraded',
+      reasonCode: 'eligible_not_processed',
+      consecutiveZeroThroughputRuns: 1
+    });
+    expect(queue.health.warning).toContain('eligible issue(s) were not processed');
   });
 });
 

@@ -12,6 +12,16 @@ afterEach(() => {
 });
 
 describe('listProjects', () => {
+  it('reports a healthy fleet when no project queue needs attention', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await saveRegistry({ version: 1, projects: {} });
+
+    const registry = await listProjects();
+
+    expect(registry.health).toEqual({ state: 'healthy', affectedRepositories: [], starvedRepositories: [] });
+  });
+
   it('merges per-project last-run telemetry into registry topology', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('KAIZEN_HOME', home);
@@ -56,8 +66,17 @@ describe('listProjects', () => {
 
     expect(registry.projects['owner-repo'].lastRun).toEqual(lastRun);
     expect(registry.projects['owner-repo'].queueHealth).toEqual(lastRun.queue.health);
+    expect(registry.projects['owner-repo'].queueHealth.reasonCode).toBeUndefined();
     expect(registry.health).toEqual({
       state: 'starved',
+      affectedRepositories: [{
+        slug: 'owner-repo',
+        repo: 'owner/repo',
+        state: 'starved',
+        since: '2026-07-14T00:00:00.000Z',
+        warning: 'Queue starvation',
+        reasonCode: undefined
+      }],
       starvedRepositories: [{
         slug: 'owner-repo',
         repo: 'owner/repo',
@@ -65,6 +84,48 @@ describe('listProjects', () => {
         warning: 'Queue starvation'
       }]
     });
+  });
+
+  it('aggregates blocked, starved, and degraded queues by severity', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await saveRegistry({
+      version: 1,
+      projects: Object.fromEntries(['blocked', 'starved', 'degraded', 'healthy'].map((slug) => [slug, {
+        repo: `owner/${slug}`,
+        localPath: `/tmp/${slug}`,
+        workspacePath: `/tmp/${slug}-workspace`,
+        schedule: '02:00',
+        enabled: true,
+        createdAt: '2026-07-01T00:00:00.000Z'
+      }]))
+    });
+    const healthBySlug = {
+      blocked: { state: 'blocked', consecutiveZeroThroughputRuns: 1, reasonCode: 'run_failed', warning: 'preflight failed' },
+      starved: { state: 'starved', consecutiveZeroThroughputRuns: 3, reasonCode: 'repeated_gate', since: '2026-08-01T00:00:00Z' },
+      degraded: { state: 'degraded', consecutiveZeroThroughputRuns: 1, reasonCode: 'eligible_not_processed' },
+      healthy: { state: 'healthy', consecutiveZeroThroughputRuns: 0 }
+    } as const;
+    await Promise.all(Object.entries(healthBySlug).map(async ([slug, health]) => {
+      const stateDir = path.join(home, 'projects', slug);
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'last-run.json'), JSON.stringify({
+        result: health.state === 'blocked' ? 'failed' : 'success',
+        queue: { backlogCount: 1, eligibleCount: 1, processedCount: 0, skipReasons: [], health }
+      }));
+    }));
+
+    const registry = await listProjects();
+
+    expect(registry.health.state).toBe('blocked');
+    expect(registry.health.affectedRepositories).toEqual([
+      expect.objectContaining({ slug: 'blocked', state: 'blocked', reasonCode: 'run_failed', warning: 'preflight failed' }),
+      expect.objectContaining({ slug: 'starved', state: 'starved', reasonCode: 'repeated_gate' }),
+      expect.objectContaining({ slug: 'degraded', state: 'degraded', reasonCode: 'eligible_not_processed' })
+    ]);
+    expect(registry.health.starvedRepositories).toEqual([
+      expect.objectContaining({ slug: 'starved', repo: 'owner/starved' })
+    ]);
   });
 });
 
