@@ -53,29 +53,44 @@ export async function refreshCanonicalVerifier(options) {
                 expectedCurrentPackageRoot: options.previousPackageRoot,
                 nextPackageRoot: packageRoot
             });
-            return { packageRoot };
+            return new CanonicalVerifierRefresh(packageRoot, options.previousPackageRoot, globalLink, lock);
         }
         catch (error) {
             await fs.rm(buildRoot, { recursive: true, force: true });
             throw error;
         }
     }
-    finally {
+    catch (error) {
         await lock.release();
+        throw error;
     }
 }
-export async function rollbackVerifierLink(options) {
-    const globalLink = await resolveGlobalVerifierLink(options.runCommand);
-    const lock = await RunLock.acquire(path.join(path.dirname(globalLink), '.kaizen-update-lock'));
-    try {
+export class CanonicalVerifierRefresh {
+    packageRoot;
+    previousPackageRoot;
+    globalLink;
+    lock;
+    released = false;
+    constructor(packageRoot, previousPackageRoot, globalLink, lock) {
+        this.packageRoot = packageRoot;
+        this.previousPackageRoot = previousPackageRoot;
+        this.globalLink = globalLink;
+        this.lock = lock;
+    }
+    async rollback() {
+        if (this.released)
+            throw new Error('Verifier refresh transaction is already complete');
         await replaceGlobalVerifierLink({
-            globalLink,
-            expectedCurrentPackageRoot: options.currentPackageRoot,
-            nextPackageRoot: options.previousPackageRoot
+            globalLink: this.globalLink,
+            expectedCurrentPackageRoot: this.packageRoot,
+            nextPackageRoot: this.previousPackageRoot
         });
     }
-    finally {
-        await lock.release();
+    async release() {
+        if (this.released)
+            return;
+        this.released = true;
+        await this.lock.release();
     }
 }
 async function resolveGlobalVerifierLink(runCommand) {

@@ -13,7 +13,7 @@ export async function refreshCanonicalVerifier(options: {
   expectedCommit: string;
   previousPackageRoot: string;
   runCommand: CommandRunner;
-}): Promise<{ packageRoot: string }> {
+}): Promise<CanonicalVerifierRefresh> {
   if (options.config.safety.operationMode !== 'dogfood' || options.config.verifier.update.mode !== 'canonical-main') {
     throw new Error('canonical Verifier refresh is not enabled for this runtime');
   }
@@ -67,31 +67,40 @@ export async function refreshCanonicalVerifier(options: {
         expectedCurrentPackageRoot: options.previousPackageRoot,
         nextPackageRoot: packageRoot
       });
-      return { packageRoot };
+      return new CanonicalVerifierRefresh(packageRoot, options.previousPackageRoot, globalLink, lock);
     } catch (error) {
       await fs.rm(buildRoot, { recursive: true, force: true });
       throw error;
     }
-  } finally {
+  } catch (error) {
     await lock.release();
+    throw error;
   }
 }
 
-export async function rollbackVerifierLink(options: {
-  currentPackageRoot: string;
-  previousPackageRoot: string;
-  runCommand: CommandRunner;
-}): Promise<void> {
-  const globalLink = await resolveGlobalVerifierLink(options.runCommand);
-  const lock = await RunLock.acquire(path.join(path.dirname(globalLink), '.kaizen-update-lock'));
-  try {
+export class CanonicalVerifierRefresh {
+  private released = false;
+
+  constructor(
+    readonly packageRoot: string,
+    private readonly previousPackageRoot: string,
+    private readonly globalLink: string,
+    private readonly lock: RunLock
+  ) {}
+
+  async rollback(): Promise<void> {
+    if (this.released) throw new Error('Verifier refresh transaction is already complete');
     await replaceGlobalVerifierLink({
-      globalLink,
-      expectedCurrentPackageRoot: options.currentPackageRoot,
-      nextPackageRoot: options.previousPackageRoot
+      globalLink: this.globalLink,
+      expectedCurrentPackageRoot: this.packageRoot,
+      nextPackageRoot: this.previousPackageRoot
     });
-  } finally {
-    await lock.release();
+  }
+
+  async release(): Promise<void> {
+    if (this.released) return;
+    this.released = true;
+    await this.lock.release();
   }
 }
 

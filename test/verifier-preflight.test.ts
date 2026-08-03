@@ -149,6 +149,35 @@ describe('verifier freshness preflight', () => {
     expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
   });
 
+  it('restores the previous link when post-refresh inspection throws', async () => {
+    const { failure, diagnostic, globalLink, previousPackageRoot } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      postRefreshInspectionFails: true
+    });
+
+    expect(failure).toContain('post-refresh runtime inspection failed');
+    expect(failure).toContain('restored the previous Verifier link');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'rolled-back' });
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
+  });
+
+  it('holds the shared refresh lock through inspection and the rollback decision', async () => {
+    const { failure, refreshLockObservations } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      invalidAfterRefresh: true,
+      observeRefreshLock: true
+    });
+
+    expect(failure).toContain('restored the previous Verifier link');
+    expect(refreshLockObservations).toEqual([true, true]);
+  });
+
   it('fails closed when another process holds the shared refresh lock', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
     const globalRoot = path.join(home, 'global', 'node_modules');
@@ -181,6 +210,8 @@ async function inspect(options: {
   buildFails?: boolean;
   invalidAfterRefresh?: boolean;
   rollbackFails?: boolean;
+  postRefreshInspectionFails?: boolean;
+  observeRefreshLock?: boolean;
   home?: string;
   globalRoot?: string;
 }) {
@@ -206,7 +237,8 @@ async function inspect(options: {
     } : {})
   });
   let refreshed = false;
-  let npmRootCalls = 0;
+  let verifierCommandCalls = 0;
+  const refreshLockObservations: boolean[] = [];
   const runner = vi.fn<CommandRunner>(async (command, args, commandOptions) => {
     if (command === 'git') {
       if (args[0] === 'clone') {
@@ -236,12 +268,25 @@ async function inspect(options: {
       return result(command, args, commandOptions?.cwd, '');
     }
     if (command === 'npm' && args.join(' ') === 'root -g') {
-      npmRootCalls += 1;
-      if (options.rollbackFails && npmRootCalls > 1) throw new Error('global root unavailable during rollback');
       return result(command, args, commandOptions?.cwd, `${globalRoot}\n`);
     }
     const currentPackageRoot = await fs.realpath(globalLink);
     refreshed = currentPackageRoot !== previousPackageRootReal;
+    verifierCommandCalls += 1;
+    if (verifierCommandCalls > 1 && options.observeRefreshLock) {
+      try {
+        await fs.access(path.join(globalRoot, '@verifier', '.kaizen-update-lock', 'run.lock'));
+        refreshLockObservations.push(true);
+      } catch {
+        refreshLockObservations.push(false);
+      }
+    }
+    if (refreshed && options.rollbackFails) {
+      await fs.rm(previousPackageRootReal, { recursive: true, force: true });
+    }
+    if (refreshed && options.postRefreshInspectionFails) {
+      throw new Error('refreshed verifier failed to start');
+    }
     return {
       command,
       args,
@@ -268,7 +313,8 @@ async function inspect(options: {
       runner,
       globalLink,
       previousPackageRoot: previousPackageRootReal,
-      home: process.env.KAIZEN_HOME
+      home: process.env.KAIZEN_HOME,
+      refreshLockObservations
     };
   } finally {
     if (previousHome === undefined) delete process.env.KAIZEN_HOME;

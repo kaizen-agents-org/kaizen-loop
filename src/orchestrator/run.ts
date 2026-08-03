@@ -58,7 +58,7 @@ import {
 } from './issueIntake.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
 import { summarizeQueue, type RunDiscoveredFollowupSummary, type RunIssueSummary, type RunSummary } from './summary.js';
-import { refreshCanonicalVerifier, rollbackVerifierLink } from './verifierRefresh.js';
+import { refreshCanonicalVerifier } from './verifierRefresh.js';
 import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
   generatedPullRequestWipLimitReason,
@@ -534,15 +534,14 @@ export async function preflightVerifier(options: {
     }
 
     const previousPackageRoot = initial.runtime.packageRoot;
-    let refreshedPackageRoot: string;
+    let refresh: Awaited<ReturnType<typeof refreshCanonicalVerifier>>;
     try {
-      const recovery = await refreshCanonicalVerifier({
+      refresh = await refreshCanonicalVerifier({
         config: options.config,
         expectedCommit,
         previousPackageRoot,
         runCommand: options.runCommand
       });
-      refreshedPackageRoot = recovery.packageRoot;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source, {
@@ -553,43 +552,50 @@ export async function preflightVerifier(options: {
       return `Verifier preflight failed: canonical-main refresh failed: ${message}`;
     }
 
-    const refreshed = await adapter.inspectRuntime();
-    const refreshedFailure = verifierRuntimeFailure(refreshed, expectedCommit, source);
-    if (!refreshedFailure) {
-      await writeVerifierRuntimeDiagnostic(runtimePath, refreshed, expectedCommit, source, {
-        attempted: true,
-        status: 'recovered'
-      });
-      return undefined;
-    }
-
-    let rollbackError: string | undefined;
     try {
-      await rollbackVerifierLink({
-        currentPackageRoot: refreshedPackageRoot,
-        previousPackageRoot,
-        runCommand: options.runCommand
-      });
-      const rolledBack = await adapter.inspectRuntime();
-      if (
-        rolledBack.protocol !== 'structured' ||
-        rolledBack.runtime.packageRoot !== previousPackageRoot ||
-        rolledBack.runtime.commit !== initial.runtime.commit ||
-        rolledBack.build.commit !== initial.build.commit
-      ) {
-        throw new Error('previous Verifier provenance was not restored');
+      let refreshed: InspectedVerifierRuntime | undefined;
+      let refreshedFailure: string;
+      try {
+        refreshed = await adapter.inspectRuntime();
+        refreshedFailure = verifierRuntimeFailure(refreshed, expectedCommit, source) ?? '';
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        refreshedFailure = `Verifier preflight failed: post-refresh runtime inspection failed: ${message}`;
       }
-    } catch (error) {
-      rollbackError = error instanceof Error ? error.message : String(error);
+      if (!refreshedFailure && refreshed) {
+        await writeVerifierRuntimeDiagnostic(runtimePath, refreshed, expectedCommit, source, {
+          attempted: true,
+          status: 'recovered'
+        });
+        return undefined;
+      }
+
+      let rollbackError: string | undefined;
+      try {
+        await refresh.rollback();
+        const rolledBack = await adapter.inspectRuntime();
+        if (
+          rolledBack.protocol !== 'structured' ||
+          rolledBack.runtime.packageRoot !== previousPackageRoot ||
+          rolledBack.runtime.commit !== initial.runtime.commit ||
+          rolledBack.build.commit !== initial.build.commit
+        ) {
+          throw new Error('previous Verifier provenance was not restored');
+        }
+      } catch (error) {
+        rollbackError = error instanceof Error ? error.message : String(error);
+      }
+      await writeVerifierRuntimeDiagnostic(runtimePath, refreshed ?? initial, expectedCommit, source, {
+        attempted: true,
+        status: rollbackError ? 'rollback-failed' : 'rolled-back',
+        error: rollbackError ?? refreshedFailure
+      });
+      return rollbackError
+        ? `${refreshedFailure} Automatic refresh produced invalid provenance and rollback failed: ${rollbackError}`
+        : `${refreshedFailure} Automatic refresh produced invalid provenance; restored the previous Verifier link.`;
+    } finally {
+      await refresh.release();
     }
-    await writeVerifierRuntimeDiagnostic(runtimePath, refreshed, expectedCommit, source, {
-      attempted: true,
-      status: rollbackError ? 'rollback-failed' : 'rolled-back',
-      error: rollbackError ?? refreshedFailure
-    });
-    return rollbackError
-      ? `${refreshedFailure} Automatic refresh produced invalid provenance and rollback failed: ${rollbackError}`
-      : `${refreshedFailure} Automatic refresh produced invalid provenance; restored the previous Verifier link.`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await fs.writeFile(runtimePath, `${JSON.stringify({
