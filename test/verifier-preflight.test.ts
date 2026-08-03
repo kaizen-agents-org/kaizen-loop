@@ -66,7 +66,7 @@ describe('verifier freshness preflight', () => {
       freshness: { expectedCommit: currentCommit, status: 'current' },
       recovery: { attempted: true, status: 'recovered' }
     });
-    expect(runner.mock.calls.filter(([command, args]) => command === 'pnpm' && args.join(' ') === 'link --global')).toHaveLength(1);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'clone')).toHaveLength(1);
   });
 
   it('keeps pinned runtimes fail-closed without attempting an update', async () => {
@@ -77,11 +77,11 @@ describe('verifier freshness preflight', () => {
     });
 
     expect(failure).toContain('obsolete build');
-    expect(runner.mock.calls.some(([command]) => command === 'pnpm')).toBe(false);
+    expect(runner.mock.calls.some(([command]) => command === 'pnpm' || command === 'npm')).toBe(false);
   });
 
   it('reports refresh failure and leaves the existing link untouched', async () => {
-    const { failure, diagnostic, runner } = await inspect({
+    const { failure, diagnostic, globalLink, previousPackageRoot } = await inspect({
       expectedCommit: currentCommit,
       buildCommit: oldCommit,
       runtimeCommit: oldCommit,
@@ -91,11 +91,51 @@ describe('verifier freshness preflight', () => {
 
     expect(failure).toContain('canonical-main refresh failed');
     expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'failed' });
-    expect(runner.mock.calls.some(([command, args]) => command === 'pnpm' && args.join(' ') === 'link --global')).toBe(false);
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
+  });
+
+  it('removes a partial managed build when installation or build fails', async () => {
+    const { failure, globalLink, previousPackageRoot, home } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      buildFails: true
+    });
+
+    expect(failure).toContain('canonical-main refresh failed');
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
+    const buildsRoot = path.join(home, 'toolchain', 'verifier-builds');
+    expect(await fs.readdir(buildsRoot)).toEqual([]);
+  });
+
+  it('does not auto-update a legacy runtime without a rollback package root', async () => {
+    const { failure, runner } = await inspect({
+      expectedCommit: currentCommit,
+      legacy: true,
+      canonicalMainUpdate: true
+    });
+
+    expect(failure).toContain('does not provide structured build provenance');
+    expect(runner.mock.calls.some(([command]) => command === 'pnpm' || command === 'npm')).toBe(false);
+  });
+
+  it('reports a rollback failure without claiming the previous runtime was restored', async () => {
+    const { failure, diagnostic } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      invalidAfterRefresh: true,
+      rollbackFails: true
+    });
+
+    expect(failure).toContain('rollback failed');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'rollback-failed' });
   });
 
   it('restores the previous link when refreshed provenance is invalid', async () => {
-    const { failure, diagnostic, runner } = await inspect({
+    const { failure, diagnostic, globalLink, previousPackageRoot } = await inspect({
       expectedCommit: currentCommit,
       buildCommit: oldCommit,
       runtimeCommit: oldCommit,
@@ -105,14 +145,15 @@ describe('verifier freshness preflight', () => {
 
     expect(failure).toContain('restored the previous Verifier link');
     expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'rolled-back' });
-    expect(runner.mock.calls.filter(([command, args]) => command === 'pnpm' && args.join(' ') === 'link --global')).toHaveLength(2);
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
   });
 
   it('fails closed when another process holds the shared refresh lock', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
-    await fs.mkdir(path.join(home, 'runtime', 'verifier-update'), { recursive: true });
+    const globalRoot = path.join(home, 'global', 'node_modules');
+    await fs.mkdir(path.join(globalRoot, '@verifier', '.kaizen-update-lock'), { recursive: true });
     await fs.writeFile(
-      path.join(home, 'runtime', 'verifier-update', 'run.lock'),
+      path.join(globalRoot, '@verifier', '.kaizen-update-lock', 'run.lock'),
       JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
     );
     const { failure } = await inspect({
@@ -120,7 +161,8 @@ describe('verifier freshness preflight', () => {
       buildCommit: oldCommit,
       runtimeCommit: oldCommit,
       canonicalMainUpdate: true,
-      home
+      home,
+      globalRoot
     });
 
     expect(failure).toContain('canonical-main refresh failed');
@@ -135,12 +177,26 @@ async function inspect(options: {
   legacy?: boolean;
   canonicalMainUpdate?: boolean;
   refreshFails?: boolean;
+  buildFails?: boolean;
   invalidAfterRefresh?: boolean;
+  rollbackFails?: boolean;
   home?: string;
+  globalRoot?: string;
 }) {
   const runDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-preflight-'));
   const previousHome = process.env.KAIZEN_HOME;
   process.env.KAIZEN_HOME = options.home ?? await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
+  const globalRoot = options.globalRoot ?? path.join(process.env.KAIZEN_HOME, 'global', 'node_modules');
+  const previousPackageRoot = path.join(process.env.KAIZEN_HOME, 'previous-verifier', 'packages', 'core');
+  const globalLink = path.join(globalRoot, '@verifier', 'core');
+  await fs.mkdir(path.join(previousPackageRoot, 'dist'), { recursive: true });
+  const previousPackageRootReal = await fs.realpath(previousPackageRoot);
+  await fs.mkdir(path.dirname(globalLink), { recursive: true });
+  try {
+    await fs.lstat(globalLink);
+  } catch {
+    await fs.symlink(previousPackageRoot, globalLink, 'dir');
+  }
   const config = configSchema.parse({
     version: 1,
     ...(options.canonicalMainUpdate ? {
@@ -149,6 +205,7 @@ async function inspect(options: {
     } : {})
   });
   let refreshed = false;
+  let npmRootCalls = 0;
   const runner = vi.fn<CommandRunner>(async (command, args, commandOptions) => {
     if (command === 'git') {
       if (args[0] === 'clone') {
@@ -157,6 +214,7 @@ async function inspect(options: {
         return result(command, args, commandOptions?.cwd, '');
       }
       if (args[0] === 'checkout') return result(command, args, commandOptions?.cwd, '');
+      if (args.join(' ') === 'rev-parse HEAD') return result(command, args, commandOptions?.cwd, `${currentCommit}\n`);
       return {
         command,
         args,
@@ -169,11 +227,20 @@ async function inspect(options: {
     }
     if (command === 'pnpm') {
       if (args.join(' ') === 'build') {
-        await fs.mkdir(path.join(commandOptions!.cwd!, 'packages', 'core'), { recursive: true });
+        const dist = path.join(commandOptions!.cwd!, 'packages', 'core', 'dist');
+        await fs.mkdir(dist, { recursive: true });
+        await fs.writeFile(path.join(dist, 'cli.js'), '');
+        if (options.buildFails) throw new Error('build failed');
       }
-      if (args.join(' ') === 'link --global') refreshed = !options.invalidAfterRefresh;
       return result(command, args, commandOptions?.cwd, '');
     }
+    if (command === 'npm' && args.join(' ') === 'root -g') {
+      npmRootCalls += 1;
+      if (options.rollbackFails && npmRootCalls > 1) throw new Error('global root unavailable during rollback');
+      return result(command, args, commandOptions?.cwd, `${globalRoot}\n`);
+    }
+    const currentPackageRoot = await fs.realpath(globalLink);
+    refreshed = currentPackageRoot !== previousPackageRootReal;
     return {
       command,
       args,
@@ -184,8 +251,8 @@ async function inspect(options: {
         version: '0.0.0',
         status: options.buildCommit === options.runtimeCommit ? 'current' : 'stale',
         stale: options.buildCommit === options.runtimeCommit ? false : true,
-        build: { commit: refreshed ? currentCommit : options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
-        runtime: { commit: refreshed ? currentCommit : options.runtimeCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+        build: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+        runtime: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.runtimeCommit, dirty: false, packageRoot: currentPackageRoot }
       }),
       stderr: '',
       durationMs: 1
@@ -194,7 +261,14 @@ async function inspect(options: {
   try {
     const failure = await preflightVerifier({ config, runCommand: runner, runDir });
     const diagnostic = JSON.parse(await fs.readFile(path.join(runDir, 'verifier-runtime.json'), 'utf8'));
-    return { failure, diagnostic, runner };
+    return {
+      failure,
+      diagnostic,
+      runner,
+      globalLink,
+      previousPackageRoot: previousPackageRootReal,
+      home: process.env.KAIZEN_HOME
+    };
   } finally {
     if (previousHome === undefined) delete process.env.KAIZEN_HOME;
     else process.env.KAIZEN_HOME = previousHome;

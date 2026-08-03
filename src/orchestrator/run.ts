@@ -534,12 +534,15 @@ export async function preflightVerifier(options: {
     }
 
     const previousPackageRoot = initial.runtime.packageRoot;
+    let refreshedPackageRoot: string;
     try {
-      await refreshCanonicalVerifier({
+      const recovery = await refreshCanonicalVerifier({
         config: options.config,
         expectedCommit,
+        previousPackageRoot,
         runCommand: options.runCommand
       });
+      refreshedPackageRoot = recovery.packageRoot;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source, {
@@ -563,10 +566,19 @@ export async function preflightVerifier(options: {
     let rollbackError: string | undefined;
     try {
       await rollbackVerifierLink({
-        packageRoot: previousPackageRoot,
-        timeoutMinutes: options.config.verifier.update.timeoutMinutes,
+        currentPackageRoot: refreshedPackageRoot,
+        previousPackageRoot,
         runCommand: options.runCommand
       });
+      const rolledBack = await adapter.inspectRuntime();
+      if (
+        rolledBack.protocol !== 'structured' ||
+        rolledBack.runtime.packageRoot !== previousPackageRoot ||
+        rolledBack.runtime.commit !== initial.runtime.commit ||
+        rolledBack.build.commit !== initial.build.commit
+      ) {
+        throw new Error('previous Verifier provenance was not restored');
+      }
     } catch (error) {
       rollbackError = error instanceof Error ? error.message : String(error);
     }
