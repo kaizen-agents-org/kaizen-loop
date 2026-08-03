@@ -222,9 +222,9 @@ function isAllowedOwnershipRepo(repo, currentRepo) {
 }
 function referencedUpstreamRepos(text, currentRepo) {
     const [currentOwner] = currentRepo.split('/');
-    const urlRepos = [...text.matchAll(/(?:https?:\/\/)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=$|[/?#\s).,;:'"`\]])/g)]
+    const urlRepos = [...text.matchAll(/(?:https?:\/\/)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=$|[/?#\s).,;:'"`}>*\]])/g)]
         .map((match) => normalizeRepoReference(match[1]));
-    const bareRepos = [...text.matchAll(/(?:^|[\s([`])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)(?=$|[\s).,;:'"`\]])/g)]
+    const bareRepos = [...text.matchAll(/(?:^|[\s([`*<])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)(?=$|[\s).,;:'"`}>*\]])/g)]
         .map((match) => normalizeRepoReference(match[1]))
         .filter((repo) => !isPathLikeRepoReference(repo, currentOwner));
     const repos = [...urlRepos, ...bareRepos].filter((repo) => !sameRepo(repo, currentRepo));

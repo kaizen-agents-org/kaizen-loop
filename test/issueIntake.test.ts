@@ -172,6 +172,23 @@ describe('evaluateIssueIntake', () => {
     }).status).toBe('needs_human');
   });
 
+  it.each([
+    '<https://github.com/acme/source>',
+    '**kaizen-agents-org/verifier**'
+  ])('recognizes formatted external action target %s', (target) => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        body: [
+          '## Ownership clarification',
+          'The implementation owner is `kaizen-agents-org/.github`.',
+          `Open a pull request in ${target}.`
+        ].join('\n')
+      })
+    }).status).toBe('needs_human');
+  });
+
   it('accepts allowed structured owner values case-insensitively', () => {
     expect(evaluateIssueIntake({
       repo: 'kaizen-agents-org/kaizen-loop',
