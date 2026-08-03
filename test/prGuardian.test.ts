@@ -1518,7 +1518,7 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
-  it('does not finish early while a requested bot has no terminal evidence', async () => {
+  it('does not finish early while a requested bot remains pending despite older terminal evidence', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
@@ -1541,7 +1541,10 @@ describe('runPrGuardianSkill', () => {
               updatedAt: '2026-07-13T01:16:21Z',
               body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
             }],
-            statusCheckRollup: [{ name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' }]
+            statusCheckRollup: [
+              { name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' },
+              { context: 'CodeRabbit', state: 'SUCCESS' }
+            ]
           })
           : 'guardian pass complete',
         stderr: '',

@@ -1182,12 +1182,6 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
   for (const request of parsed.reviewRequests ?? []) {
     const login = normalizeReviewerLogin(request.login);
     if (!isExpectedBotLogin(login)) continue;
-    const review = latestByBot.get(login);
-    if (hasCurrentHeadBotEvidence(login, parsed)) continue;
-    if (
-      review?.commit_id === parsed.headRefOid &&
-      ['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'].includes(review.state ?? '')
-    ) continue;
     blockers.push(`${login} requested review is not terminal for current PR head ${parsed.headRefOid}`);
   }
   blockers.push(...[...latestByBot.entries()].flatMap(([login, review]) => {
