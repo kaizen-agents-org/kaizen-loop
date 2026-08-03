@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
+import { VerifierAgentAdapter } from '../src/agents/verifier.js';
 import { preflightVerifier } from '../src/orchestrator/run.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
@@ -178,6 +179,33 @@ describe('verifier freshness preflight', () => {
     expect(refreshLockObservations).toEqual([true, true]);
   });
 
+  it('runs the validated package artifact after the global link changes', async () => {
+    const { failure, config, runner, globalLink, home, runDir, executedVerifierCommands } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true
+    });
+    expect(failure).toBeUndefined();
+    const validatedCommand = config.verifier.command;
+    const competingPackageRoot = path.join(home!, 'competing-verifier', 'packages', 'core');
+    await fs.mkdir(path.join(competingPackageRoot, 'dist'), { recursive: true });
+    await fs.writeFile(path.join(competingPackageRoot, 'dist', 'cli.js'), '');
+    const temporaryLink = `${globalLink}.competing`;
+    await fs.symlink(competingPackageRoot, temporaryLink, 'dir');
+    await fs.rename(temporaryLink, globalLink);
+
+    const result = await new VerifierAgentAdapter(runner, {
+      ...config.verifier,
+      envAllowlist: config.safety.envAllowlist
+    }).run({ workspaceDir: runDir, prompt: 'verify' });
+
+    expect(result.status).toBe('open_pr');
+    expect(validatedCommand).toMatch(/\/toolchain\/verifier-builds\/.+\/packages\/core\/dist\/cli\.js$/);
+    expect(executedVerifierCommands).toEqual([validatedCommand]);
+    expect(validatedCommand).not.toContain(competingPackageRoot);
+  });
+
   it('fails closed when another process holds the shared refresh lock', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
     const globalRoot = path.join(home, 'global', 'node_modules');
@@ -222,6 +250,8 @@ async function inspect(options: {
   const previousPackageRoot = path.join(process.env.KAIZEN_HOME, 'previous-verifier', 'packages', 'core');
   const globalLink = path.join(globalRoot, '@verifier', 'core');
   await fs.mkdir(path.join(previousPackageRoot, 'dist'), { recursive: true });
+  await fs.writeFile(path.join(previousPackageRoot, 'dist', 'cli.js'), '');
+  await fs.chmod(path.join(previousPackageRoot, 'dist', 'cli.js'), 0o755);
   const previousPackageRootReal = await fs.realpath(previousPackageRoot);
   await fs.mkdir(path.dirname(globalLink), { recursive: true });
   try {
@@ -239,6 +269,7 @@ async function inspect(options: {
   let refreshed = false;
   let verifierCommandCalls = 0;
   const refreshLockObservations: boolean[] = [];
+  const executedVerifierCommands: string[] = [];
   const runner = vi.fn<CommandRunner>(async (command, args, commandOptions) => {
     if (command === 'git') {
       if (args[0] === 'clone') {
@@ -269,6 +300,16 @@ async function inspect(options: {
     }
     if (command === 'npm' && args.join(' ') === 'root -g') {
       return result(command, args, commandOptions?.cwd, `${globalRoot}\n`);
+    }
+    if (args.length === 0) {
+      executedVerifierCommands.push(command);
+      await fs.writeFile(commandOptions!.env!.KAIZEN_VERIFIER_RESULT_PATH!, JSON.stringify({
+        status: 'open_pr',
+        summary: 'validated runtime executed',
+        notes: '',
+        evidence_grade: 'executed'
+      }));
+      return result(command, args, commandOptions?.cwd, '');
     }
     const currentPackageRoot = await fs.realpath(globalLink);
     refreshed = currentPackageRoot !== previousPackageRootReal;
@@ -314,7 +355,10 @@ async function inspect(options: {
       globalLink,
       previousPackageRoot: previousPackageRootReal,
       home: process.env.KAIZEN_HOME,
-      refreshLockObservations
+      runDir,
+      config,
+      refreshLockObservations,
+      executedVerifierCommands
     };
   } finally {
     if (previousHome === undefined) delete process.env.KAIZEN_HOME;

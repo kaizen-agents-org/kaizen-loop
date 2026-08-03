@@ -555,14 +555,24 @@ export async function preflightVerifier(options: {
     try {
       let refreshed: InspectedVerifierRuntime | undefined;
       let refreshedFailure: string;
+      let refreshedCommand: string | undefined;
       try {
         refreshed = await adapter.inspectRuntime();
         refreshedFailure = verifierRuntimeFailure(refreshed, expectedCommit, source) ?? '';
+        if (!refreshedFailure) {
+          try {
+            refreshedCommand = await pinnedVerifierExecutable(refreshed, refresh.packageRoot);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            refreshedFailure = `Verifier preflight failed: post-refresh artifact validation failed: ${message}`;
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         refreshedFailure = `Verifier preflight failed: post-refresh runtime inspection failed: ${message}`;
       }
-      if (!refreshedFailure && refreshed) {
+      if (!refreshedFailure && refreshed && refreshedCommand) {
+        options.config.verifier.command = refreshedCommand;
         await writeVerifierRuntimeDiagnostic(runtimePath, refreshed, expectedCommit, source, {
           attempted: true,
           status: 'recovered'
@@ -616,6 +626,29 @@ export async function preflightVerifier(options: {
 }
 
 type InspectedVerifierRuntime = Awaited<ReturnType<VerifierAgentAdapter['inspectRuntime']>>;
+
+async function pinnedVerifierExecutable(
+  runtime: InspectedVerifierRuntime,
+  expectedPackageRoot: string
+): Promise<string> {
+  if (runtime.protocol !== 'structured') {
+    throw new Error('cannot pin a legacy Verifier runtime');
+  }
+  const packageRoot = await fs.realpath(runtime.runtime.packageRoot);
+  const expectedRoot = await fs.realpath(expectedPackageRoot);
+  if (packageRoot !== expectedRoot) {
+    throw new Error(`Verifier reported package root ${packageRoot}, expected ${expectedRoot}`);
+  }
+  const executable = await fs.realpath(path.join(packageRoot, 'dist', 'cli.js'));
+  const relative = path.relative(packageRoot, executable);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Verifier executable escapes its validated package root: ${executable}`);
+  }
+  if (((await fs.stat(executable)).mode & 0o111) === 0) {
+    throw new Error(`validated Verifier CLI is not executable: ${executable}`);
+  }
+  return executable;
+}
 
 function verifierRuntimeFailure(
   runtime: InspectedVerifierRuntime,
