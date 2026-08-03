@@ -396,9 +396,11 @@ export async function runPrGuardianSkill(
       };
     }
     const initialGate = await inspectPrGate(runCommand, req);
-    const settledInitialGate = initialGate.isReady
-      ? await waitForStablePrGate(runCommand, req, initialGate)
-      : await waitForInitiallyReadyPrGate(runCommand, req, initialGate);
+    const settledInitialGate = isAuditedReady(initialGate)
+      ? await waitForStablePrGate(runCommand, req, initialGate, 30)
+      : initialGate.isReady
+        ? initialGate
+        : await waitForInitiallyReadyPrGate(runCommand, req, initialGate);
     if (isAuditedReady(settledInitialGate)) {
       return {
         status: 'success',
@@ -413,7 +415,7 @@ export async function runPrGuardianSkill(
       if (attempt > 1) {
         const preflight = await inspectPrGate(runCommand, req);
         if (isAuditedReady(preflight)) {
-          const stablePreflight = await waitForStablePrGate(runCommand, req, preflight);
+          const stablePreflight = await waitForStablePrGate(runCommand, req, preflight, 30);
           if (isAuditedReady(stablePreflight)) {
             return {
               status: 'success',
@@ -961,6 +963,7 @@ async function inspectPullRequest(
     hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
     hasUndatedAuditableActivity:
       auditableCheckActivity.some((check) => !check.completedAt) ||
+      reviews.some((review) => !review.submitted_at) ||
       (auditedParsed.comments ?? []).some((comment) => {
         if (comment === codexEvidence?.comment) return false;
         const observedAt = comment.updatedAt ?? comment.createdAt;
@@ -969,7 +972,7 @@ async function inspectPullRequest(
     hasInProgressAuditableActivity: auditableCheckActivity.some((check) => {
       const status = String(check.status ?? check.state ?? '').toUpperCase();
       return ['EXPECTED', 'IN_PROGRESS', 'PENDING', 'QUEUED', 'REQUESTED', 'WAITING'].includes(status);
-    }),
+    }) || reviews.some((review) => !['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(review.state ?? '')),
     codexNoFindingsAt: codexEvidence?.observedAt,
     latestAuditableActivityAt: latestTimestamp([
       ...(auditedParsed.comments ?? [])
@@ -1102,7 +1105,12 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
   for (const review of reviews) {
     const login = normalizeReviewerLogin(review.user?.login);
     if (!login.includes('codex') && !login.includes('coderabbit')) continue;
+    if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(review.state ?? '')) {
+      latestByBot.set(login, review);
+      continue;
+    }
     const current = latestByBot.get(login);
+    if (current && !['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(current.state ?? '')) continue;
     if (!current || String(review.submitted_at ?? '') > String(current.submitted_at ?? '')) latestByBot.set(login, review);
   }
   return [...latestByBot.entries()].flatMap(([login, review]) => {
@@ -1215,9 +1223,10 @@ function isPassingCheck(check: PrCheckSummary): boolean {
 async function waitForStablePrGate(
   runCommand: CommandRunner,
   req: PrGuardianSkillRequest,
-  initial: PrGateSummary
+  initial: PrGateSummary,
+  minimumSettleSeconds = 0
 ): Promise<PrGateSummary> {
-  const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
+  const settleMs = Math.max(req.config.guardian.reviewSettleSeconds, minimumSettleSeconds) * 1_000;
   if (settleMs > 0) await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
   const first = await inspectPrGate(runCommand, req);
   if (!first.isReady) return first;
@@ -1243,7 +1252,7 @@ async function waitForInitiallyReadyPrGate(
   await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
   const gate = await inspectPrGate(runCommand, req);
   if (!gate.isReady) return gate;
-  return waitForStablePrGate(runCommand, req, gate);
+  return waitForStablePrGate(runCommand, req, gate, isAuditedReady(gate) ? 30 : 0);
 }
 
 async function finishAfterGuardianCommandFailure(
@@ -1276,7 +1285,7 @@ async function reconcileReadyPrGate(
       rawOutputs.push(`PR remained blocked after guardian command failure:\n${summarizeGate(gate)}`);
       return undefined;
     }
-    const stable = await waitForStablePrGate(runCommand, req, gate);
+    const stable = await waitForStablePrGate(runCommand, req, gate, 30);
     if (!isAuditedReady(stable, guardianAttemptStartedAt)) {
       rawOutputs.push(`PR was not stably merge-ready after guardian command failure:\n${summarizeGate(stable)}`);
       return undefined;
