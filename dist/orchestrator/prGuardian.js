@@ -30,7 +30,7 @@ export async function enqueuePrGuardianJob(options) {
         lastBlocker: options.config.guardian.enabled ? undefined : 'PR guardian is disabled.'
     };
     const existing = await readGuardianJob(options.stateDir, job.id);
-    const matching = existing ?? (await listPrGuardianJobs(options.stateDir))
+    const matching = (existing?.headSha === options.headSha ? existing : undefined) ?? (await listPrGuardianJobs(options.stateDir))
         .filter((candidate) => candidate.repo === options.repo &&
         candidate.prNumber === options.prNumber &&
         candidate.headSha === options.headSha)
@@ -43,8 +43,11 @@ export async function enqueuePrGuardianJob(options) {
         }
         return matching;
     }
-    await writeGuardianJob(options.stateDir, job);
-    return job;
+    const created = existing && existing.headSha !== options.headSha
+        ? { ...job, issueNumber: job.issueNumber ?? existing.issueNumber }
+        : job;
+    await writeGuardianJob(options.stateDir, created);
+    return created;
 }
 export async function enqueueManagedPrGuardianJobs(options) {
     const [owner] = options.repo.split('/');

@@ -2002,6 +2002,21 @@ describe('runPrGuardianSkill', () => {
     expect(jobs).toEqual([expect.objectContaining({ status: 'success', headSha: 'new-head' })]);
     expect(jobs[0].reactivationCount).toBeUndefined();
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+
+    const reverted = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'old-head'
+    });
+    expect(reverted).toMatchObject({ id: original.id, headSha: 'old-head', status: 'pending' });
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([
+      expect.objectContaining({ id: original.id, headSha: 'old-head', status: 'pending' })
+    ]);
   });
 
   it('enqueues only marked same-repository generated sync pull requests', async () => {
