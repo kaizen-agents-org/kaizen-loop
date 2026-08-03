@@ -1,7 +1,7 @@
 import { VerifierAgentAdapter } from './verifier.js';
 import { buildAllowlistedEnv } from '../utils/command.js';
-export async function assertVerifierRuntimeFresh(config, runCommand) {
-    const expectedCommit = await resolveExpectedVerifierCommit({ config, runCommand });
+export async function assertVerifierRuntimeFresh(config, runCommand, expectedCommitOverride) {
+    const expectedCommit = expectedCommitOverride ?? await resolveExpectedVerifierCommit({ config, runCommand });
     const runtime = await new VerifierAgentAdapter(runCommand, {
         ...config.verifier,
         envAllowlist: config.safety.envAllowlist

@@ -19,6 +19,7 @@ import { WorkspaceManager } from '../workspace/manager.js';
 const MAX_PATCH_BYTES = 5 * 1024 * 1024;
 const ACTIONS_VERIFIER_REPOSITORY = 'https://github.com/kaizen-agents-org/verifier.git';
 const ACTIONS_VERIFIER_REF = 'refs/heads/main';
+const ACTIONS_VERIFIER_COMMIT = 'cca74b39287dbcaf74687ae4cacaeebfb3167c6e';
 const PROVIDER_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -78,7 +79,7 @@ export async function prepareActionsFix(options: PrepareActionsFixOptions) {
   const context = await loadActionsContext(options.cwd, options.issue, command);
   await assertAuthorized(context.github, context.repo, context.issue, context.config);
   assertActionsVerifierTrustRoot(context.config);
-  await assertVerifierRuntimeFresh(context.config, command);
+  await assertVerifierRuntimeFresh(context.config, command, ACTIONS_VERIFIER_COMMIT);
   const git = new GitClient(command, options.cwd);
   const baseSha = await git.revParse('HEAD');
   const prompt = buildActionsFixPrompt({ repo: context.repo, issue: context.issue, config: context.config, attempt: 1 });
@@ -152,7 +153,7 @@ export async function verifyActionsFix(options: VerifyActionsFixOptions) {
     ...context.config.verifier,
     envAllowlist: context.config.safety.envAllowlist
   });
-  await assertVerifierRuntimeFresh(context.config, command);
+  await assertVerifierRuntimeFresh(context.config, command, ACTIONS_VERIFIER_COMMIT);
   const verdict = await verifier.run({
     workspaceDir: options.cwd,
     prompt: buildVerifierPrompt({ repo: context.repo, issue: context.issue, agentResult: builder, verifyResults: verification, diff, diffText })

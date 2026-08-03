@@ -4,9 +4,10 @@ import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
 
 export async function assertVerifierRuntimeFresh(
   config: KaizenConfig,
-  runCommand: CommandRunner
+  runCommand: CommandRunner,
+  expectedCommitOverride?: string
 ): Promise<{ runtime: Extract<VerifierRuntimeInfo, { protocol: 'structured' }>; expectedCommit: string }> {
-  const expectedCommit = await resolveExpectedVerifierCommit({ config, runCommand });
+  const expectedCommit = expectedCommitOverride ?? await resolveExpectedVerifierCommit({ config, runCommand });
   const runtime = await new VerifierAgentAdapter(runCommand, {
     ...config.verifier,
     envAllowlist: config.safety.envAllowlist

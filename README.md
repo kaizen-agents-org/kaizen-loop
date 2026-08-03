@@ -157,7 +157,7 @@ The CLI delegates external work instead of embedding tokens or provider SDKs:
 
 `KAIZEN_HOME` may be set to override the default local state directory (`~/.kaizen`). The local state contains the registry, project workspaces, locks, logs, and latest run summaries; it should not be committed to target repositories.
 
-Kaizen requires structured `verifier --version --json` provenance. It resolves the configured canonical repository/ref independently and stops before builder execution unless the expected, build, and runtime commits match and the runtime is clean. Legacy plain version output cannot prove freshness and is rejected. The reusable Actions workflow currently supports only the default `kaizen-agents-org/verifier` `refs/heads/main` trust root; custom verifier trust roots require a correspondingly trusted workflow checkout.
+Kaizen requires structured `verifier --version --json` provenance. Local and fleet runs resolve the configured canonical repository/ref independently and stop before builder execution unless the expected, build, and runtime commits match and the runtime is clean. Legacy plain version output cannot prove freshness and is rejected. The reusable Actions workflow currently supports only the default `kaizen-agents-org/verifier` trust root and compares provenance with its audited verifier checkout commit; custom verifier trust roots require a correspondingly trusted workflow checkout.
 
 ## Repository Contract
 
