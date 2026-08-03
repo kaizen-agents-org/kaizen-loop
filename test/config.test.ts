@@ -36,6 +36,9 @@ describe('configSchema', () => {
     expect(config.builder.resultPath).toBe('.kaizen/builder/build-result.json');
     expect(config.verifier.enabled).toBe(true);
     expect(config.verifier.command).toBe('verifier');
+    expect(config.verifier.expectedRepository).toBe('https://github.com/kaizen-agents-org/verifier.git');
+    expect(config.verifier.expectedRef).toBe('refs/heads/main');
+    expect(config.verifier.freshnessTimeoutSeconds).toBe(30);
     expect(config.guardian.enabled).toBe(true);
     expect(config.guardian.command).toBe('codex');
     expect(config.goal.maxIterations).toBe(5);
@@ -83,6 +86,18 @@ describe('configSchema', () => {
   it('rejects unknown keys', () => {
     expect(() => configSchema.parse({ version: 1, typo: true })).toThrow();
     expect(() => configSchema.parse({ version: 1, run: { maxIssuesPerNight: 1, typo: true } })).toThrow();
+  });
+
+  it('requires the trusted verifier repository to use HTTPS', () => {
+    expect(() => configSchema.parse({
+      version: 1,
+      verifier: { expectedRepository: 'file:///tmp/untrusted-verifier.git' }
+    })).toThrow('expectedRepository must use HTTPS');
+  });
+
+  it.each(['refs/heads/release.', 'refs/heads/.hidden'])('rejects Git-invalid trusted verifier ref %s', (expectedRef) => {
+    expect(() => configSchema.parse({ version: 1, verifier: { expectedRef } }))
+      .toThrow('expectedRef must be a canonical branch ref');
   });
 
   it('rejects invalid scheduler values', () => {

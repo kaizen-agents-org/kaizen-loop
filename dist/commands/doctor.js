@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { BuilderAgentAdapter } from '../agents/builder.js';
 import { ClaudeCodeAdapter } from '../agents/claude.js';
 import { CodexAdapter } from '../agents/codex.js';
-import { VerifierAgentAdapter } from '../agents/verifier.js';
+import { assertVerifierRuntimeFresh } from '../agents/verifierFreshness.js';
 import { loadConfig } from '../config/config.js';
 import { configDrift } from '../config/operational.js';
 import { resolveProject } from '../config/registry.js';
@@ -87,10 +87,7 @@ export async function doctorProject(options) {
             throw new Error('config unavailable');
         if (!loaded.verifier.enabled)
             return;
-        const runtime = await new VerifierAgentAdapter(options.runCommand, verifierOptions(loaded)).inspectRuntime();
-        if (runtime.stale) {
-            throw new Error(`stale build: built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}`);
-        }
+        await assertVerifierRuntimeFresh(loaded, options.runCommand);
     });
     await check(checks, 'pr guardian skill runner', async () => {
         const loaded = config;
@@ -115,9 +112,6 @@ export async function doctorProject(options) {
 }
 function builderOptions(config) {
     return { ...config.builder, envAllowlist: config.safety.envAllowlist };
-}
-function verifierOptions(config) {
-    return { ...config.verifier, envAllowlist: config.safety.envAllowlist };
 }
 async function checkWorkspaceTempDir(workspacePath) {
     await fs.access(workspacePath);

@@ -32,6 +32,14 @@ describe('GitHub Actions fix workflow', () => {
         return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
       }
       if (args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
+      if (command === 'verifier' && args.join(' ') === '--version --json') {
+        const commit = 'cca74b39287dbcaf74687ae4cacaeebfb3167c6e';
+        return result(command, args, JSON.stringify({
+          name: 'verifier', version: '0.0.0', status: 'current', stale: false,
+          build: { commit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+          runtime: { commit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+        }));
+      }
       if (command === 'git' && args[0] === 'rev-parse') return result(command, args, `${'a'.repeat(40)}\n`);
       throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
     });
@@ -45,6 +53,8 @@ describe('GitHub Actions fix workflow', () => {
     expect(prompt).toContain('Do not run repository setup or verification commands in this provider job');
     expect(prompt).not.toContain('npm test');
     expect(calls.some((call) => call.includes('collaborators/maintainer/permission'))).toBe(true);
+    expect(calls).toContain('verifier --version --json');
+    expect(calls.some((call) => call.startsWith('git ls-remote '))).toBe(false);
     await expect(fs.access(path.join(cwd, '.kaizen', 'registry.json'))).rejects.toThrow();
   });
 
@@ -224,6 +234,41 @@ describe('GitHub Actions fix workflow', () => {
     await expect(fs.access(path.join(cwd, 'setup-ran'))).rejects.toThrow();
   });
 
+  it('rejects a custom verifier trust root in the reusable Actions path', async () => {
+    const cwd = await configuredRepo();
+    const config = parse(await fs.readFile(path.join(cwd, '.kaizen', 'config.yml'), 'utf8'));
+    config.verifier = {
+      ...config.verifier,
+      expectedRepository: 'https://github.com/example/custom-verifier.git',
+      expectedRef: 'refs/heads/release'
+    };
+    await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), stringify(config));
+    const fakeRun: CommandRunner = async (command, args) => {
+      if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
+      if (command === 'gh' && args[0] === 'issue') {
+        return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
+      }
+      if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
+        return result(command, args, JSON.stringify([[
+          { event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }
+        ]]));
+      }
+      if (command === 'gh' && args.at(-1)?.endsWith('/permission')) {
+        return result(command, args, JSON.stringify({ permission: 'write' }));
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    };
+
+    await expect(verifyActionsFix({
+      cwd,
+      issue: 199,
+      patchPath: path.join(cwd, 'unused.patch'),
+      providerResultPath: path.join(cwd, 'unused-provider.json'),
+      outputDir: path.join(cwd, 'verified'),
+      runCommand: fakeRun
+    })).rejects.toThrow('custom verifier trust roots require a corresponding trusted workflow checkout');
+  });
+
   it('verifies and publishes the exact authorized patch without executing publish hooks', async () => {
     const cwd = await configuredRepo();
     await fs.writeFile(path.join(cwd, 'README.md'), 'before\n');
@@ -243,6 +288,7 @@ describe('GitHub Actions fix workflow', () => {
     })));
     let authorizationChecks = 0;
     let liveBaseChecks = 0;
+    let verifierFreshnessChecks = 0;
     const fakeRun: CommandRunner = async (command, args, options) => {
       if (command === 'gh' && args[0] === 'repo' && args.includes('nameWithOwner')) return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'repo') return result(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
@@ -261,6 +307,15 @@ describe('GitHub Actions fix workflow', () => {
         return result(command, args, JSON.stringify({
           number: 7, url: 'https://github.com/owner/repo/pull/7', baseRefName: 'main', isDraft: false,
           closingIssuesReferences: [{ number: 199 }]
+        }));
+      }
+      if (command === 'verifier' && args.join(' ') === '--version --json') {
+        verifierFreshnessChecks += 1;
+        const commit = 'cca74b39287dbcaf74687ae4cacaeebfb3167c6e';
+        return result(command, args, JSON.stringify({
+          name: 'verifier', version: '0.0.0', status: 'current', stale: false,
+          build: { commit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+          runtime: { commit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
         }));
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, 'verifier 1\n');
@@ -285,6 +340,7 @@ describe('GitHub Actions fix workflow', () => {
     expect(published.body).toContain('Closes #199');
     expect(authorizationChecks).toBe(2);
     expect(liveBaseChecks).toBe(1);
+    expect(verifierFreshnessChecks).toBe(1);
     expect((await runCommand('git', ['show', 'HEAD:README.md'], { cwd })).stdout).toBe('after\n');
   });
 
@@ -299,6 +355,14 @@ describe('GitHub Actions fix workflow', () => {
     expect(workflow.jobs.publish.permissions).toEqual({ contents: 'write', issues: 'read', 'pull-requests': 'write' });
     expect(raw).toContain('openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56');
     expect(raw).toContain('anthropics/claude-code-action@273fe825408ddced56cb02b228a74c72bed8241e');
+    expect(raw).toContain(
+      'repository: kaizen-agents-org/verifier\n          ref: cca74b39287dbcaf74687ae4cacaeebfb3167c6e'
+    );
+    const prepareJob = JSON.stringify(workflow.jobs.prepare);
+    expect(prepareJob).toContain('kaizen-agents-org/verifier');
+    expect(prepareJob).toContain('cca74b39287dbcaf74687ae4cacaeebfb3167c6e');
+    expect(prepareJob).toContain('kaizen-bin/verifier');
+    expect(prepareJob).toContain('RUNNER_TEMP/kaizen-bin');
     expect(workflow.jobs.provider_gate).toBeDefined();
     expect(raw).not.toContain('Fail Codex attempt without a patch');
     expect(raw).not.toContain('Fail Claude attempt without a patch');

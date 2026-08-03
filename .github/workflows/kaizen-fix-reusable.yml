@@ -56,17 +56,31 @@ jobs:
           path: _kaizen_runtime
           persist-credentials: false
 
+      - name: Checkout trusted verifier
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: kaizen-agents-org/verifier
+          ref: cca74b39287dbcaf74687ae4cacaeebfb3167c6e
+          path: _verifier_runtime
+          persist-credentials: false
+
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
         with:
           node-version: 20
 
-      - name: Build Kaizen runtime
-        working-directory: _kaizen_runtime
-        run: npm ci && npm run build
-
-      - name: Isolate Kaizen runtime
-        run: mv _kaizen_runtime "$RUNNER_TEMP/kaizen-runtime"
+      - name: Build trusted runtimes
+        run: |
+          npm --prefix _kaizen_runtime ci
+          npm --prefix _kaizen_runtime run build
+          corepack enable
+          pnpm --dir _verifier_runtime install --frozen-lockfile
+          pnpm --dir _verifier_runtime --filter @verifier/core build
+          chmod +x _verifier_runtime/packages/core/dist/cli.js
+          mv _kaizen_runtime "$RUNNER_TEMP/kaizen-runtime"
+          mv _verifier_runtime "$RUNNER_TEMP/verifier-runtime"
+          mkdir -p "$RUNNER_TEMP/kaizen-bin"
+          ln -s "$RUNNER_TEMP/verifier-runtime/packages/core/dist/cli.js" "$RUNNER_TEMP/kaizen-bin/verifier"
 
       - name: Authorize issue and prepare prompt
         id: prepare
@@ -74,7 +88,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
-          node "$RUNNER_TEMP/kaizen-runtime/dist/cli.js" actions prepare "$ISSUE_NUMBER" --output-dir _kaizen_prepared --json > _kaizen_prepared-result.json
+          PATH="$RUNNER_TEMP/kaizen-bin:$PATH" node "$RUNNER_TEMP/kaizen-runtime/dist/cli.js" actions prepare "$ISSUE_NUMBER" --output-dir _kaizen_prepared --json > _kaizen_prepared-result.json
           echo "base_sha=$(jq -r .baseSha _kaizen_prepared-result.json)" >> "$GITHUB_OUTPUT"
 
       - name: Upload provider prompt
@@ -260,7 +274,7 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           repository: kaizen-agents-org/verifier
-          ref: 75e76f62c9bfc4a2c033c377573576299b1ec0b0
+          ref: cca74b39287dbcaf74687ae4cacaeebfb3167c6e
           path: _verifier_runtime
           persist-credentials: false
 

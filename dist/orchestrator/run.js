@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BuilderAgentAdapter } from '../agents/builder.js';
 import { VerifierAgentAdapter } from '../agents/verifier.js';
+import { resolveExpectedVerifierCommit } from '../agents/verifierFreshness.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
 import { loadOperationalConfig } from '../config/operational.js';
@@ -391,7 +392,7 @@ export async function runKaizen(options) {
         await lock.release();
     }
 }
-async function preflightVerifier(options) {
+export async function preflightVerifier(options) {
     if (!options.config.verifier.enabled)
         return undefined;
     const adapter = new VerifierAgentAdapter(options.runCommand, {
@@ -399,11 +400,38 @@ async function preflightVerifier(options) {
         envAllowlist: options.config.safety.envAllowlist
     });
     const runtimePath = path.join(options.runDir, 'verifier-runtime.json');
+    const source = {
+        repository: options.config.verifier.expectedRepository,
+        ref: options.config.verifier.expectedRef
+    };
+    let expectedCommit;
     try {
+        expectedCommit = await resolveExpectedVerifierCommit(options);
         const runtime = await adapter.inspectRuntime();
-        await fs.writeFile(runtimePath, `${JSON.stringify(runtime, null, 2)}\n`);
+        const observedBuildCommit = runtime.protocol === 'structured' ? runtime.build.commit : null;
+        const observedRuntimeCommit = runtime.protocol === 'structured' ? runtime.runtime.commit : null;
+        const matchesExpected = observedBuildCommit === expectedCommit && observedRuntimeCommit === expectedCommit;
+        const clean = runtime.protocol === 'structured' && runtime.build.dirty === false && runtime.runtime.dirty === false;
+        const freshness = {
+            ...source,
+            resolvedAt: new Date().toISOString(),
+            expectedCommit,
+            observedBuildCommit,
+            observedRuntimeCommit,
+            status: runtime.protocol === 'structured' && matchesExpected && clean ? 'current' : 'stale'
+        };
+        await fs.writeFile(runtimePath, `${JSON.stringify({ ...runtime, freshness }, null, 2)}\n`);
+        if (runtime.protocol !== 'structured') {
+            return `Verifier preflight failed: ${runtime.command} does not provide structured build provenance. Install a current verifier build from ${source.repository} ${source.ref}.`;
+        }
         if (runtime.stale) {
             return `Verifier preflight failed: stale build (built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Rebuild and relink ${runtime.command}.`;
+        }
+        if (!matchesExpected) {
+            return `Verifier preflight failed: obsolete build (expected ${expectedCommit} from ${source.repository} ${source.ref}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Refresh, rebuild, and relink ${runtime.command}.`;
+        }
+        if (!clean) {
+            return `Verifier preflight failed: verifier build or runtime checkout is dirty at ${expectedCommit}. Rebuild and relink ${runtime.command} from a clean checkout.`;
         }
         return undefined;
     }
@@ -414,6 +442,12 @@ async function preflightVerifier(options) {
             command: options.config.verifier.command,
             status: 'unavailable',
             stale: null,
+            freshness: {
+                ...source,
+                resolvedAt: new Date().toISOString(),
+                expectedCommit: expectedCommit ?? null,
+                status: 'unverifiable'
+            },
             error: message
         }, null, 2)}\n`);
         return `Verifier preflight failed: ${message}`;

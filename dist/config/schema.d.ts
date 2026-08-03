@@ -175,6 +175,9 @@ export declare const configSchema: z.ZodObject<{
         command: z.ZodDefault<z.ZodString>;
         resultPath: z.ZodDefault<z.ZodString>;
         timeoutMinutes: z.ZodDefault<z.ZodNumber>;
+        expectedRepository: z.ZodDefault<z.ZodString>;
+        expectedRef: z.ZodDefault<z.ZodString>;
+        freshnessTimeoutSeconds: z.ZodDefault<z.ZodNumber>;
     }, z.core.$strict>>;
     guardian: z.ZodDefault<z.ZodObject<{
         enabled: z.ZodDefault<z.ZodBoolean>;

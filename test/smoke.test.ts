@@ -43,11 +43,13 @@ describe('runSandboxSmoke', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'smoke updated', notes: '' });
         return result(command, args, workspace, 'built');
       }
+      if (command === 'verifier' && args.join(' ') === '--version --json') return result(command, args, workspace, verifierVersion());
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: 'verified', notes: '' });
         return result(command, args, workspace, 'verified');
       }
+      if (command === 'git' && args[0] === 'ls-remote') return result(command, args, repo, 'b'.repeat(40) + '\trefs/heads/main\n');
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'docs/sandbox-smoke.md\n');
@@ -156,11 +158,13 @@ describe('runSandboxSmoke', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'smoke updated', notes: '' });
         return result(command, args, workspace, 'built');
       }
+      if (command === 'verifier' && args.join(' ') === '--version --json') return result(command, args, workspace, verifierVersion());
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: 'verified', notes: '' });
         return result(command, args, workspace, 'verified');
       }
+      if (command === 'git' && args[0] === 'ls-remote') return result(command, args, repo, 'b'.repeat(40) + '\trefs/heads/main\n');
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'docs/sandbox-smoke.md\n');
@@ -254,6 +258,18 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
     stderr: '',
     durationMs: 1
   };
+}
+
+function verifierVersion(): string {
+  const commit = 'b'.repeat(40);
+  return JSON.stringify({
+    name: 'verifier',
+    version: '0.0.0',
+    status: 'current',
+    stale: false,
+    build: { commit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+    runtime: { commit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+  });
 }
 
 async function writeJsonResult(filePath: unknown, payload: unknown) {

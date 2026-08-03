@@ -196,11 +196,13 @@ describe('reportIssueNow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
         return result(command, args, workspace, 'built');
       }
+      if (command === 'verifier' && args.join(' ') === '--version --json') return result(command, args, workspace, verifierVersion());
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
+      if (command === 'git' && args[0] === 'ls-remote') return result(command, args, repo, 'b'.repeat(40) + '\trefs/heads/main\n');
       if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
@@ -360,6 +362,9 @@ function fakeGitScript(logPath: string) {
   for arg do printf '%s\\0' "$arg"; done
 } >> ${shellQuote(logPath)}
 case "$*" in
+  'ls-remote --exit-code https://github.com/kaizen-agents-org/verifier.git refs/heads/main')
+    printf '%s\\t%s\\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' 'refs/heads/main'
+    ;;
   'remote get-url origin')
     printf '%s\\n' 'https://github.com/o/r.git'
     ;;
@@ -405,7 +410,9 @@ function fakeVerifierScript(logPath: string) {
   printf '%s\\0' verifier "$PWD" "$#"
   for arg do printf '%s\\0' "$arg"; done
 } >> ${shellQuote(logPath)}
-if [ "$1" = --version ]; then
+if [ "$1" = --version ] && [ "$2" = --json ]; then
+  printf '%s\\n' '{"name":"verifier","version":"0.0.0","status":"current","stale":false,"build":{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","builtAt":"2026-08-03T00:00:00.000Z","dirty":false},"runtime":{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","dirty":false,"packageRoot":"/runtime/verifier/packages/core"}}'
+elif [ "$1" = --version ]; then
   printf 'ok\\n'
 else
   cat >/dev/null
@@ -441,6 +448,18 @@ function result(command: string, args: string[], cwd: string | undefined, stdout
     stderr: '',
     durationMs: 1
   };
+}
+
+function verifierVersion(): string {
+  const commit = 'b'.repeat(40);
+  return JSON.stringify({
+    name: 'verifier',
+    version: '0.0.0',
+    status: 'current',
+    stale: false,
+    build: { commit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+    runtime: { commit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+  });
 }
 
 function githubReadinessResult(command: string, args: string[], cwd: string | undefined) {

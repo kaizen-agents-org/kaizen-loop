@@ -103,7 +103,10 @@ export function defaultConfigObject(options: {
       enabled: true,
       command: 'verifier',
       resultPath: '.kaizen/verifier/verify-result.json',
-      timeoutMinutes: 15
+      timeoutMinutes: 15,
+      expectedRepository: 'https://github.com/kaizen-agents-org/verifier.git',
+      expectedRef: 'refs/heads/main',
+      freshnessTimeoutSeconds: 30
     },
     guardian: {
       enabled: true,
