@@ -186,6 +186,7 @@ export async function runPendingPrGuardianJobs(options) {
         const observedJob = gate.headRefOid && gate.headRefOid !== job.headSha
             ? { ...job, headSha: gate.headRefOid }
             : job;
+        const canReactivate = job.attemptCount < job.retryBudget;
         if (gate.isReady && observedJob === job && job.lastObservedFingerprint === undefined) {
             await writeGuardianJob(options.stateDir, {
                 ...job,
@@ -197,8 +198,7 @@ export async function runPendingPrGuardianJobs(options) {
             continue;
         }
         if (gate.isReady) {
-            const canReactivate = job.attemptCount < job.retryBudget;
-            await writeGuardianJob(options.stateDir, {
+            const reactivated = {
                 ...observedJob,
                 status: canReactivate ? 'pending' : 'blocked',
                 reactivationCount: (job.reactivationCount ?? 0) + 1,
@@ -209,17 +209,25 @@ export async function runPendingPrGuardianJobs(options) {
                         ? 'PR head changed after guardian success.'
                         : 'New PR activity appeared after guardian success.'
                     : `PR guardian retry budget exhausted after ${job.attemptCount} attempts while new PR activity remained unaudited.`
-            });
+            };
+            await writeGuardianJob(options.stateDir, reactivated);
+            if (!canReactivate)
+                await syncImplementationState(options.stateDir, reactivated);
             continue;
         }
-        await writeGuardianJob(options.stateDir, {
+        const reactivated = {
             ...observedJob,
-            status: 'pending',
+            status: canReactivate ? 'pending' : 'blocked',
             reactivationCount: (job.reactivationCount ?? 0) + 1,
             lastObservedFingerprint: gate.activityFingerprint,
             updatedAt: new Date().toISOString(),
-            lastBlocker: `PR regressed after guardian success: ${gate.blockers.join('; ')}`
-        });
+            lastBlocker: canReactivate
+                ? `PR regressed after guardian success: ${gate.blockers.join('; ')}`
+                : `PR guardian retry budget exhausted after ${job.attemptCount} attempts while the PR remained regressed: ${gate.blockers.join('; ')}`
+        };
+        await writeGuardianJob(options.stateDir, reactivated);
+        if (!canReactivate)
+            await syncImplementationState(options.stateDir, reactivated);
     }
     jobs = await listPrGuardianJobs(options.stateDir);
     for (const job of jobs) {

@@ -635,19 +635,22 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const result = await runPrGuardianSkill(runner, {
-      config,
-      workspaceDir: '/tmp/workspace',
-      repo: 'o/r',
-      prUrl: 'https://github.com/o/r/pull/4',
-      prNumber: 4,
-      branch: 'branch',
-      baseBranch: 'main'
-    });
+    try {
+      const result = await runPrGuardianSkill(runner, {
+        config,
+        workspaceDir: '/tmp/workspace',
+        repo: 'o/r',
+        prUrl: 'https://github.com/o/r/pull/4',
+        prNumber: 4,
+        branch: 'branch',
+        baseBranch: 'main'
+      });
 
-    expect(result.status).toBe('failed');
-    expect(result.raw).toContain('Command timed out');
-    now.mockRestore();
+      expect(result.status).toBe('failed');
+      expect(result.raw).toContain('Command timed out');
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('preserves a real review blocker after a thrown guardian timeout', async () => {
@@ -1570,6 +1573,7 @@ describe('runPrGuardianSkill', () => {
       repo: 'o/r',
       prUrl: 'https://github.com/o/r/pull/4',
       prNumber: 4,
+      issueNumber: 1,
       branch: 'kaizen/issue-1-fix',
       baseBranch: 'main',
       headSha: 'head-sha'
@@ -1616,6 +1620,25 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+
+    lateThread = true;
+    const third = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(third).toEqual([]);
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([
+      expect.objectContaining({ status: 'blocked', reactivationCount: 2, attemptCount: 2 })
+    ]);
+    await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
+      phase: 'guardian',
+      lastFailure: expect.stringContaining('retry budget exhausted')
+    });
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
