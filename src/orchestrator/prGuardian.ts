@@ -558,6 +558,7 @@ interface PrGateSummary {
   isReady: boolean;
   hasCurrentHeadCodexNoFindings: boolean;
   hasUndatedAuditableActivity: boolean;
+  hasInProgressAuditableActivity: boolean;
   codexNoFindingsAt?: string;
   latestAuditableActivityAt?: string;
   blockers: string[];
@@ -611,6 +612,7 @@ interface PullRequestViewResponse {
   headRefOid?: string;
   comments?: Array<{ id?: string; createdAt?: string; updatedAt?: string; author?: { login?: string } | null; body?: string }>;
   statusCheckRollup?: Array<{
+    __typename?: string;
     name?: string;
     context?: string;
     status?: string;
@@ -627,6 +629,15 @@ interface PullRequestReviewResponse {
   state?: string;
   submitted_at?: string;
   commit_id?: string;
+}
+
+interface PullRequestReviewCommentResponse {
+  id?: number;
+  created_at?: string;
+  updated_at?: string;
+  commit_id?: string;
+  in_reply_to_id?: number;
+  user?: { login?: string } | null;
 }
 
 const REVIEW_THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -723,9 +734,13 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
     (annotation) => annotation.level === 'failure' || annotation.level === 'warning'
   );
   const terminal = pullRequest.state === 'MERGED';
+  const hasUndatedAuditableActivity =
+    pullRequest.hasUndatedAuditableActivity ||
+    auditableCheckAnnotations.some((annotation) => !annotation.checkCompletedAt);
   const blockers = [
     ...mergeabilityBlockers(pullRequest),
     ...(pullRequest.reviewBlockers ?? []),
+    ...(terminal || !pullRequest.hasInProgressAuditableActivity ? [] : ['auditable PR activity is still in progress']),
     ...(terminal ? [] : unresolvedThreads.map((thread) => {
       const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
       const author = thread.author ? ` by ${thread.author}` : '';
@@ -743,7 +758,8 @@ async function inspectPrGate(runCommand: CommandRunner, req: PrGuardianSkillRequ
     blockers,
     isReady: blockers.length === 0,
     hasCurrentHeadCodexNoFindings: pullRequest.hasCurrentHeadCodexNoFindings,
-    hasUndatedAuditableActivity: auditableCheckAnnotations.some((annotation) => !annotation.checkCompletedAt),
+    hasUndatedAuditableActivity,
+    hasInProgressAuditableActivity: pullRequest.hasInProgressAuditableActivity,
     codexNoFindingsAt: pullRequest.codexNoFindingsAt,
     latestAuditableActivityAt: latestTimestamp([
       pullRequest.latestAuditableActivityAt,
@@ -847,7 +863,7 @@ async function inspectPullRequest(
   runCommand: CommandRunner,
   req: PrGuardianSkillRequest
 ): Promise<Omit<PrGateSummary, 'isReady' | 'blockers'>> {
-  const [result, reviews, requiredChecks] = await Promise.all([
+  const [result, reviews, reviewComments, requiredChecks] = await Promise.all([
     runCommand('gh', [
       'pr',
       'view',
@@ -863,6 +879,7 @@ async function inspectPullRequest(
       rejectOnNonZero: false
     }),
     listPullRequestReviews(runCommand, req),
+    listPullRequestReviewComments(runCommand, req),
     listRequiredChecks(runCommand, req)
   ]);
   if (result.exitCode !== 0) {
@@ -889,19 +906,32 @@ async function inspectPullRequest(
         check.completedAt
       ]),
       reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
+      reviewComments: reviewComments.map((comment) => [
+        comment.id,
+        comment.updated_at,
+        comment.created_at,
+        comment.commit_id,
+        comment.in_reply_to_id,
+        comment.user?.login
+      ]),
       comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
     }),
     reviewBlockers: [
       ...currentHeadReviewBlockers(parsed, reviews)
     ],
     hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
-    hasUndatedAuditableActivity: auditableCheckActivity.some((check) => !check.completedAt && !check.startedAt),
+    hasUndatedAuditableActivity: auditableCheckActivity.some((check) => !check.completedAt),
+    hasInProgressAuditableActivity: auditableCheckActivity.some((check) => {
+      const status = String(check.status ?? check.state ?? '').toUpperCase();
+      return ['EXPECTED', 'IN_PROGRESS', 'PENDING', 'QUEUED', 'REQUESTED', 'WAITING'].includes(status);
+    }),
     codexNoFindingsAt: codexEvidence?.observedAt,
     latestAuditableActivityAt: latestTimestamp([
       ...(parsed.comments ?? [])
         .filter((comment) => comment !== codexEvidence?.comment)
         .flatMap((comment) => [comment.updatedAt, comment.createdAt]),
       ...reviews.map((review) => review.submitted_at),
+      ...reviewComments.flatMap((comment) => [comment.updated_at, comment.created_at]),
       ...auditableCheckActivity.flatMap((check) => [check.completedAt, check.startedAt])
     ]),
     checks: requiredChecks
@@ -958,6 +988,42 @@ async function listPullRequestReviews(
   return Array.isArray(pages[0])
     ? (pages as PullRequestReviewResponse[][]).flat()
     : pages as PullRequestReviewResponse[];
+}
+
+async function listPullRequestReviewComments(
+  runCommand: CommandRunner,
+  req: PrGuardianSkillRequest
+): Promise<PullRequestReviewCommentResponse[]> {
+  const result = await runCommand('gh', [
+    'api',
+    `repos/${req.repo}/pulls/${req.prNumber}/comments?per_page=100`,
+    '--paginate',
+    '--slurp'
+  ], {
+    cwd: req.workspaceDir,
+    env: githubCliEnv(),
+    timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+    rejectOnNonZero: false
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not inspect PR review comments: ${result.stderr || result.stdout}`);
+  }
+  const pages = JSON.parse(result.stdout || '[]') as unknown;
+  if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+    throw new Error('Could not inspect PR review comments: response was not a paginated array.');
+  }
+  const comments = (pages as PullRequestReviewCommentResponse[][]).flat();
+  for (const comment of comments) {
+    const observedAt = comment.updated_at ?? comment.created_at;
+    if (
+      typeof comment.id !== 'number' ||
+      !observedAt ||
+      Number.isNaN(Date.parse(observedAt))
+    ) {
+      throw new Error('Could not inspect PR review comments: response contained activity without an id or valid timestamp.');
+    }
+  }
+  return comments;
 }
 
 function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: PullRequestReviewResponse[]): string[] {
