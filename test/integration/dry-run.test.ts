@@ -2694,6 +2694,19 @@ describe('runKaizen PR flow', () => {
     expect(issueCreateArgs).toContain('kaizen,kaizen:approved,kaizen:queued,kaizen:P2');
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('Source issue');
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('<!-- kaizen-loop:discovered-issue:v1');
+    const issueEdit = runner.mock.calls.find(([command, args]) =>
+      command === 'gh'
+      && args[0] === 'issue'
+      && args[1] === 'edit'
+      && args.includes('77')
+      && args.includes('kaizen-agents-org/verifier')
+    );
+    expect(issueEdit).toBeDefined();
+    const updatedBody = String(issueEdit![1].at(issueEdit![1].indexOf('--body') + 1));
+    expect(updatedBody).toContain('## PR linkage requirement');
+    expect(updatedBody).toContain('`Closes #77`');
+    expect(updatedBody).toContain('`Closes kaizen-agents-org/verifier#77`');
+    expect(updatedBody).toContain('gh pr view <pr> --json baseRefName,closingIssuesReferences,isDraft');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Kaizen discovered follow-up issue'))).toBe(true);
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Existing in `kaizen-agents-org/verifier`'))).toBe(true);

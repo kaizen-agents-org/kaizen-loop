@@ -2404,6 +2404,19 @@ async function fileDiscoveredIssues(options: {
         labels: labelsForDiscoveredIssue(issue, requiredLabels),
         requiredLabels
       });
+      await options.github.updateIssueBody({
+        repo,
+        issue: created.number,
+        body: buildDiscoveredIssueBody({
+          issue,
+          repo,
+          routingReason: routing.reason,
+          sourceIssue: options.sourceIssue,
+          sourceRepo: options.projectRepo,
+          runId: options.runId,
+          createdIssueNumber: created.number
+        })
+      });
       filed.push({ title: issue.title, repo, status: 'created', url: created.url });
       options.filedKeys.add(key);
     } catch (error) {
@@ -2442,6 +2455,7 @@ function buildDiscoveredIssueBody(options: {
   sourceIssue: GitHubIssue;
   sourceRepo: string;
   runId: string;
+  createdIssueNumber?: number;
 }): string {
   const body = options.issue.body?.trim() || 'A separate bug was discovered while processing a Kaizen issue.';
   const evidence = options.issue.evidence?.trim() || 'No additional evidence was provided by the builder agent.';
@@ -2464,7 +2478,12 @@ ${expected}
 ## Routing
 Filed in \`${options.repo}\` ${options.routingReason} while processing \`${options.sourceRepo}#${options.sourceIssue.number}\`.
 
-## Notes
+${options.createdIssueNumber ? `## PR linkage requirement
+- Target this repository's default branch.
+- Include \`Closes #${options.createdIssueNumber}\` in the PR body for same-repository work, or \`Closes ${options.repo}#${options.createdIssueNumber}\` for cross-repository work.
+- Before reporting the PR ready, verify \`gh pr view <pr> --json baseRefName,closingIssuesReferences,isDraft\` shows the default base branch, this issue in \`closingIssuesReferences\`, and a non-draft PR.
+
+` : ''}## Notes
 - Source issue: ${options.sourceIssue.url ?? `${options.sourceRepo}#${options.sourceIssue.number}`}
 - Source title: ${options.sourceIssue.title}
 - Kaizen run: ${options.runId}

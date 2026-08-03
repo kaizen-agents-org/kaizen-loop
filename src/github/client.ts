@@ -307,6 +307,12 @@ export class GitHubClient {
     await this.gh(['issue', 'edit', String(issue), '--remove-label', labels.join(',')], { ignoreMissingLabel: true });
   }
 
+  async updateIssueBody(options: { issue: number; body: string; repo?: string }): Promise<void> {
+    const args = ['issue', 'edit', String(options.issue), '--body', options.body];
+    if (options.repo) args.push('--repo', options.repo);
+    await this.gh(args);
+  }
+
   async comment(issue: number, body: string): Promise<void> {
     await this.gh(['issue', 'comment', String(issue), '--body', body]);
   }
