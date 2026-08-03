@@ -890,8 +890,10 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
-        .replace('operationMode: external', 'operationMode: dogfood')
+      defaultConfigWith(
+        { guardian: { enabled: false }, run: { latestStartHour: 23 } },
+        { agent: 'claude', setup: null, verify: ['npm test'] }
+      )
     );
     await saveRegistry({
       version: 1,
@@ -911,8 +913,18 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args[0] === 'ls-remote') {
         return result(command, args, options?.cwd, `${'b'.repeat(40)}\trefs/heads/main\n`);
       }
-      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
-        return result(command, args, repo, JSON.stringify(issue()));
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1, {
+          labels: [{ name: 'kaizen' }, { name: 'kaizen:ready' }, { name: 'kaizen:authorized' }]
+        })]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, '[]');
+      }
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
+        return result(command, args, repo, JSON.stringify({
+          data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }
+        }));
       }
       if (command === 'verifier' && args.join(' ') === '--version --json') {
         return result(command, args, options?.cwd, JSON.stringify({
@@ -930,8 +942,7 @@ describe('runKaizen PR flow', () => {
     const summary = await runKaizen({
       cwd: repo,
       project: 'o-r',
-      scheduled: false,
-      issue: 1,
+      scheduled: true,
       dryRun: false,
       json: true,
       runCommand: runner
@@ -939,6 +950,11 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary.result).toBe('failed');
     expect('issues' in summary && summary.skipped[0]?.reason).toContain('Verifier preflight failed: stale build');
+    expect('issues' in summary && summary.queue?.health).toMatchObject({
+      state: 'blocked',
+      consecutiveZeroThroughputRuns: 1
+    });
+    expect('issues' in summary && summary.queue?.health.warning).toContain('Verifier preflight failed: stale build');
     expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
     const runsDir = path.join(home, 'projects', 'o-r', 'runs');
     const [run] = await fs.readdir(runsDir);
@@ -1717,7 +1733,7 @@ describe('runKaizen PR flow', () => {
     expect(runner.mock.calls.some(([command]) => command === 'builder-agent')).toBe(false);
   });
 
-  it('records queue health for a manual full-backlog run', async () => {
+  it('records blocked queue health for a failed manual full-backlog run', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -1753,11 +1769,12 @@ describe('runKaizen PR flow', () => {
       cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
     });
 
+    expect('issues' in summary && summary.result).toBe('failed');
     expect('issues' in summary && summary.queue).toMatchObject({
       backlogCount: 1,
       eligibleCount: 1,
       processedCount: 1,
-      health: { state: 'healthy' }
+      health: { state: 'blocked' }
     });
   });
 
