@@ -428,7 +428,7 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const pending = runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(runner, {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -437,9 +437,9 @@ describe('runPrGuardianSkill', () => {
       branch: 'kaizen/issue-1-fix',
       baseBranch: 'main'
     });
-    const result = await pending;
 
     expect(result.status).toBe('success');
+    expect(prViews).toBeGreaterThanOrEqual(3);
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
@@ -608,6 +608,9 @@ describe('runPrGuardianSkill', () => {
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
     });
     let reviewFetches = 0;
+    const fixedNow = Date.parse('2026-07-13T01:16:21.500Z');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    const evidenceAt = new Date(Math.floor(fixedNow / 1_000) * 1_000).toISOString();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'codex') throw new Error('Command timed out after 60000ms');
       if (command === 'gh' && args.join(' ').startsWith('api graphql')) reviewFetches += 1;
@@ -623,7 +626,7 @@ describe('runPrGuardianSkill', () => {
           comments: [{
             id: 'old-codex-review',
             author: { login: 'chatgpt-codex-connector[bot]' },
-            updatedAt: new Date(Math.floor(Date.now() / 1_000) * 1_000).toISOString(),
+            updatedAt: evidenceAt,
             body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
           }]
         }),
@@ -644,6 +647,7 @@ describe('runPrGuardianSkill', () => {
 
     expect(result.status).toBe('failed');
     expect(result.raw).toContain('Command timed out');
+    now.mockRestore();
   });
 
   it('preserves a real review blocker after a thrown guardian timeout', async () => {
@@ -1678,6 +1682,21 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+
+    lateReply = true;
+    const third = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(third).toEqual([]);
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([
+      expect.objectContaining({ status: 'blocked', reactivationCount: 2, attemptCount: 2 })
+    ]);
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 

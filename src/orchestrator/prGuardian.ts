@@ -284,15 +284,18 @@ export async function runPendingPrGuardianJobs(options: {
       continue;
     }
     if (gate.isReady) {
+      const canReactivate = job.attemptCount < job.retryBudget;
       await writeGuardianJob(options.stateDir, {
         ...observedJob,
-        status: 'pending',
+        status: canReactivate ? 'pending' : 'blocked',
         reactivationCount: (job.reactivationCount ?? 0) + 1,
         lastObservedFingerprint: gate.activityFingerprint,
         updatedAt: new Date().toISOString(),
-        lastBlocker: observedJob !== job
-          ? 'PR head changed after guardian success.'
-          : 'New PR activity appeared after guardian success.'
+        lastBlocker: canReactivate
+          ? observedJob !== job
+            ? 'PR head changed after guardian success.'
+            : 'New PR activity appeared after guardian success.'
+          : `PR guardian retry budget exhausted after ${job.attemptCount} attempts while new PR activity remained unaudited.`
       });
       continue;
     }
@@ -322,7 +325,7 @@ export async function runPendingPrGuardianJobs(options: {
   }
   const runnable = jobs.filter(
     (job) =>
-      job.status === 'pending' ||
+      (job.status === 'pending' && job.attemptCount < job.retryBudget) ||
       (isStaleRunningJob(job, options.config.guardian.timeoutMinutes) && job.attemptCount < job.retryBudget) ||
       (job.status === 'blocked' && job.attemptCount < job.retryBudget)
   );
