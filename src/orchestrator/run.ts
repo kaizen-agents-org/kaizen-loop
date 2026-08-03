@@ -58,6 +58,7 @@ import {
 } from './issueIntake.js';
 import { decideReflection, type ReflectionDecision } from './reflection.js';
 import { summarizeQueue, type RunDiscoveredFollowupSummary, type RunIssueSummary, type RunSummary } from './summary.js';
+import { refreshCanonicalVerifier, rollbackVerifierLink } from './verifierRefresh.js';
 import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
   generatedPullRequestWipLimitReason,
@@ -516,33 +517,67 @@ export async function preflightVerifier(options: {
   let expectedCommit: string | undefined;
   try {
     expectedCommit = await resolveExpectedVerifierCommit(options);
-    const runtime = await adapter.inspectRuntime();
-    const observedBuildCommit = runtime.protocol === 'structured' ? runtime.build.commit : null;
-    const observedRuntimeCommit = runtime.protocol === 'structured' ? runtime.runtime.commit : null;
-    const matchesExpected = observedBuildCommit === expectedCommit && observedRuntimeCommit === expectedCommit;
-    const clean = runtime.protocol === 'structured' && runtime.build.dirty === false && runtime.runtime.dirty === false;
-    const freshness = {
-      ...source,
-      resolvedAt: new Date().toISOString(),
-      expectedCommit,
-      observedBuildCommit,
-      observedRuntimeCommit,
-      status: runtime.protocol === 'structured' && matchesExpected && clean ? 'current' : 'stale'
-    };
-    await fs.writeFile(runtimePath, `${JSON.stringify({ ...runtime, freshness }, null, 2)}\n`);
-    if (runtime.protocol !== 'structured') {
-      return `Verifier preflight failed: ${runtime.command} does not provide structured build provenance. Install a current verifier build from ${source.repository} ${source.ref}.`;
+    const initial = await adapter.inspectRuntime();
+    const initialFailure = verifierRuntimeFailure(initial, expectedCommit, source);
+    if (!initialFailure) {
+      await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source);
+      return undefined;
     }
-    if (runtime.stale) {
-      return `Verifier preflight failed: stale build (built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Rebuild and relink ${runtime.command}.`;
+
+    if (
+      options.config.verifier.update.mode !== 'canonical-main' ||
+      initial.protocol !== 'structured' ||
+      !initial.runtime.packageRoot
+    ) {
+      await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source);
+      return initialFailure;
     }
-    if (!matchesExpected) {
-      return `Verifier preflight failed: obsolete build (expected ${expectedCommit} from ${source.repository} ${source.ref}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Refresh, rebuild, and relink ${runtime.command}.`;
+
+    const previousPackageRoot = initial.runtime.packageRoot;
+    try {
+      await refreshCanonicalVerifier({
+        config: options.config,
+        expectedCommit,
+        runCommand: options.runCommand
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source, {
+        attempted: true,
+        status: 'failed',
+        error: message
+      });
+      return `Verifier preflight failed: canonical-main refresh failed: ${message}`;
     }
-    if (!clean) {
-      return `Verifier preflight failed: verifier build or runtime checkout is dirty at ${expectedCommit}. Rebuild and relink ${runtime.command} from a clean checkout.`;
+
+    const refreshed = await adapter.inspectRuntime();
+    const refreshedFailure = verifierRuntimeFailure(refreshed, expectedCommit, source);
+    if (!refreshedFailure) {
+      await writeVerifierRuntimeDiagnostic(runtimePath, refreshed, expectedCommit, source, {
+        attempted: true,
+        status: 'recovered'
+      });
+      return undefined;
     }
-    return undefined;
+
+    let rollbackError: string | undefined;
+    try {
+      await rollbackVerifierLink({
+        packageRoot: previousPackageRoot,
+        timeoutMinutes: options.config.verifier.update.timeoutMinutes,
+        runCommand: options.runCommand
+      });
+    } catch (error) {
+      rollbackError = error instanceof Error ? error.message : String(error);
+    }
+    await writeVerifierRuntimeDiagnostic(runtimePath, refreshed, expectedCommit, source, {
+      attempted: true,
+      status: rollbackError ? 'rollback-failed' : 'rolled-back',
+      error: rollbackError ?? refreshedFailure
+    });
+    return rollbackError
+      ? `${refreshedFailure} Automatic refresh produced invalid provenance and rollback failed: ${rollbackError}`
+      : `${refreshedFailure} Automatic refresh produced invalid provenance; restored the previous Verifier link.`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await fs.writeFile(runtimePath, `${JSON.stringify({
@@ -560,6 +595,52 @@ export async function preflightVerifier(options: {
     }, null, 2)}\n`);
     return `Verifier preflight failed: ${message}`;
   }
+}
+
+type InspectedVerifierRuntime = Awaited<ReturnType<VerifierAgentAdapter['inspectRuntime']>>;
+
+function verifierRuntimeFailure(
+  runtime: InspectedVerifierRuntime,
+  expectedCommit: string,
+  source: { repository: string; ref: string }
+): string | undefined {
+  if (runtime.protocol !== 'structured') {
+    return `Verifier preflight failed: ${runtime.command} does not provide structured build provenance. Install a current verifier build from ${source.repository} ${source.ref}.`;
+  }
+  if (runtime.stale) {
+    return `Verifier preflight failed: stale build (built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Rebuild and relink ${runtime.command}.`;
+  }
+  const matchesExpected = runtime.build.commit === expectedCommit && runtime.runtime.commit === expectedCommit;
+  if (!matchesExpected) {
+    return `Verifier preflight failed: obsolete build (expected ${expectedCommit} from ${source.repository} ${source.ref}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Refresh, rebuild, and relink ${runtime.command}.`;
+  }
+  if (runtime.build.dirty !== false || runtime.runtime.dirty !== false) {
+    return `Verifier preflight failed: verifier build or runtime checkout is dirty at ${expectedCommit}. Rebuild and relink ${runtime.command} from a clean checkout.`;
+  }
+  return undefined;
+}
+
+async function writeVerifierRuntimeDiagnostic(
+  runtimePath: string,
+  runtime: InspectedVerifierRuntime,
+  expectedCommit: string,
+  source: { repository: string; ref: string },
+  recovery?: { attempted: true; status: 'failed' | 'recovered' | 'rolled-back' | 'rollback-failed'; error?: string }
+): Promise<void> {
+  const observedBuildCommit = runtime.protocol === 'structured' ? runtime.build.commit : null;
+  const observedRuntimeCommit = runtime.protocol === 'structured' ? runtime.runtime.commit : null;
+  const clean = runtime.protocol === 'structured' && runtime.build.dirty === false && runtime.runtime.dirty === false;
+  const current = runtime.protocol === 'structured' &&
+    observedBuildCommit === expectedCommit && observedRuntimeCommit === expectedCommit && clean;
+  const freshness = {
+    ...source,
+    resolvedAt: new Date().toISOString(),
+    expectedCommit,
+    observedBuildCommit,
+    observedRuntimeCommit,
+    status: current ? 'current' : 'stale'
+  };
+  await fs.writeFile(runtimePath, `${JSON.stringify({ ...runtime, freshness, ...(recovery ? { recovery } : {}) }, null, 2)}\n`);
 }
 
 export function applyImplementationBudget(selection: RunIssueSelection, maxIssues: number): RunIssueSelection {

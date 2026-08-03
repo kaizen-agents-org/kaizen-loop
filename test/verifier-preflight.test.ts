@@ -52,6 +52,80 @@ describe('verifier freshness preflight', () => {
     expect(failure).toContain('does not provide structured build provenance');
     expect(diagnostic).toMatchObject({ protocol: 'legacy', freshness: { expectedCommit: currentCommit, status: 'stale' } });
   });
+
+  it('refreshes an obsolete Verifier exactly once for opted-in dogfood', async () => {
+    const { failure, diagnostic, runner } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true
+    });
+
+    expect(failure).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      freshness: { expectedCommit: currentCommit, status: 'current' },
+      recovery: { attempted: true, status: 'recovered' }
+    });
+    expect(runner.mock.calls.filter(([command, args]) => command === 'pnpm' && args.join(' ') === 'link --global')).toHaveLength(1);
+  });
+
+  it('keeps pinned runtimes fail-closed without attempting an update', async () => {
+    const { failure, runner } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit
+    });
+
+    expect(failure).toContain('obsolete build');
+    expect(runner.mock.calls.some(([command]) => command === 'pnpm')).toBe(false);
+  });
+
+  it('reports refresh failure and leaves the existing link untouched', async () => {
+    const { failure, diagnostic, runner } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      refreshFails: true
+    });
+
+    expect(failure).toContain('canonical-main refresh failed');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'failed' });
+    expect(runner.mock.calls.some(([command, args]) => command === 'pnpm' && args.join(' ') === 'link --global')).toBe(false);
+  });
+
+  it('restores the previous link when refreshed provenance is invalid', async () => {
+    const { failure, diagnostic, runner } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      invalidAfterRefresh: true
+    });
+
+    expect(failure).toContain('restored the previous Verifier link');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'rolled-back' });
+    expect(runner.mock.calls.filter(([command, args]) => command === 'pnpm' && args.join(' ') === 'link --global')).toHaveLength(2);
+  });
+
+  it('fails closed when another process holds the shared refresh lock', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
+    await fs.mkdir(path.join(home, 'runtime', 'verifier-update'), { recursive: true });
+    await fs.writeFile(
+      path.join(home, 'runtime', 'verifier-update', 'run.lock'),
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
+    );
+    const { failure } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      home
+    });
+
+    expect(failure).toContain('canonical-main refresh failed');
+    expect(failure).toContain('already active');
+  });
 });
 
 async function inspect(options: {
@@ -59,11 +133,30 @@ async function inspect(options: {
   buildCommit?: string;
   runtimeCommit?: string;
   legacy?: boolean;
+  canonicalMainUpdate?: boolean;
+  refreshFails?: boolean;
+  invalidAfterRefresh?: boolean;
+  home?: string;
 }) {
   const runDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-preflight-'));
-  const config = configSchema.parse({ version: 1 });
+  const previousHome = process.env.KAIZEN_HOME;
+  process.env.KAIZEN_HOME = options.home ?? await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
+  const config = configSchema.parse({
+    version: 1,
+    ...(options.canonicalMainUpdate ? {
+      safety: { operationMode: 'dogfood' },
+      verifier: { update: { mode: 'canonical-main' } }
+    } : {})
+  });
+  let refreshed = false;
   const runner = vi.fn<CommandRunner>(async (command, args, commandOptions) => {
     if (command === 'git') {
+      if (args[0] === 'clone') {
+        if (options.refreshFails) throw new Error('clone failed');
+        await fs.mkdir(args.at(-1)!, { recursive: true });
+        return result(command, args, commandOptions?.cwd, '');
+      }
+      if (args[0] === 'checkout') return result(command, args, commandOptions?.cwd, '');
       return {
         command,
         args,
@@ -73,6 +166,13 @@ async function inspect(options: {
         stderr: options.expectedCommit ? '' : 'remote unavailable',
         durationMs: 1
       };
+    }
+    if (command === 'pnpm') {
+      if (args.join(' ') === 'build') {
+        await fs.mkdir(path.join(commandOptions!.cwd!, 'packages', 'core'), { recursive: true });
+      }
+      if (args.join(' ') === 'link --global') refreshed = !options.invalidAfterRefresh;
+      return result(command, args, commandOptions?.cwd, '');
     }
     return {
       command,
@@ -84,15 +184,23 @@ async function inspect(options: {
         version: '0.0.0',
         status: options.buildCommit === options.runtimeCommit ? 'current' : 'stale',
         stale: options.buildCommit === options.runtimeCommit ? false : true,
-        build: { commit: options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
-        runtime: { commit: options.runtimeCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+        build: { commit: refreshed ? currentCommit : options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+        runtime: { commit: refreshed ? currentCommit : options.runtimeCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
       }),
       stderr: '',
       durationMs: 1
     };
   });
+  try {
+    const failure = await preflightVerifier({ config, runCommand: runner, runDir });
+    const diagnostic = JSON.parse(await fs.readFile(path.join(runDir, 'verifier-runtime.json'), 'utf8'));
+    return { failure, diagnostic, runner };
+  } finally {
+    if (previousHome === undefined) delete process.env.KAIZEN_HOME;
+    else process.env.KAIZEN_HOME = previousHome;
+  }
+}
 
-  const failure = await preflightVerifier({ config, runCommand: runner, runDir });
-  const diagnostic = JSON.parse(await fs.readFile(path.join(runDir, 'verifier-runtime.json'), 'utf8'));
-  return { failure, diagnostic, runner };
+function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
+  return { command, args, cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
 }
