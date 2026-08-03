@@ -30,13 +30,18 @@ export async function enqueuePrGuardianJob(options) {
         lastBlocker: options.config.guardian.enabled ? undefined : 'PR guardian is disabled.'
     };
     const existing = await readGuardianJob(options.stateDir, job.id);
-    if (existing) {
-        if (options.issueNumber && !existing.issueNumber) {
-            const linked = { ...existing, issueNumber: options.issueNumber, updatedAt: now };
+    const matching = existing ?? (await listPrGuardianJobs(options.stateDir))
+        .filter((candidate) => candidate.repo === options.repo &&
+        candidate.prNumber === options.prNumber &&
+        candidate.headSha === options.headSha)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (matching) {
+        if (options.issueNumber && !matching.issueNumber) {
+            const linked = { ...matching, issueNumber: options.issueNumber, updatedAt: now };
             await writeGuardianJob(options.stateDir, linked);
             return linked;
         }
-        return existing;
+        return matching;
     }
     await writeGuardianJob(options.stateDir, job);
     return job;
@@ -112,6 +117,7 @@ export async function runPrGuardianJob(options) {
     }
     const finished = {
         ...running,
+        headSha: result.headRefOid ?? running.headSha,
         status: result.status === 'success' ? 'success' : result.status === 'skipped' ? 'skipped' : 'blocked',
         updatedAt: new Date().toISOString(),
         lastCheckedAt: new Date().toISOString(),
@@ -303,7 +309,8 @@ export async function runPrGuardianSkill(runCommand, req) {
                 summary: successSummary({ ...initialState, isReady: true, blockers: [] }),
                 raw: '',
                 durationMs: Date.now() - startMs,
-                activityFingerprint: initialState.activityFingerprint
+                activityFingerprint: initialState.activityFingerprint,
+                headRefOid: initialState.headRefOid
             };
         }
         const initialGate = await inspectPrGate(runCommand, req);
@@ -318,7 +325,8 @@ export async function runPrGuardianSkill(runCommand, req) {
                 summary: successSummary(settledInitialGate),
                 raw: '',
                 durationMs: Date.now() - startMs,
-                activityFingerprint: settledInitialGate.activityFingerprint
+                activityFingerprint: settledInitialGate.activityFingerprint,
+                headRefOid: settledInitialGate.headRefOid
             };
         }
         rawOutputs.push(`PR was not stably merge-ready before the first guardian pass:\n${summarizeGate(settledInitialGate)}`);
@@ -333,7 +341,8 @@ export async function runPrGuardianSkill(runCommand, req) {
                             summary: successSummary(stablePreflight),
                             raw: rawOutputs.join('\n'),
                             durationMs: Date.now() - startMs,
-                            activityFingerprint: stablePreflight.activityFingerprint
+                            activityFingerprint: stablePreflight.activityFingerprint,
+                            headRefOid: stablePreflight.headRefOid
                         };
                     }
                     rawOutputs.push(`PR became not merge-ready after retry preflight settle wait before pass ${attempt}:\n${summarizeGate(stablePreflight)}`);
@@ -379,7 +388,8 @@ export async function runPrGuardianSkill(runCommand, req) {
                     summary: successSummary(lateGate),
                     raw: rawOutputs.join('\n'),
                     durationMs: Date.now() - startMs,
-                    activityFingerprint: lateGate.activityFingerprint
+                    activityFingerprint: lateGate.activityFingerprint,
+                    headRefOid: lateGate.headRefOid
                 };
             }
             rawOutputs.push(`PR still not merge-ready after guardian pass ${attempt}:\n${summarizeGate(gate)}`);
@@ -1008,7 +1018,8 @@ async function finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, st
         summary: reconciled ? successSummary(reconciled) : failureSummary,
         raw: rawOutputs.join('\n'),
         durationMs: Date.now() - startMs,
-        activityFingerprint: reconciled?.activityFingerprint
+        activityFingerprint: reconciled?.activityFingerprint,
+        headRefOid: reconciled?.headRefOid
     };
 }
 async function reconcileReadyPrGate(runCommand, req, rawOutputs, guardianAttemptStartedAt) {

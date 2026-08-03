@@ -40,6 +40,7 @@ export interface PrGuardianSkillResult {
     durationMs: number;
     jobId?: string;
     activityFingerprint?: string;
+    headRefOid?: string;
 }
 export declare function guardianJobsDir(stateDir: string): string;
 export declare function enqueuePrGuardianJob(options: {

@@ -1936,7 +1936,7 @@ describe('runPrGuardianSkill', () => {
       version: 1,
       guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
     });
-    await enqueuePrGuardianJob({
+    const original = await enqueuePrGuardianJob({
       stateDir,
       config,
       repo: 'o/r',
@@ -1977,7 +1977,17 @@ describe('runPrGuardianSkill', () => {
       runCommand: runner,
       isolateWorktree: false
     });
-    expect(first[0]).toMatchObject({ status: 'success', headSha: 'old-head' });
+    expect(first[0]).toMatchObject({ status: 'success', headSha: 'new-head' });
+
+    const rediscovered = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest({ headRefOid: 'new-head' })]
+    });
+    expect(rediscovered).toHaveLength(1);
+    expect(rediscovered[0].id).toBe(original.id);
+    await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(1);
 
     const second = await runPendingPrGuardianJobs({
       stateDir,
