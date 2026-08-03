@@ -75,6 +75,13 @@ export function evaluateIssueIntake(options: {
   const currentRepoIsExplicitOwner = explicitOwner
     ? sameRepo(explicitOwner, options.repo)
     : false;
+  if (explicitOwner && !currentRepoIsExplicitOwner) {
+    return {
+      status: 'upstream_first',
+      reason: `The issue explicitly assigns implementation ownership to ${explicitOwner}.`,
+      evidence: [`Explicitly named owner repository: ${explicitOwner}`]
+    };
+  }
   const inferredUpstreamRepos = explicitOwner
     ? []
     : referencedUpstreamRepos(text, options.repo);
@@ -106,7 +113,7 @@ export function evaluateIssueIntake(options: {
     };
   }
 
-  if (requiresLiveCrossRepositoryAction(options.issue, options.repo)) {
+  if (requiresLiveCrossRepositoryAction(options.issue, options.repo, currentRepoIsExplicitOwner)) {
     return {
       status: 'needs_human',
       reason: `The requested workflow requires live actions in a repository outside ${options.repo}.`,
@@ -295,13 +302,18 @@ function mentionsSourceOfTruthSync(normalized: string): boolean {
   );
 }
 
-function requiresLiveCrossRepositoryAction(issue: GitHubIssue, currentRepo: string): boolean {
+function requiresLiveCrossRepositoryAction(
+  issue: GitHubIssue,
+  currentRepo: string,
+  requireTargetInDirective = false
+): boolean {
   const directiveText = requestedActionDirectives(issue);
   if (!directiveText) return false;
   const normalizedDirectives = directiveText.toLowerCase();
   const fullText = issueText(issue);
+  const targetText = requireTargetInDirective ? directiveText : fullText;
   return (
-    mentionsExternalRepositoryTarget(fullText, fullText.toLowerCase(), currentRepo) &&
+    mentionsExternalRepositoryTarget(targetText, targetText.toLowerCase(), currentRepo) &&
     mentionsLiveRepositoryWorkflow(normalizedDirectives)
   );
 }

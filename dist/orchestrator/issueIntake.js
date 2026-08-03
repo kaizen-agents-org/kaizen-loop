@@ -47,6 +47,13 @@ export function evaluateIssueIntake(options) {
     const currentRepoIsExplicitOwner = explicitOwner
         ? sameRepo(explicitOwner, options.repo)
         : false;
+    if (explicitOwner && !currentRepoIsExplicitOwner) {
+        return {
+            status: 'upstream_first',
+            reason: `The issue explicitly assigns implementation ownership to ${explicitOwner}.`,
+            evidence: [`Explicitly named owner repository: ${explicitOwner}`]
+        };
+    }
     const inferredUpstreamRepos = explicitOwner
         ? []
         : referencedUpstreamRepos(text, options.repo);
@@ -75,7 +82,7 @@ export function evaluateIssueIntake(options) {
             evidence: [`Referenced upstream/source-of-truth repository: ${upstreamRepo}`]
         };
     }
-    if (requiresLiveCrossRepositoryAction(options.issue, options.repo)) {
+    if (requiresLiveCrossRepositoryAction(options.issue, options.repo, currentRepoIsExplicitOwner)) {
         return {
             status: 'needs_human',
             reason: `The requested workflow requires live actions in a repository outside ${options.repo}.`,
@@ -248,13 +255,14 @@ function mentionsSourceOfTruthSync(normalized) {
     return (/(source[- ]of[- ]truth|upstream|canonical)/.test(normalized) &&
         /(sync|copy|drift|downstream|mirror|vendored)/.test(normalized));
 }
-function requiresLiveCrossRepositoryAction(issue, currentRepo) {
+function requiresLiveCrossRepositoryAction(issue, currentRepo, requireTargetInDirective = false) {
     const directiveText = requestedActionDirectives(issue);
     if (!directiveText)
         return false;
     const normalizedDirectives = directiveText.toLowerCase();
     const fullText = issueText(issue);
-    return (mentionsExternalRepositoryTarget(fullText, fullText.toLowerCase(), currentRepo) &&
+    const targetText = requireTargetInDirective ? directiveText : fullText;
+    return (mentionsExternalRepositoryTarget(targetText, targetText.toLowerCase(), currentRepo) &&
         mentionsLiveRepositoryWorkflow(normalizedDirectives));
 }
 function requestedActionDirectives(issue) {

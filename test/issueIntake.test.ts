@@ -126,6 +126,52 @@ describe('evaluateIssueIntake', () => {
     expect(decision.reason).toContain('kaizen-agents-org/.github');
   });
 
+  it('routes an explicitly external implementation owner without sync vocabulary', () => {
+    const decision = evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        body: [
+          '## Ownership clarification',
+          'The implementation owner is `kaizen-agents-org/verifier`.',
+          'The package entry probe incorrectly accepts a missing executable.'
+        ].join('\n')
+      })
+    });
+
+    expect(decision.status).toBe('upstream_first');
+    expect(decision.reason).toContain('explicitly assigns implementation ownership');
+  });
+
+  it('does not mistake downstream evidence for an external live action when the current repo owns the fix', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        body: [
+          '## Ownership clarification',
+          'The implementation owner is `kaizen-agents-org/.github`.',
+          '`kaizen-agents-org/verifier` is the downstream repository where the failure is visible.',
+          'Open a pull request for this fix in the current repository.'
+        ].join('\n')
+      })
+    }).status).toBe('proceed');
+  });
+
+  it('still routes a directly requested external action to a human despite current-repo ownership', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/.github',
+      openPullRequests: [],
+      issue: issue({
+        body: [
+          '## Ownership clarification',
+          'The implementation owner is `kaizen-agents-org/.github`.',
+          'Open a pull request in `kaizen-agents-org/verifier`.'
+        ].join('\n')
+      })
+    }).status).toBe('needs_human');
+  });
+
   it('accepts allowed structured owner values case-insensitively', () => {
     expect(evaluateIssueIntake({
       repo: 'kaizen-agents-org/kaizen-loop',
