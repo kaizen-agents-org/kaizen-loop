@@ -891,7 +891,11 @@ describe('runKaizen PR flow', () => {
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
       defaultConfigWith(
-        { guardian: { enabled: false }, run: { latestStartHour: 23 } },
+        {
+          guardian: { enabled: false },
+          run: { latestStartHour: 23 },
+          scheduler: { jobs: { maintenance: { run: { lateStartGuard: false } } } }
+        },
         { agent: 'claude', setup: null, verify: ['npm test'] }
       )
     );
@@ -943,6 +947,7 @@ describe('runKaizen PR flow', () => {
       cwd: repo,
       project: 'o-r',
       scheduled: true,
+      job: 'maintenance',
       dryRun: false,
       json: true,
       runCommand: runner
