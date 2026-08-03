@@ -58,7 +58,13 @@ describe('evaluateIssueIntake', () => {
       body: [
         '## Ownership clarification',
         'The implementation owner is **`kaizen-agents-org/.github`** because this repository owns the canonical shared skills and the sync contract.',
-        '`kaizen-agents-org/builder-agent` and `kaizen-agents-org/verifier` are downstream targets whose restore commits are evidence of drift.'
+        '`kaizen-agents-org/builder-agent` and `kaizen-agents-org/verifier` are downstream targets whose restore commits are evidence of drift.',
+        '## Ownership key',
+        '```text',
+        'kaizen-agents-org/.github',
+        'builder-agent:skills/kaizen-bug-router',
+        'verifier:skills/pr-guardian',
+        '```'
       ].join('\n\n')
     },
     {
@@ -73,12 +79,15 @@ describe('evaluateIssueIntake', () => {
         'The target repository is `kaizen-agents-org/verifier`, where canonical config drift is visible.'
       ].join('\n\n')
     }
-  ])('honors the current repository as explicit owner for .github issue #$issue', ({ body }) => {
-    expect(evaluateIssueIntake({
+  ])('reruns .github issue #$issue without restoring upstream-first', ({ body }) => {
+    const decision = evaluateIssueIntake({
       repo: 'kaizen-agents-org/.github',
       openPullRequests: [],
       issue: issue({ body })
-    }).status).toBe('proceed');
+    });
+
+    expect(decision.status).toBe('proceed');
+    expect(decision.status).not.toBe('upstream_first');
   });
 
   it('fails closed when explicit ownership statements conflict', () => {
@@ -87,8 +96,10 @@ describe('evaluateIssueIntake', () => {
       openPullRequests: [],
       issue: issue({
         body: [
+          '## Ownership clarification',
           'The implementation owner is `kaizen-agents-org/.github`.',
-          'The canonical owner is `kaizen-agents-org/verifier`.',
+          '## Ownership key',
+          'kaizen-agents-org/verifier',
           'Sync the downstream copy after resolving the drift.'
         ].join('\n')
       })
@@ -104,6 +115,7 @@ describe('evaluateIssueIntake', () => {
       openPullRequests: [],
       issue: issue({
         body: [
+          '## Ownership clarification',
           'The canonical owner is `kaizen-agents-org/.github`.',
           'The downstream skill copy has drifted and must be synced from that source.'
         ].join('\n')
@@ -114,12 +126,111 @@ describe('evaluateIssueIntake', () => {
     expect(decision.reason).toContain('kaizen-agents-org/.github');
   });
 
+  it('accepts allowed structured owner values case-insensitively', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        body: [
+          '## Ownership clarification',
+          'The canonical owner is `KAIZEN-AGENTS-ORG/.GITHUB`.',
+          'The downstream copy drifted from the canonical source and needs sync.'
+        ].join('\n')
+      })
+    }).status).toBe('upstream_first');
+  });
+
+  it.each(['attacker/example', 'kaizen-agents-org/archived-repo'])(
+    'rejects structured owner %s outside the Organization allowlist',
+    (owner) => {
+      const decision = evaluateIssueIntake({
+        repo: 'kaizen-agents-org/kaizen-loop',
+        openPullRequests: [],
+        issue: issue({
+          body: [
+            '## Ownership clarification',
+            `The canonical owner is \`${owner}\`.`,
+            'The downstream copy drifted and needs sync.'
+          ].join('\n')
+        })
+      });
+
+      expect(decision.status).toBe('needs_context');
+      expect(decision.reason).toContain('outside the repositories allowed');
+    }
+  );
+
+  it('rejects URL owner fields as malformed', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        body: [
+          '## Ownership clarification',
+          'The canonical owner is https://github.com/kaizen-agents-org/.github.',
+          'The downstream copy drifted and needs sync.'
+        ].join('\n')
+      })
+    }).status).toBe('needs_context');
+  });
+
+  it.each([
+    '> The canonical owner is `kaizen-agents-org/.github`.',
+    '```text\nThe canonical owner is `kaizen-agents-org/.github`.\n```'
+  ])('rejects quoted or template owner declarations: %s', (declaration) => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        body: `## Ownership clarification\n${declaration}\nThe downstream copy drifted and needs sync.`
+      })
+    }).status).toBe('needs_context');
+  });
+
+  it('rejects owner declarations outside a structured ownership section', () => {
+    expect(evaluateIssueIntake({
+      repo: 'kaizen-agents-org/kaizen-loop',
+      openPullRequests: [],
+      issue: issue({
+        body: 'The canonical owner is `kaizen-agents-org/.github`. The downstream copy drifted and needs sync.'
+      })
+    }).status).toBe('needs_context');
+  });
+
+  it('rejects malformed and multiple owner fields', () => {
+    for (const body of [
+      '## Ownership clarification\nThe implementation owner is TBD.\nThe downstream copy drifted.',
+      [
+        '## Ownership clarification',
+        'The implementation owner is `kaizen-agents-org/.github`.',
+        'The canonical owner is `kaizen-agents-org/.github`.',
+        'The downstream copy drifted.'
+      ].join('\n')
+    ]) {
+      expect(evaluateIssueIntake({
+        repo: 'kaizen-agents-org/kaizen-loop',
+        openPullRequests: [],
+        issue: issue({ body })
+      }).status).toBe('needs_context');
+    }
+  });
+
+  it('does not let non-Kaizen organizations redirect intake to another repository', () => {
+    expect(evaluateIssueIntake({
+      repo: 'acme/app',
+      openPullRequests: [],
+      issue: issue({
+        body: 'The downstream copy drifted from canonical acme/shared and needs sync.'
+      })
+    }).status).toBe('needs_context');
+  });
+
   it('fails closed when source-of-truth text names multiple possible upstream repositories', () => {
     const decision = evaluateIssueIntake({
       repo: 'kaizen-agents-org/kaizen-loop',
       openPullRequests: [],
       issue: issue({
-        body: 'The canonical sync between kaizen-agents-org/.github and kaizen-agents-org/verifier has drifted, but the implementation owner is not specified.'
+        body: 'The canonical sync between kaizen-agents-org/.github and kaizen-agents-org/verifier has drifted, with no owner specified.'
       })
     });
 

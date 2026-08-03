@@ -15,6 +15,15 @@ export interface IssueIntakeDecision {
   evidence: string[];
 }
 
+const KAIZEN_AGENT_REPOS = new Set([
+  'kaizen-agents-org/.github',
+  'kaizen-agents-org/builder-agent',
+  'kaizen-agents-org/coderabbit',
+  'kaizen-agents-org/kaizen-loop',
+  'kaizen-agents-org/renovate-config',
+  'kaizen-agents-org/verifier'
+]);
+
 export function hasIssueIntakeDecisionComment(issue: GitHubIssue, status: IssueIntakeDecisionStatus): boolean {
   return (issue.comments ?? []).some((comment) =>
     comment.body.includes(`<!-- kaizen-loop:intake-decision status=${status} -->`)
@@ -37,7 +46,16 @@ export function evaluateIssueIntake(options: {
     };
   }
 
-  const explicitOwners = explicitOwnershipRepos(options.issue.body ?? '');
+  const explicitOwnership = parseExplicitOwnership(options.issue.body ?? '');
+  if (explicitOwnership.errors.length > 0) {
+    return {
+      status: 'needs_context',
+      reason: 'The issue contains invalid or ambiguous structured ownership metadata.',
+      evidence: explicitOwnership.errors
+    };
+  }
+
+  const explicitOwners = explicitOwnership.repos;
   if (explicitOwners.length > 1) {
     return {
       status: 'needs_context',
@@ -47,12 +65,29 @@ export function evaluateIssueIntake(options: {
   }
 
   const explicitOwner = explicitOwners[0];
+  if (explicitOwner && !isAllowedOwnershipRepo(explicitOwner, options.repo)) {
+    return {
+      status: 'needs_context',
+      reason: 'The explicitly named owner is outside the repositories allowed for this Organization.',
+      evidence: [`Rejected owner repository: ${explicitOwner}`]
+    };
+  }
   const currentRepoIsExplicitOwner = explicitOwner
     ? sameRepo(explicitOwner, options.repo)
     : false;
   const inferredUpstreamRepos = explicitOwner
     ? []
     : referencedUpstreamRepos(text, options.repo);
+  const disallowedInferredRepos = inferredUpstreamRepos.filter((repo) =>
+    !isAllowedOwnershipRepo(repo, options.repo)
+  );
+  if (mentionsSourceOfTruthSync(normalized) && disallowedInferredRepos.length > 0) {
+    return {
+      status: 'needs_context',
+      reason: 'The issue names a possible upstream repository outside the repositories allowed for this Organization.',
+      evidence: disallowedInferredRepos.map((repo) => `Rejected upstream repository: ${repo}`)
+    };
+  }
   if (mentionsSourceOfTruthSync(normalized) && inferredUpstreamRepos.length > 1) {
     return {
       status: 'needs_context',
@@ -134,39 +169,106 @@ function alreadyResolvedText(normalized: string): boolean {
   return /\balready\s+(resolved|fixed|addressed)\b/.test(normalized) || /\b(resolved|fixed|addressed)\s+by\s+#\d+\b/.test(normalized);
 }
 
-function explicitOwnershipRepos(body: string): string[] {
+function parseExplicitOwnership(body: string): { repos: string[]; errors: string[] } {
   const repos: string[] = [];
-  const ownerPattern = /\b(?:implementation|canonical)(?:\s+repository)?\s+owner\s+(?:is|:)\s*(?:\*{1,2}|_{1,2}|`)*([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/gi;
-  for (const match of body.matchAll(ownerPattern)) {
-    repos.push(match[1]);
+  const errors: string[] = [];
+  const ownerDeclaration = /\b(?:implementation|canonical)(?:\s+repository)?\s+owner\s+(?:is|:)/i;
+  const ownerFieldPrefix = /^(?:the\s+)?(?:implementation|canonical)(?:\s+repository)?\s+owner\s+(?:is|:)/i;
+  const ownerField = /^(?:the\s+)?(?:implementation|canonical)(?:\s+repository)?\s+owner\s+(?:is|:)\s*(?:\*{1,2})?`?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)`?(?:\*{1,2})?(?=$|[.,;\s])/i;
+  const clarificationPattern = /^##\s+Ownership clarification\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/gim;
+  const clarificationSections = [...body.matchAll(clarificationPattern)];
+  if (clarificationSections.length > 1) {
+    errors.push('Multiple Ownership clarification sections were found.');
+  }
+  for (const section of clarificationSections) {
+    let inFence = false;
+    let fields = 0;
+    for (const rawLine of section[1].split('\n')) {
+      const line = rawLine.trim();
+      if (line.startsWith('```')) {
+        inFence = !inFence;
+        continue;
+      }
+      const unquoted = line.replace(/^>\s*/, '');
+      if (!ownerFieldPrefix.test(unquoted)) {
+        if (ownerDeclaration.test(unquoted)) {
+          errors.push('Owner fields must start at the beginning of a line in Ownership clarification.');
+        }
+        continue;
+      }
+      if (inFence || line.startsWith('>')) {
+        errors.push('Ownership declarations in quotes or fenced templates are not authoritative.');
+        continue;
+      }
+      fields += 1;
+      const repo = unquoted.match(ownerField)?.[1];
+      if (!repo) {
+        errors.push('Malformed owner field in Ownership clarification.');
+      } else {
+        repos.push(repo);
+      }
+    }
+    if (fields > 1) errors.push('Ownership clarification contains multiple owner fields.');
   }
 
   const ownershipKeyPattern = /^##\s+Ownership key\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/gim;
-  for (const section of body.matchAll(ownershipKeyPattern)) {
-    const repo = section[1].match(/^\s*(?:```[^\n]*\n)?\s*([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\s*$/m)?.[1];
-    if (repo) repos.push(repo);
+  const ownershipKeySections = [...body.matchAll(ownershipKeyPattern)];
+  if (ownershipKeySections.length > 1) errors.push('Multiple Ownership key sections were found.');
+  for (const section of ownershipKeySections) {
+    const lines = section[1].split('\n').map((line) => line.trim()).filter(Boolean);
+    if (lines[0]?.startsWith('```')) lines.shift();
+    const firstValue = lines[0] ?? '';
+    const repo = firstValue.match(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/)?.[1];
+    if (!repo) {
+      errors.push('Ownership key must start with a repository in owner/name form.');
+    } else {
+      repos.push(repo);
+    }
   }
 
-  return repos.filter((repo, index) =>
-    repos.findIndex((candidate) => sameRepo(candidate, repo)) === index
-  );
+  const structuredRanges = [...clarificationSections, ...ownershipKeySections]
+    .map((match) => [match.index ?? 0, (match.index ?? 0) + match[0].length] as const);
+  let unstructuredText = body;
+  for (const [start, end] of structuredRanges.sort((left, right) => right[0] - left[0])) {
+    unstructuredText = `${unstructuredText.slice(0, start)}${' '.repeat(end - start)}${unstructuredText.slice(end)}`;
+  }
+  if (ownerDeclaration.test(unstructuredText)) {
+    errors.push('Ownership declarations must be inside an Ownership clarification or Ownership key section.');
+  }
+
+  return {
+    repos: repos.filter((repo, index) =>
+      repos.findIndex((candidate) => sameRepo(candidate, repo)) === index
+    ),
+    errors
+  };
 }
 
 function sameRepo(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
 }
 
+function isAllowedOwnershipRepo(repo: string, currentRepo: string): boolean {
+  const [currentOwner] = currentRepo.toLowerCase().split('/');
+  if (currentOwner === 'kaizen-agents-org') return KAIZEN_AGENT_REPOS.has(repo.toLowerCase());
+  return sameRepo(repo, currentRepo);
+}
+
 function referencedUpstreamRepos(text: string, currentRepo: string): string[] {
   const [currentOwner] = currentRepo.split('/');
   const urlRepos = [...text.matchAll(/(?:https?:\/\/)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=$|[/?#\s).,;:'"`\]])/g)]
-    .map((match) => match[1]);
+    .map((match) => normalizeRepoReference(match[1]));
   const bareRepos = [...text.matchAll(/(?:^|[\s([`])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)(?=$|[\s).,;:'"`\]])/g)]
-    .map((match) => match[1])
+    .map((match) => normalizeRepoReference(match[1]))
     .filter((repo) => !isPathLikeRepoReference(repo, currentOwner));
   const repos = [...urlRepos, ...bareRepos].filter((repo) => !sameRepo(repo, currentRepo));
   return repos.filter((repo, index) =>
     repos.findIndex((candidate) => sameRepo(candidate, repo)) === index
   );
+}
+
+function normalizeRepoReference(repo: string): string {
+  return repo.replace(/[.,;:]+$/, '');
 }
 
 function isPathLikeRepoReference(repo: string, currentOwner: string | undefined): boolean {
