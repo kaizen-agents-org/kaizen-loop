@@ -14,6 +14,9 @@ import {
 import { loadImplementationState, saveImplementationState } from '../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
+const sleepMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('node:timers/promises', () => ({ setTimeout: sleepMock }));
+
 describe('runPrGuardianSkill', () => {
   it('requires review feedback to be inspected before declaring a PR mergeable', async () => {
     const config = configSchema.parse({
@@ -25,12 +28,14 @@ describe('runPrGuardianSkill', () => {
       args,
       cwd: options?.cwd,
       exitCode: 0,
-      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
+      stdout: command === 'gh'
+        ? ghResponse(args, [], { comments: [{ id: 'human-comment', author: { login: 'reviewer' }, body: 'Please audit this.' }] })
+        : 'done',
       stderr: '',
       durationMs: 1
     }));
 
-    await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(runner, {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -88,7 +93,7 @@ describe('runPrGuardianSkill', () => {
     expect(result.summary).toContain('unresolved review thread');
     expect(result.raw).toContain('src/file.ts:12 by reviewer');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
-    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(4);
+    expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(5);
   });
 
   it('treats outdated unresolved review threads as blockers', async () => {
@@ -280,8 +285,14 @@ describe('runPrGuardianSkill', () => {
         if (isReviewApi(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[]', stderr: '', durationMs: 1 };
         }
+        if (isReviewCommentsApi(args) || isIssueCommentsApi(args)) {
+          return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[[]]', stderr: '', durationMs: 1 };
+        }
         if (isRequiredChecks(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: requiredChecksResponse(), stderr: '', durationMs: 1 };
+        }
+        if (isCheckRunsApi(args)) {
+          return { command, args, cwd: options?.cwd, exitCode: 0, stdout: JSON.stringify([{ check_runs: [] }]), stderr: '', durationMs: 1 };
         }
         reviewFetches += 1;
         return {
@@ -318,11 +329,12 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('success');
+    expect(result.status).toBe('success');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('api graphql'))).toHaveLength(4);
   });
 
-  it('waits once for late bot review threads before declaring success', async () => {
+  it('does not miss a late bot review during the initial settle window', async () => {
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 1 }
@@ -344,8 +356,14 @@ describe('runPrGuardianSkill', () => {
         if (isReviewApi(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[]', stderr: '', durationMs: 1 };
         }
+        if (isReviewCommentsApi(args) || isIssueCommentsApi(args)) {
+          return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[[]]', stderr: '', durationMs: 1 };
+        }
         if (isRequiredChecks(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: requiredChecksResponse(), stderr: '', durationMs: 1 };
+        }
+        if (isCheckRunsApi(args)) {
+          return { command, args, cwd: options?.cwd, exitCode: 0, stdout: JSON.stringify([{ check_runs: [] }]), stderr: '', durationMs: 1 };
         }
         reviewFetches += 1;
         return {
@@ -382,8 +400,289 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('failed');
-    expect(result.raw).toContain('bot review settle wait');
+    expect(result.raw).toContain('before the first guardian pass');
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
+  it('runs Guardian when a pending PR becomes ready without complete audit evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    let prViews = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && isPrView(args)) prViews += 1;
+      const statusCheckRollup = [{
+        name: 'test',
+        status: prViews < 3 ? 'IN_PROGRESS' : 'COMPLETED',
+        conclusion: prViews < 3 ? null : 'SUCCESS'
+      }];
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh' ? ghResponse(args, [], { statusCheckRollup }) : 'guardian pass complete',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(prViews).toBeGreaterThanOrEqual(3);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('still runs Guardian when only a generated CodeRabbit summary is present', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          comments: [{
+            id: 'summary',
+            author: { login: 'coderabbitai' },
+            body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nWalkthrough'
+          }]
+        })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('does not trust a CodeRabbit marker from a lookalike actor', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          comments: [{
+            id: 'lookalike',
+            author: { login: 'coderabbitai-fan' },
+            body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->'
+          }]
+        })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('does not trust a Codex no-findings comment for an old head', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'new-head-sha',
+          comments: [{
+            id: 'old-codex-review',
+            author: { login: 'chatgpt-codex-connector[bot]' },
+            body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+          }]
+        })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('reconciles a thrown guardian timeout when GitHub is stably ready', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    let reviewFetches = 0;
+    let guardianAttempted = false;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') {
+        guardianAttempted = true;
+        throw new Error('Command timed out after 60000ms');
+      }
+      if (command === 'gh' && args.join(' ').startsWith('api graphql')) reviewFetches += 1;
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: ghResponse(args, reviewFetches === 1
+          ? [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Pending review.' }]
+          : [], guardianAttempted ? {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: new Date(Math.floor(Date.now() / 1_000) * 1_000 + 2_000).toISOString(),
+              body: "Codex Review: Didn’t find any major issues. What shall we delve into next?\n\n**Reviewed commit:** `abc1234567`\n\n<details>standard footer</details>"
+            }]
+          } : undefined),
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.raw).toContain('Command timed out');
+  });
+
+  it('does not reconcile a timeout with audit evidence from the guardian attempt start second', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    let reviewFetches = 0;
+    const fixedNow = Date.parse('2026-07-13T01:16:21.500Z');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    const evidenceAt = new Date(Math.floor(fixedNow / 1_000) * 1_000).toISOString();
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') throw new Error('Command timed out after 60000ms');
+      if (command === 'gh' && args.join(' ').startsWith('api graphql')) reviewFetches += 1;
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: ghResponse(args, reviewFetches === 1
+          ? [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Pending review.' }]
+          : [], {
+          headRefOid: 'abc123456789',
+          comments: [{
+            id: 'old-codex-review',
+            author: { login: 'chatgpt-codex-connector[bot]' },
+            updatedAt: evidenceAt,
+            body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+          }]
+        }),
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    try {
+      const result = await runPrGuardianSkill(runner, {
+        config,
+        workspaceDir: '/tmp/workspace',
+        repo: 'o/r',
+        prUrl: 'https://github.com/o/r/pull/4',
+        prNumber: 4,
+        branch: 'branch',
+        baseBranch: 'main'
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.raw).toContain('Command timed out');
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('preserves a real review blocker after a thrown guardian timeout', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') throw new Error('Command timed out after 60000ms');
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: ghResponse(args, [{ path: 'src/file.ts', line: 12, author: 'reviewer', body: 'Please fix this.' }]),
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.raw).toContain('unresolved review thread');
   });
 
   it('requires two unchanged stabilization snapshots', async () => {
@@ -398,7 +697,7 @@ describe('runPrGuardianSkill', () => {
       cwd: options?.cwd,
       exitCode: 0,
       stdout: command === 'gh'
-        ? ghResponse(args, [], { headRefOid: isPrView(args) && ++views === 4 ? 'new-head' : 'old-head' })
+        ? ghResponse(args, [], { headRefOid: isPrView(args) && ++views % 2 === 0 ? 'new-head' : 'old-head' })
         : 'done',
       stderr: '',
       durationMs: 1
@@ -495,6 +794,292 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.find(([command, args]) => command === 'gh' && isReviewApi(args))?.[1]).toContain('--paginate');
   });
 
+  it('runs Guardian when later PR activity shares the no-findings timestamp second', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'abc123456789',
+          comments: [
+            {
+              id: 'codex-clean',
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn’t find any major issues. What shall we delve into next?\n\n**Reviewed commit:** `abc1234567`\n\n<details>standard footer</details>"
+            },
+            {
+              id: 'later-human-comment',
+              author: { login: 'reviewer' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: 'Please inspect the generated artifact.'
+            }
+          ]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('uses the newest current-head no-findings evidence after intervening activity', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const noFindings = (updatedAt: string) => ({
+      author: { login: 'chatgpt-codex-connector[bot]' },
+      updatedAt,
+      body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'abc123456789',
+          comments: [
+            noFindings('2026-07-13T01:16:20Z'),
+            {
+              author: { login: 'reviewer' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: 'Please recheck this.'
+            },
+            noFindings('2026-07-13T01:16:22Z')
+          ]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
+  it('does not trust a mixed Codex message containing findings as no-findings evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'abc123456789',
+          comments: [{
+            author: { login: 'chatgpt-codex-connector[bot]' },
+            updatedAt: '2026-07-13T01:16:21Z',
+            body: "Codex Review: Didn't find any major issues. However, one finding remains.\n\n**Reviewed commit:** `abc1234567`"
+          }]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('does not miss a check annotation that arrives during stabilization', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    let checkRunFetches = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      let stdout: string;
+      if (command === 'gh' && isCheckRunsApi(args)) {
+        checkRunFetches += 1;
+        stdout = JSON.stringify([{ check_runs: checkRunFetches === 1 ? [] : [{
+          id: 99,
+          name: 'lint',
+          completed_at: '2026-07-13T01:16:22Z',
+          output: { annotations_count: 1 }
+        }] }]);
+      } else if (command === 'gh' && isCheckAnnotationsApi(args)) {
+        stdout = JSON.stringify([[{
+          annotation_level: 'warning',
+          path: 'src/file.ts',
+          start_line: 12,
+          message: 'Generated output is stale.'
+        }]]);
+      } else {
+        stdout = command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          })
+          : 'guardian pass complete';
+      }
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('runs Guardian for an auditable annotation without a check completion time', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      let stdout: string;
+      if (command === 'gh' && isCheckRunsApi(args)) {
+        stdout = JSON.stringify([{ check_runs: [{
+          id: 99,
+          name: 'optional-lint',
+          completed_at: null,
+          output: { annotations_count: 1 }
+        }] }]);
+      } else if (command === 'gh' && isCheckAnnotationsApi(args)) {
+        stdout = JSON.stringify([[{
+          annotation_level: 'warning',
+          path: 'src/file.ts',
+          start_line: 12,
+          message: 'Review this warning.'
+        }]]);
+      } else {
+        stdout = command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          })
+          : 'guardian pass complete';
+      }
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('bounds concurrent check annotation requests', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    let activeAnnotationRequests = 0;
+    let maxActiveAnnotationRequests = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      let stdout: string;
+      if (command === 'gh' && isCheckRunsApi(args)) {
+        stdout = JSON.stringify([{ check_runs: Array.from({ length: 5 }, (_, index) => ({
+          id: index + 1,
+          name: `check-${index + 1}`,
+          completed_at: '2026-07-13T01:16:20Z',
+          output: { annotations_count: 1 }
+        })) }]);
+      } else if (command === 'gh' && isCheckAnnotationsApi(args)) {
+        activeAnnotationRequests += 1;
+        maxActiveAnnotationRequests = Math.max(maxActiveAnnotationRequests, activeAnnotationRequests);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        activeAnnotationRequests -= 1;
+        stdout = JSON.stringify([[{ annotation_level: 'notice', message: 'Informational.' }]]);
+      } else {
+        stdout = command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          })
+          : 'guardian pass complete';
+      }
+      return { command, args, cwd: options?.cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(maxActiveAnnotationRequests).toBe(4);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
   it('accepts current-head Codex comment and CodeRabbit status evidence when REST reviews are stale', async () => {
     const config = configSchema.parse({
       version: 1,
@@ -528,9 +1113,18 @@ describe('runPrGuardianSkill', () => {
             headRefOid: 'abc123456789',
             comments: [{
               author: { login: 'chatgpt-codex-connector[bot]' },
-              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn’t find any major issues. What shall we delve into next?\n\n**Reviewed commit:** `abc1234567`\n\n<details>standard footer</details>"
             }],
-            statusCheckRollup: [{ context: 'CodeRabbit', state: 'SUCCESS' }]
+            statusCheckRollup: [
+              {
+                name: 'verify',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-13T01:16:22Z'
+              },
+              { context: 'CodeRabbit', state: 'SUCCESS' }
+            ]
           })
         : 'done',
       stderr: '',
@@ -548,8 +1142,282 @@ describe('runPrGuardianSkill', () => {
     });
 
     expect(result.status).toBe('success');
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
     expect(result.summary).not.toContain('not for current PR head');
+  });
+
+  it('runs Guardian when an optional check fails after no-findings evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isRequiredChecks(args)
+          ? requiredChecksResponse()
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            mergeStateStatus: 'UNSTABLE',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }],
+            statusCheckRollup: [{
+              name: 'optional-analysis',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+              startedAt: '2026-07-13T01:16:21Z',
+              completedAt: '2026-07-13T01:16:22Z'
+            }]
+          })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('does not finish Guardian while an optional check is still in progress', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isRequiredChecks(args)
+          ? requiredChecksResponse()
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            mergeStateStatus: 'UNSTABLE',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:22Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }],
+            statusCheckRollup: [{
+              name: 'optional-analysis',
+              status: 'IN_PROGRESS',
+              conclusion: '',
+              startedAt: '2026-07-13T01:16:21Z'
+            }]
+          })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('auditable PR activity is still in progress');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('does not finish Guardian while an optional legacy status is pending', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isRequiredChecks(args)
+          ? requiredChecksResponse()
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            mergeStateStatus: 'UNSTABLE',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:22Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }],
+            statusCheckRollup: [{
+              __typename: 'StatusContext',
+              context: 'optional-analysis',
+              state: 'PENDING',
+              startedAt: '2026-07-13T01:16:21Z'
+            }]
+          })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('auditable PR activity is still in progress');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('runs Guardian for a nested review comment newer than no-findings evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isReviewCommentsApi(args)
+          ? JSON.stringify([[{
+            id: 42,
+            in_reply_to_id: 41,
+            user: { login: 'reviewer' },
+            created_at: '2026-07-13T01:16:22Z',
+            updated_at: '2026-07-13T01:16:22Z',
+            commit_id: 'abc123456789'
+          }]])
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('runs Guardian for a top-level comment on a later pagination page', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' && isIssueCommentsApi(args)
+        ? JSON.stringify([[
+          {
+            id: 41,
+            user: { login: 'chatgpt-codex-connector[bot]' },
+            created_at: '2026-07-13T01:16:21Z',
+            updated_at: '2026-07-13T01:16:21Z',
+            body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+          }
+        ], [
+          {
+            id: 42,
+            user: { login: 'reviewer' },
+            created_at: '2026-07-13T01:16:22Z',
+            updated_at: '2026-07-13T01:16:22Z',
+            body: 'Please audit this later comment.'
+          }
+        ]])
+        : command === 'gh'
+          ? ghResponse(args, [], { headRefOid: 'abc123456789' })
+          : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('fails closed when review comment activity has no valid timestamp', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' && isReviewCommentsApi(args)
+        ? JSON.stringify([[{ id: 42, user: { login: 'reviewer' } }]])
+        : command === 'gh'
+          ? ghResponse(args, [])
+          : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('without an id or valid timestamp');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
   });
 
   it('does not accept a current-head Codex findings comment as no-findings evidence', async () => {
@@ -597,6 +1465,239 @@ describe('runPrGuardianSkill', () => {
     expect(result.summary).toContain('not for current PR head');
   });
 
+  it('does not trust old bot evidence while a newer undated review is pending', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' && isReviewApi(args)
+        ? JSON.stringify([{
+          id: 1,
+          user: { login: 'chatgpt-codex-connector[bot]' },
+          state: 'COMMENTED',
+          submitted_at: '2026-07-13T01:16:21Z',
+          commit_id: 'abc123456789'
+        }, {
+          id: 2,
+          user: { login: 'chatgpt-codex-connector[bot]' },
+          state: 'PENDING',
+          commit_id: 'abc123456789'
+        }])
+        : command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              id: 1,
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          })
+          : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('auditable PR activity is still in progress');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('ignores an unrelated human draft review when current-head bot evidence is complete', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' && isReviewApi(args)
+        ? JSON.stringify([{
+          id: 1,
+          user: { login: 'human-reviewer' },
+          state: 'PENDING',
+          commit_id: 'abc123456789'
+        }])
+        : command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            comments: [{
+              id: 1,
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }]
+          })
+          : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
+  it('does not finish early while a requested bot remains pending despite older terminal evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    let requested = true;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') requested = false;
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            reviewRequests: requested ? [{ login: 'coderabbitai[bot]' }] : [],
+            comments: [{
+              id: 1,
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }],
+            statusCheckRollup: [
+              { name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' },
+              { context: 'CodeRabbit', state: 'SUCCESS' }
+            ]
+          })
+          : 'guardian pass complete',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('does not treat human or team reviewers as expected bots', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'abc123456789',
+          reviewRequests: [
+            { login: 'codex-maintainer' },
+            { __typename: 'Team', slug: 'platform-reviewers', name: 'Platform Reviewers' }
+          ],
+          comments: [{
+            id: 1,
+            author: { login: 'chatgpt-codex-connector[bot]' },
+            updatedAt: '2026-07-13T01:16:21Z',
+            body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+          }]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
+  it('enforces a 30-second minimum between audited early-success snapshots', async () => {
+    sleepMock.mockClear();
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'abc123456789',
+          comments: [{
+            id: 1,
+            author: { login: 'chatgpt-codex-connector[bot]' },
+            updatedAt: '2026-07-13T01:16:21Z',
+            body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+          }]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(sleepMock).toHaveBeenCalledTimes(2);
+    expect(sleepMock).toHaveBeenNthCalledWith(1, 30_000);
+    expect(sleepMock).toHaveBeenNthCalledWith(2, 30_000);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
   it('reactivates a successful same-head job when a late review thread appears', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
@@ -609,6 +1710,7 @@ describe('runPrGuardianSkill', () => {
       repo: 'o/r',
       prUrl: 'https://github.com/o/r/pull/4',
       prNumber: 4,
+      issueNumber: 1,
       branch: 'kaizen/issue-1-fix',
       baseBranch: 'main',
       headSha: 'head-sha'
@@ -655,6 +1757,170 @@ describe('runPrGuardianSkill', () => {
 
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+
+    lateThread = true;
+    const third = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(third).toEqual([]);
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([
+      expect.objectContaining({ status: 'blocked', reactivationCount: 2, attemptCount: 2 })
+    ]);
+    await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
+      phase: 'guardian',
+      lastFailure: expect.stringContaining('retry budget exhausted')
+    });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
+  it('does not reactivate a successful job for a completed optional check rerun', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    let optionalCheckStartedAt = '2026-07-13T01:16:21Z';
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isRequiredChecks(args)
+          ? requiredChecksResponse([{ name: 'verify', conclusion: 'SUCCESS' }])
+          : ghResponse(args, [], {
+            statusCheckRollup: [
+              { name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' },
+              {
+                name: 'optional-analysis',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                startedAt: optionalCheckStartedAt,
+                completedAt: optionalCheckStartedAt
+              }
+            ]
+          })
+        : 'done',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const first = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+    expect(first[0].status).toBe('success');
+
+    optionalCheckStartedAt = '2026-07-13T01:17:21Z';
+    const second = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(second).toEqual([]);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
+  it('reactivates a successful same-head job when a resolved thread receives a late reply', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    let lateReply = false;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') lateReply = false;
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh' && isReviewCommentsApi(args)
+          ? lateReply
+            ? JSON.stringify([[{
+              id: 42,
+              in_reply_to_id: 41,
+              user: { login: 'reviewer' },
+              created_at: '2026-07-13T01:16:22Z',
+              updated_at: '2026-07-13T01:16:22Z',
+              commit_id: 'head-sha'
+            }]])
+            : '[[]]'
+          : command === 'gh'
+            ? ghResponse(args, [])
+            : 'done',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const first = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+    expect(first[0].status).toBe('success');
+
+    lateReply = true;
+    const second = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+
+    lateReply = true;
+    const third = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(third).toEqual([]);
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([
+      expect.objectContaining({ status: 'blocked', reactivationCount: 2, attemptCount: 2 })
+    ]);
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
@@ -778,6 +2044,266 @@ describe('runPrGuardianSkill', () => {
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', headSha: 'new-head', reactivationCount: 1 });
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
+  it('preserves success when Guardian itself advances the audited head', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    const original = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'old-head'
+    });
+    let headRefOid = 'old-head';
+    let initialBlocker = true;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') {
+        headRefOid = 'new-head';
+        initialBlocker = false;
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh'
+          ? ghResponse(
+            args,
+            initialBlocker ? [{ path: 'src/file.ts', line: 12, author: 'codex', body: 'Fix this.' }] : [],
+            { headRefOid, mergeStateStatus: initialBlocker ? 'BLOCKED' : 'CLEAN' }
+          )
+          : 'done',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const first = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+    expect(first[0]).toMatchObject({ status: 'success', headSha: 'new-head' });
+
+    const audited = (await listPrGuardianJobs(stateDir))[0];
+    const duplicate = {
+      ...audited,
+      id: 'o-r-pr-4-new-head',
+      status: 'pending' as const,
+      attemptCount: 0,
+      lastObservedFingerprint: undefined,
+      updatedAt: new Date(Date.parse(audited.updatedAt) + 1_000).toISOString()
+    };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${duplicate.id}.json`),
+      `${JSON.stringify(duplicate, null, 2)}\n`
+    );
+    await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(2);
+    await saveImplementationState(stateDir, {
+      issue: 1,
+      branch: 'kaizen/issue-1-fix',
+      phase: 'complete',
+      attempt: 1,
+      pr: 4,
+      prUrl: 'https://github.com/o/r/pull/4',
+      lastFailure: 'stale migration state'
+    });
+
+    const rediscovered = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest({ headRefOid: 'new-head' })]
+    });
+    expect(rediscovered).toHaveLength(1);
+    expect(rediscovered[0]).toMatchObject({ id: duplicate.id, status: 'pending', attemptCount: 1 });
+    await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(1);
+    const synchronizedState = await loadImplementationState(stateDir, 1);
+    expect(synchronizedState).toMatchObject({ phase: 'guardian' });
+    expect(synchronizedState).not.toHaveProperty('lastFailure');
+
+    const second = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ status: 'success', headSha: 'new-head' });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+
+    const third = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(third).toEqual([]);
+    const jobs = await listPrGuardianJobs(stateDir);
+    expect(jobs).toEqual([expect.objectContaining({ status: 'success', headSha: 'new-head' })]);
+    expect(jobs[0].reactivationCount).toBeUndefined();
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+
+    const reverted = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'old-head'
+    });
+    expect(reverted).toMatchObject({ id: original.id, headSha: 'old-head', status: 'pending' });
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: duplicate.id, headSha: 'new-head', status: 'success' }),
+      expect.objectContaining({ id: original.id, headSha: 'old-head', status: 'pending' })
+    ]));
+    await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(2);
+  });
+
+  it('does not reset the retry budget when consolidating a duplicate pending job', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', maxAttempts: 1 }
+    });
+    const successful = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'codex/daily-dogfood-sync',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${successful.id}.json`),
+      `${JSON.stringify({ ...successful, status: 'success', attemptCount: 1 }, null, 2)}\n`
+    );
+    const duplicate = { ...successful, id: 'duplicate-head-job', status: 'pending', attemptCount: 0 };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${duplicate.id}.json`),
+      `${JSON.stringify(duplicate, null, 2)}\n`
+    );
+
+    const [consolidated] = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest()]
+    });
+
+    expect(consolidated).toMatchObject({ id: duplicate.id, status: 'blocked', attemptCount: 1 });
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([expect.objectContaining({
+      id: duplicate.id,
+      status: 'blocked',
+      attemptCount: 1
+    })]);
+  });
+
+  it('preserves a newer blocked result when consolidating an older success', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({ version: 1, guardian: { enabled: true, mode: 'async' } });
+    const successful = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'codex/daily-dogfood-sync',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${successful.id}.json`),
+      `${JSON.stringify({ ...successful, status: 'success', updatedAt: '2026-01-01T00:00:00.000Z' }, null, 2)}\n`
+    );
+    const blocked = {
+      ...successful,
+      id: 'newer-blocked-job',
+      status: 'blocked',
+      updatedAt: '2026-01-01T00:00:01.000Z',
+      lastBlocker: 'A late review remains unresolved.'
+    };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${blocked.id}.json`),
+      `${JSON.stringify(blocked, null, 2)}\n`
+    );
+
+    const [consolidated] = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest()]
+    });
+
+    expect(consolidated).toMatchObject({
+      id: blocked.id,
+      status: 'blocked',
+      lastBlocker: 'A late review remains unresolved.'
+    });
+    await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
+      phase: 'guardian',
+      lastFailure: 'A late review remains unresolved.'
+    });
+  });
+
+  it('prefers a newer pending audit over an older running duplicate', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({ version: 1, guardian: { enabled: true, mode: 'async' } });
+    const running = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'codex/daily-dogfood-sync',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${running.id}.json`),
+      `${JSON.stringify({ ...running, status: 'running', updatedAt: '2026-01-01T00:00:00.000Z' }, null, 2)}\n`
+    );
+    const pending = {
+      ...running,
+      id: 'newer-pending-job',
+      status: 'pending',
+      updatedAt: '2026-01-01T00:00:01.000Z'
+    };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${pending.id}.json`),
+      `${JSON.stringify(pending, null, 2)}\n`
+    );
+
+    const [consolidated] = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest()]
+    });
+
+    expect(consolidated).toMatchObject({ id: pending.id, status: 'pending' });
   });
 
   it('enqueues only marked same-repository generated sync pull requests', async () => {
@@ -1223,6 +2749,7 @@ function ghResponse(
     mergeStateStatus: string;
     mergeable: string;
     reviewDecision: string;
+    reviewRequests: Array<{ __typename?: string; typename?: string; login?: string; slug?: string; name?: string }>;
     statusCheckRollup: Array<Record<string, unknown>>;
     headRefOid: string;
     reviews: Array<Record<string, unknown>>;
@@ -1233,6 +2760,18 @@ function ghResponse(
 ): string {
   if (isPrView(args)) return mergeablePrResponse(pr);
   if (isReviewApi(args)) return JSON.stringify([]);
+  if (isReviewCommentsApi(args)) return JSON.stringify([[]]);
+  if (isIssueCommentsApi(args)) return JSON.stringify([(
+    pr.comments ?? []
+  ).map((comment, index) => ({
+    id: comment.id ?? index + 1,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    body: comment.body,
+    user: comment.author
+  }))]);
+  if (isCheckRunsApi(args)) return JSON.stringify([{ check_runs: [] }]);
+  if (isCheckAnnotationsApi(args)) return JSON.stringify([[]]);
   if (isRequiredChecks(args)) return requiredChecksResponse(pr.statusCheckRollup);
   return reviewThreadsResponse(threads);
 }
@@ -1243,6 +2782,22 @@ function isPrView(args: string[]): boolean {
 
 function isReviewApi(args: string[]): boolean {
   return args[0] === 'api' && args.some((arg) => /\/pulls\/\d+\/reviews/.test(arg));
+}
+
+function isReviewCommentsApi(args: string[]): boolean {
+  return args[0] === 'api' && args.some((arg) => /\/pulls\/\d+\/comments/.test(arg));
+}
+
+function isIssueCommentsApi(args: string[]): boolean {
+  return args[0] === 'api' && args.some((arg) => /\/issues\/\d+\/comments/.test(arg));
+}
+
+function isCheckRunsApi(args: string[]): boolean {
+  return args[0] === 'api' && args.some((arg) => /\/commits\/[^/]+\/check-runs/.test(arg));
+}
+
+function isCheckAnnotationsApi(args: string[]): boolean {
+  return args[0] === 'api' && args.some((arg) => /\/check-runs\/\d+\/annotations/.test(arg));
 }
 
 function isRequiredChecks(args: string[]): boolean {
@@ -1279,6 +2834,7 @@ function mergeablePrResponse(pr: Partial<{
   mergeStateStatus: string;
   mergeable: string;
   reviewDecision: string;
+  reviewRequests: Array<{ __typename?: string; typename?: string; login?: string; slug?: string; name?: string }>;
   statusCheckRollup: Array<Record<string, unknown>>;
   headRefOid: string;
   reviews: Array<Record<string, unknown>>;
@@ -1292,6 +2848,7 @@ function mergeablePrResponse(pr: Partial<{
     mergeStateStatus: pr.mergeStateStatus ?? 'CLEAN',
     mergeable: pr.mergeable ?? 'MERGEABLE',
     reviewDecision: pr.reviewDecision ?? '',
+    reviewRequests: pr.reviewRequests ?? [],
     headRefOid: pr.headRefOid ?? 'head-sha',
     baseRefName: pr.baseRefName ?? 'main',
     closingIssuesReferences: pr.closingIssuesReferences ?? [],
