@@ -64,6 +64,7 @@ export async function prepareActionsFix(options) {
     const context = await loadActionsContext(options.cwd, options.issue, command);
     await assertAuthorized(context.github, context.repo, context.issue, context.config);
     assertActionsVerifierTrustRoot(context.config);
+    await assertVerifierRuntimeFresh(context.config, command);
     const git = new GitClient(command, options.cwd);
     const baseSha = await git.revParse('HEAD');
     const prompt = buildActionsFixPrompt({ repo: context.repo, issue: context.issue, config: context.config, attempt: 1 });

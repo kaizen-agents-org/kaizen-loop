@@ -191,7 +191,11 @@ export const configSchema = z
           .default('https://github.com/kaizen-agents-org/verifier.git'),
         expectedRef: z.string()
           .regex(/^refs\/heads\/[A-Za-z0-9._/-]+$/)
-          .refine((value) => !value.includes('..') && !value.includes('//') && !value.endsWith('/'), 'expectedRef must be a canonical branch ref')
+          .refine(
+            (value) => !value.includes('..') && !value.includes('//') && !value.endsWith('/') &&
+              value.split('/').every((component) => !component.startsWith('.') && !component.endsWith('.')),
+            'expectedRef must be a canonical branch ref'
+          )
           .default('refs/heads/main'),
         freshnessTimeoutSeconds: z.number().int().positive().max(300).default(30)
       })

@@ -95,6 +95,11 @@ describe('configSchema', () => {
     })).toThrow('expectedRepository must use HTTPS');
   });
 
+  it.each(['refs/heads/release.', 'refs/heads/.hidden'])('rejects Git-invalid trusted verifier ref %s', (expectedRef) => {
+    expect(() => configSchema.parse({ version: 1, verifier: { expectedRef } }))
+      .toThrow('expectedRef must be a canonical branch ref');
+  });
+
   it('rejects invalid scheduler values', () => {
     expect(() => configSchema.parse({ version: 1, scheduler: { nightly: { time: '02:00' } } })).toThrow();
     expect(() => configSchema.parse({ version: 1, scheduler: { afternoon: { time: '14:00' } } })).toThrow();

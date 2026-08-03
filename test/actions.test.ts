@@ -32,6 +32,17 @@ describe('GitHub Actions fix workflow', () => {
         return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
       }
       if (args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
+      if (command === 'git' && args[0] === 'ls-remote') {
+        return result(command, args, `${'b'.repeat(40)}\trefs/heads/main\n`);
+      }
+      if (command === 'verifier' && args.join(' ') === '--version --json') {
+        const commit = 'b'.repeat(40);
+        return result(command, args, JSON.stringify({
+          name: 'verifier', version: '0.0.0', status: 'current', stale: false,
+          build: { commit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+          runtime: { commit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+        }));
+      }
       if (command === 'git' && args[0] === 'rev-parse') return result(command, args, `${'a'.repeat(40)}\n`);
       throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
     });
@@ -45,6 +56,8 @@ describe('GitHub Actions fix workflow', () => {
     expect(prompt).toContain('Do not run repository setup or verification commands in this provider job');
     expect(prompt).not.toContain('npm test');
     expect(calls.some((call) => call.includes('collaborators/maintainer/permission'))).toBe(true);
+    expect(calls).toContain('git ls-remote --exit-code https://github.com/kaizen-agents-org/verifier.git refs/heads/main');
+    expect(calls).toContain('verifier --version --json');
     await expect(fs.access(path.join(cwd, '.kaizen', 'registry.json'))).rejects.toThrow();
   });
 
