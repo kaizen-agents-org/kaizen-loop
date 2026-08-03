@@ -94,27 +94,40 @@ export async function enqueuePrGuardianJob(options: {
     updatedAt: now,
     lastBlocker: options.config.guardian.enabled ? undefined : 'PR guardian is disabled.'
   };
-  const existing = await readGuardianJob(options.stateDir, job.id);
-  const matching = (existing?.headSha === options.headSha ? existing : undefined) ?? (await listPrGuardianJobs(options.stateDir))
+  const jobs = await listPrGuardianJobs(options.stateDir);
+  const existing = jobs.find((candidate) => candidate.id === job.id);
+  const matches = jobs
     .filter((candidate) =>
       candidate.repo === options.repo &&
       candidate.prNumber === options.prNumber &&
       candidate.headSha === options.headSha
     )
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    .sort((a, b) => guardianJobStatusRank(b.status) - guardianJobStatusRank(a.status) || b.updatedAt.localeCompare(a.updatedAt));
+  const matching = matches[0];
   if (matching) {
-    if (options.issueNumber && !matching.issueNumber) {
-      const linked = { ...matching, issueNumber: options.issueNumber, updatedAt: now };
-      await writeGuardianJob(options.stateDir, linked);
-      return linked;
+    const issueNumber = options.issueNumber ?? matching.issueNumber ?? matches.find((candidate) => candidate.issueNumber)?.issueNumber;
+    const canonical = issueNumber && !matching.issueNumber
+      ? { ...matching, issueNumber, updatedAt: now }
+      : matching;
+    if (canonical !== matching) await writeGuardianJob(options.stateDir, canonical);
+    for (const duplicate of matches.slice(1)) {
+      await fs.rm(path.join(guardianJobsDir(options.stateDir), `${duplicate.id}.json`), { force: true });
     }
-    return matching;
+    return canonical;
   }
   const created = existing && existing.headSha !== options.headSha
     ? { ...job, issueNumber: job.issueNumber ?? existing.issueNumber }
     : job;
   await writeGuardianJob(options.stateDir, created);
   return created;
+}
+
+function guardianJobStatusRank(status: PrGuardianJobStatus): number {
+  if (status === 'success') return 4;
+  if (status === 'running') return 3;
+  if (status === 'pending') return 2;
+  if (status === 'blocked') return 1;
+  return 0;
 }
 
 export async function enqueueManagedPrGuardianJobs(options: {

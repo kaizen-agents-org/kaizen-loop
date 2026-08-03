@@ -1979,6 +1979,20 @@ describe('runPrGuardianSkill', () => {
     });
     expect(first[0]).toMatchObject({ status: 'success', headSha: 'new-head' });
 
+    const audited = (await listPrGuardianJobs(stateDir))[0];
+    const duplicate = {
+      ...audited,
+      id: 'o-r-pr-4-new-head',
+      status: 'pending' as const,
+      attemptCount: 0,
+      updatedAt: new Date(Date.parse(audited.updatedAt) + 1_000).toISOString()
+    };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${duplicate.id}.json`),
+      `${JSON.stringify(duplicate, null, 2)}\n`
+    );
+    await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(2);
+
     const rediscovered = await enqueueManagedPrGuardianJobs({
       stateDir,
       config,
