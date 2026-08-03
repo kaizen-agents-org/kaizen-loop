@@ -345,7 +345,7 @@ issues:
 
 `outcome` の取りうる値: `direct-commit` | `pr-created` | `failed` | `blocked` | `skipped`。primary disposition は outcome と別で、`kaizen:needs-human` は schema-valid な具体的 human request が未回答の場合だけ付与する。一般的 blocked、上流先行、試行上限、一時障害はそれぞれ専用 disposition を使う。
 
-`queue.health.state` は backlog が空なら `idle`、処理可能または処理済みなら `healthy`。backlog 全件が同じ gate で skip された最初の run は `degraded`、同じ状態が `report.starvationRuns` 回続くと `starved` になり、`warning` と開始時刻 `since` を記録する。プロセス自体に失敗がなければ `result: "success"` は維持する。
+`queue.health.state` は、run 自体が失敗した場合は `blocked`、成功した run で backlog が空なら `idle`、処理可能または処理済みなら `healthy`。成功した run でも eligible issue がありながら処理件数が 0 の場合は `degraded` とし、理由を `warning` に記録する。backlog 全件が同じ gate で skip された最初の run は `degraded`、同じ状態が `report.starvationRuns` 回続くと `starved` になり、`warning` と開始時刻 `since` を記録する。プロセス自体に失敗がなければ `result: "success"` は維持する。
 
 `discoveredFollowups` は builder-agent が返した別バグを Kaizen Loop が起票または重複判定した場合だけ記録する。`status: "created"` は新規 Issue、`status: "duplicate"` は同じタイトルの open Issue があり起票をスキップした follow-up を示す。
 

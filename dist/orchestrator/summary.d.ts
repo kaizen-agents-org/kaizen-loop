@@ -36,7 +36,7 @@ export interface RunQueueSummary {
         count: number;
     }>;
     health: {
-        state: 'healthy' | 'idle' | 'degraded' | 'starved';
+        state: 'healthy' | 'idle' | 'degraded' | 'starved' | 'blocked';
         consecutiveZeroThroughputRuns: number;
         since?: string;
         warning?: string;
@@ -60,6 +60,7 @@ export declare function summarizeQueue(options: {
     backlogCount: number;
     eligibleCount: number;
     processedCount: number;
+    result: RunSummary['result'];
     skipped: Array<{
         number: number;
         reason: string;

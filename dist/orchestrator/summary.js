@@ -4,8 +4,17 @@ export function summarizeQueue(options) {
             .reduce((groups, item) => groups.set(item.reason, (groups.get(item.reason) ?? 0) + 1), new Map())]
         .map(([reason, count]) => ({ reason, count }))
         .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason));
+    if (options.result === 'failed') {
+        const failureReason = options.skipped.find((item) => item.number === 0)?.reason;
+        return queueSummary(options, skipReasons, 'blocked', options.processedCount === 0 ? 1 : 0, options.processedCount === 0 ? options.observedAt : undefined, failureReason
+            ? `Queue blocked because the run failed: ${failureReason}`
+            : 'Queue blocked because the run failed.');
+    }
     if (options.backlogCount === 0) {
         return queueSummary(options, skipReasons, 'idle', 0);
+    }
+    if (options.eligibleCount > 0 && options.processedCount === 0) {
+        return queueSummary(options, skipReasons, 'degraded', 1, options.observedAt, `Queue degraded because ${options.eligibleCount} eligible issue(s) were not processed.`);
     }
     const gate = singleSkipGate(skipReasons, options.backlogCount);
     const fullySkippedByOneGate = options.eligibleCount === 0 &&
