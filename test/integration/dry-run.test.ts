@@ -942,7 +942,7 @@ describe('runKaizen PR flow', () => {
     const summary = await runKaizen({
       cwd: repo,
       project: 'o-r',
-      scheduled: true,
+      scheduled: false,
       dryRun: false,
       json: true,
       runCommand: runner
