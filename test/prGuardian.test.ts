@@ -1518,6 +1518,51 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
+  it('does not finish early while a requested bot has no terminal evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    let requested = true;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') requested = false;
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh'
+          ? ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            reviewRequests: requested ? [{ login: 'coderabbitai[bot]' }] : [],
+            comments: [{
+              id: 1,
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }],
+            statusCheckRollup: [{ name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' }]
+          })
+          : 'guardian pass complete',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
   it('enforces a 30-second minimum between audited early-success snapshots', async () => {
     sleepMock.mockClear();
     const config = configSchema.parse({
@@ -2288,6 +2333,7 @@ function ghResponse(
     mergeStateStatus: string;
     mergeable: string;
     reviewDecision: string;
+    reviewRequests: Array<{ login?: string }>;
     statusCheckRollup: Array<Record<string, unknown>>;
     headRefOid: string;
     reviews: Array<Record<string, unknown>>;
@@ -2372,6 +2418,7 @@ function mergeablePrResponse(pr: Partial<{
   mergeStateStatus: string;
   mergeable: string;
   reviewDecision: string;
+  reviewRequests: Array<{ login?: string }>;
   statusCheckRollup: Array<Record<string, unknown>>;
   headRefOid: string;
   reviews: Array<Record<string, unknown>>;
@@ -2385,6 +2432,7 @@ function mergeablePrResponse(pr: Partial<{
     mergeStateStatus: pr.mergeStateStatus ?? 'CLEAN',
     mergeable: pr.mergeable ?? 'MERGEABLE',
     reviewDecision: pr.reviewDecision ?? '',
+    reviewRequests: pr.reviewRequests ?? [],
     headRefOid: pr.headRefOid ?? 'head-sha',
     baseRefName: pr.baseRefName ?? 'main',
     closingIssuesReferences: pr.closingIssuesReferences ?? [],

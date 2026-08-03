@@ -645,7 +645,7 @@ async function inspectPullRequest(runCommand, req) {
             '--repo',
             req.repo,
             '--json',
-            'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,statusCheckRollup'
+            'state,isDraft,mergeStateStatus,mergeable,reviewDecision,reviewRequests,headRefOid,statusCheckRollup'
         ], {
             cwd: req.workspaceDir,
             env: githubCliEnv(),
@@ -691,6 +691,7 @@ async function inspectPullRequest(runCommand, req) {
                 check.completedAt
             ]),
             reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
+            reviewRequests: (parsed.reviewRequests ?? []).map((request) => request.login),
             reviewComments: reviewComments.map((comment) => [
                 comment.id,
                 comment.updated_at,
@@ -832,6 +833,7 @@ async function listPullRequestIssueComments(runCommand, req) {
 function currentHeadReviewBlockers(parsed, reviews) {
     if (!parsed.headRefOid || parsed.state === 'MERGED')
         return [];
+    const blockers = [];
     const latestByBot = new Map();
     for (const review of reviews) {
         const login = normalizeReviewerLogin(review.user?.login);
@@ -847,7 +849,19 @@ function currentHeadReviewBlockers(parsed, reviews) {
         if (!current || String(review.submitted_at ?? '') > String(current.submitted_at ?? ''))
             latestByBot.set(login, review);
     }
-    return [...latestByBot.entries()].flatMap(([login, review]) => {
+    for (const request of parsed.reviewRequests ?? []) {
+        const login = normalizeReviewerLogin(request.login);
+        if (!login.includes('codex') && !login.includes('coderabbit'))
+            continue;
+        const review = latestByBot.get(login);
+        if (hasCurrentHeadBotEvidence(login, parsed))
+            continue;
+        if (review?.commit_id === parsed.headRefOid &&
+            ['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'].includes(review.state ?? ''))
+            continue;
+        blockers.push(`${login} requested review is not terminal for current PR head ${parsed.headRefOid}`);
+    }
+    blockers.push(...[...latestByBot.entries()].flatMap(([login, review]) => {
         if (hasCurrentHeadBotEvidence(login, parsed))
             return [];
         if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'].includes(review.state ?? '')) {
@@ -856,7 +870,8 @@ function currentHeadReviewBlockers(parsed, reviews) {
         return review.commit_id === parsed.headRefOid
             ? []
             : [`${login} review is not for current PR head ${parsed.headRefOid}`];
-    });
+    }));
+    return [...new Set(blockers)];
 }
 function hasCurrentHeadBotEvidence(login, parsed) {
     if (!parsed.headRefOid)
