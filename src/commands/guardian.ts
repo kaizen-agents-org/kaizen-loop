@@ -10,6 +10,7 @@ import {
   runPrGuardianJob,
   type PrGuardianJob
 } from '../orchestrator/prGuardian.js';
+import { RunLock } from '../orchestrator/lock.js';
 import type { CommandRunner } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -31,31 +32,36 @@ export async function runGuardianForPullRequest(options: {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
   const stateDir = projectStateDir(resolved.slug);
-  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
-  const current = await github.getPullRequest(options.pr);
-  let job = await findPrGuardianJob(stateDir, options.pr);
+  const lock = await RunLock.acquire(stateDir);
+  try {
+    const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+    const current = await github.getPullRequest(options.pr);
+    let job = await findPrGuardianJob(stateDir, options.pr);
 
-  if (!job || job.headSha !== current.headRefOid) {
-    job = await enqueuePrGuardianJob({
+    if (!job || job.headSha !== current.headRefOid) {
+      job = await enqueuePrGuardianJob({
+        stateDir,
+        config,
+        repo: resolved.project.repo,
+        prUrl: current.url,
+        prNumber: current.number,
+        branch: current.headRefName ?? job?.branch ?? `pr-${current.number}`,
+        baseBranch: current.baseRefName,
+        headSha: current.headRefOid
+      });
+    }
+
+    return await runPrGuardianJob({
       stateDir,
       config,
-      repo: resolved.project.repo,
-      prUrl: current.url,
-      prNumber: current.number,
-      branch: current.headRefName ?? job?.branch ?? `pr-${current.number}`,
-      baseBranch: current.baseRefName,
-      headSha: current.headRefOid
+      workspaceDir: resolved.project.workspacePath,
+      runCommand: options.runCommand,
+      job,
+      isolateWorktree: true
     });
+  } finally {
+    await lock.release();
   }
-
-  return runPrGuardianJob({
-    stateDir,
-    config,
-    workspaceDir: resolved.project.workspacePath,
-    runCommand: options.runCommand,
-    job,
-    isolateWorktree: true
-  });
 }
 
 export async function watchGuardianJobs(options: {
@@ -67,20 +73,25 @@ export async function watchGuardianJobs(options: {
   const config = await loadConfig(resolved.project.localPath);
   if (!config.guardian.enabled) throw new KaizenError('PR guardian is disabled for this project.', 2);
   const stateDir = projectStateDir(resolved.slug);
-  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
-  await enqueueManagedPrGuardianJobs({
-    stateDir,
-    config,
-    repo: resolved.project.repo,
-    pullRequests: await github.listAllOpenPullRequests()
-  });
-  return {
-    jobs: await runPendingPrGuardianJobs({
+  const lock = await RunLock.acquire(stateDir);
+  try {
+    const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+    await enqueueManagedPrGuardianJobs({
       stateDir,
       config,
-      workspaceDir: resolved.project.workspacePath,
-      runCommand: options.runCommand,
-      isolateWorktree: true
-    })
-  };
+      repo: resolved.project.repo,
+      pullRequests: await github.listAllOpenPullRequests()
+    });
+    return {
+      jobs: await runPendingPrGuardianJobs({
+        stateDir,
+        config,
+        workspaceDir: resolved.project.workspacePath,
+        runCommand: options.runCommand,
+        isolateWorktree: true
+      })
+    };
+  } finally {
+    await lock.release();
+  }
 }

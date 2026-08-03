@@ -35,15 +35,34 @@ export async function enqueuePrGuardianJob(options) {
         .filter((candidate) => candidate.repo === options.repo &&
         candidate.prNumber === options.prNumber &&
         candidate.headSha === options.headSha)
-        .sort((a, b) => guardianJobStatusRank(b.status) - guardianJobStatusRank(a.status) || b.updatedAt.localeCompare(a.updatedAt));
+        .sort(compareGuardianJobs);
     const matching = matches[0];
     if (matching) {
         const issueNumber = options.issueNumber ?? matching.issueNumber ?? matches.find((candidate) => candidate.issueNumber)?.issueNumber;
-        const canonical = issueNumber && !matching.issueNumber
-            ? { ...matching, issueNumber, updatedAt: now }
-            : matching;
-        if (canonical !== matching)
-            await writeGuardianJob(options.stateDir, canonical);
+        if (matches.length === 1 && (!issueNumber || matching.issueNumber))
+            return matching;
+        const attemptCount = Math.max(...matches.map((candidate) => candidate.attemptCount));
+        const reactivationCount = Math.max(...matches.map((candidate) => candidate.reactivationCount ?? 0));
+        const budgetExhausted = matching.status === 'pending' && attemptCount >= matching.retryBudget;
+        const canonical = {
+            ...matching,
+            issueNumber,
+            attemptCount,
+            reactivationCount: reactivationCount > 0 ? reactivationCount : undefined,
+            status: budgetExhausted ? 'blocked' : matching.status,
+            createdAt: matches.map((candidate) => candidate.createdAt).sort()[0],
+            updatedAt: now,
+            lastCheckedAt: matches
+                .map((candidate) => candidate.lastCheckedAt)
+                .filter((value) => Boolean(value))
+                .sort()
+                .at(-1),
+            lastBlocker: budgetExhausted
+                ? `PR guardian retry budget exhausted after ${attemptCount} attempts while a duplicate pending audit remained.`
+                : matching.lastBlocker
+        };
+        await writeGuardianJob(options.stateDir, canonical);
+        await syncImplementationState(options.stateDir, canonical);
         for (const duplicate of matches.slice(1)) {
             await fs.rm(path.join(guardianJobsDir(options.stateDir), `${duplicate.id}.json`), { force: true });
         }
@@ -55,16 +74,16 @@ export async function enqueuePrGuardianJob(options) {
     await writeGuardianJob(options.stateDir, created);
     return created;
 }
-function guardianJobStatusRank(status) {
-    if (status === 'success')
-        return 4;
-    if (status === 'running')
-        return 3;
-    if (status === 'pending')
-        return 2;
-    if (status === 'blocked')
-        return 1;
-    return 0;
+function compareGuardianJobs(a, b) {
+    const isActive = (status) => status === 'running' || status === 'pending';
+    const groupDifference = Number(isActive(b.status)) - Number(isActive(a.status));
+    if (groupDifference !== 0)
+        return groupDifference;
+    const updatedDifference = b.updatedAt.localeCompare(a.updatedAt);
+    if (updatedDifference !== 0)
+        return updatedDifference;
+    const tieRank = (status) => status === 'running' ? 5 : status === 'pending' ? 4 : status === 'blocked' ? 3 : status === 'success' ? 2 : 1;
+    return tieRank(b.status) - tieRank(a.status);
 }
 export async function enqueueManagedPrGuardianJobs(options) {
     const [owner] = options.repo.split('/');
@@ -155,7 +174,7 @@ async function syncImplementationState(stateDir, job) {
     await saveImplementationState(stateDir, {
         issue: job.issueNumber,
         branch: job.branch,
-        phase: job.status === 'success' ? 'complete' : 'guardian',
+        phase: job.status === 'success' ? 'complete' : job.status === 'skipped' ? 'handoff' : 'guardian',
         attempt: current?.attempt ?? job.attemptCount,
         pr: job.prNumber,
         prUrl: job.prUrl,

@@ -1934,7 +1934,7 @@ describe('runPrGuardianSkill', () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({
       version: 1,
-      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
     });
     const original = await enqueuePrGuardianJob({
       stateDir,
@@ -1942,6 +1942,7 @@ describe('runPrGuardianSkill', () => {
       repo: 'o/r',
       prUrl: 'https://github.com/o/r/pull/4',
       prNumber: 4,
+      issueNumber: 1,
       branch: 'kaizen/issue-1-fix',
       baseBranch: 'main',
       headSha: 'old-head'
@@ -1985,6 +1986,7 @@ describe('runPrGuardianSkill', () => {
       id: 'o-r-pr-4-new-head',
       status: 'pending' as const,
       attemptCount: 0,
+      lastObservedFingerprint: undefined,
       updatedAt: new Date(Date.parse(audited.updatedAt) + 1_000).toISOString()
     };
     await fs.writeFile(
@@ -1992,6 +1994,15 @@ describe('runPrGuardianSkill', () => {
       `${JSON.stringify(duplicate, null, 2)}\n`
     );
     await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(2);
+    await saveImplementationState(stateDir, {
+      issue: 1,
+      branch: 'kaizen/issue-1-fix',
+      phase: 'complete',
+      attempt: 1,
+      pr: 4,
+      prUrl: 'https://github.com/o/r/pull/4',
+      lastFailure: 'stale migration state'
+    });
 
     const rediscovered = await enqueueManagedPrGuardianJobs({
       stateDir,
@@ -2000,8 +2011,11 @@ describe('runPrGuardianSkill', () => {
       pullRequests: [managedPullRequest({ headRefOid: 'new-head' })]
     });
     expect(rediscovered).toHaveLength(1);
-    expect(rediscovered[0].id).toBe(original.id);
+    expect(rediscovered[0]).toMatchObject({ id: duplicate.id, status: 'pending', attemptCount: 1 });
     await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(1);
+    const synchronizedState = await loadImplementationState(stateDir, 1);
+    expect(synchronizedState).toMatchObject({ phase: 'guardian' });
+    expect(synchronizedState).not.toHaveProperty('lastFailure');
 
     const second = await runPendingPrGuardianJobs({
       stateDir,
@@ -2011,11 +2025,23 @@ describe('runPrGuardianSkill', () => {
       isolateWorktree: false
     });
 
-    expect(second).toEqual([]);
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ status: 'success', headSha: 'new-head' });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+
+    const third = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(third).toEqual([]);
     const jobs = await listPrGuardianJobs(stateDir);
     expect(jobs).toEqual([expect.objectContaining({ status: 'success', headSha: 'new-head' })]);
     expect(jobs[0].reactivationCount).toBeUndefined();
-    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
 
     const reverted = await enqueuePrGuardianJob({
       stateDir,
@@ -2023,14 +2049,145 @@ describe('runPrGuardianSkill', () => {
       repo: 'o/r',
       prUrl: 'https://github.com/o/r/pull/4',
       prNumber: 4,
+      issueNumber: 1,
       branch: 'kaizen/issue-1-fix',
       baseBranch: 'main',
       headSha: 'old-head'
     });
     expect(reverted).toMatchObject({ id: original.id, headSha: 'old-head', status: 'pending' });
-    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: duplicate.id, headSha: 'new-head', status: 'success' }),
       expect.objectContaining({ id: original.id, headSha: 'old-head', status: 'pending' })
-    ]);
+    ]));
+    await expect(listPrGuardianJobs(stateDir)).resolves.toHaveLength(2);
+  });
+
+  it('does not reset the retry budget when consolidating a duplicate pending job', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', maxAttempts: 1 }
+    });
+    const successful = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'codex/daily-dogfood-sync',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${successful.id}.json`),
+      `${JSON.stringify({ ...successful, status: 'success', attemptCount: 1 }, null, 2)}\n`
+    );
+    const duplicate = { ...successful, id: 'duplicate-head-job', status: 'pending', attemptCount: 0 };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${duplicate.id}.json`),
+      `${JSON.stringify(duplicate, null, 2)}\n`
+    );
+
+    const [consolidated] = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest()]
+    });
+
+    expect(consolidated).toMatchObject({ id: duplicate.id, status: 'blocked', attemptCount: 1 });
+    await expect(listPrGuardianJobs(stateDir)).resolves.toEqual([expect.objectContaining({
+      id: duplicate.id,
+      status: 'blocked',
+      attemptCount: 1
+    })]);
+  });
+
+  it('preserves a newer blocked result when consolidating an older success', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({ version: 1, guardian: { enabled: true, mode: 'async' } });
+    const successful = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      issueNumber: 1,
+      branch: 'codex/daily-dogfood-sync',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${successful.id}.json`),
+      `${JSON.stringify({ ...successful, status: 'success', updatedAt: '2026-01-01T00:00:00.000Z' }, null, 2)}\n`
+    );
+    const blocked = {
+      ...successful,
+      id: 'newer-blocked-job',
+      status: 'blocked',
+      updatedAt: '2026-01-01T00:00:01.000Z',
+      lastBlocker: 'A late review remains unresolved.'
+    };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${blocked.id}.json`),
+      `${JSON.stringify(blocked, null, 2)}\n`
+    );
+
+    const [consolidated] = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest()]
+    });
+
+    expect(consolidated).toMatchObject({
+      id: blocked.id,
+      status: 'blocked',
+      lastBlocker: 'A late review remains unresolved.'
+    });
+    await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
+      phase: 'guardian',
+      lastFailure: 'A late review remains unresolved.'
+    });
+  });
+
+  it('prefers a newer pending audit over an older running duplicate', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({ version: 1, guardian: { enabled: true, mode: 'async' } });
+    const running = await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'codex/daily-dogfood-sync',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${running.id}.json`),
+      `${JSON.stringify({ ...running, status: 'running', updatedAt: '2026-01-01T00:00:00.000Z' }, null, 2)}\n`
+    );
+    const pending = {
+      ...running,
+      id: 'newer-pending-job',
+      status: 'pending',
+      updatedAt: '2026-01-01T00:00:01.000Z'
+    };
+    await fs.writeFile(
+      path.join(stateDir, 'guardian', 'jobs', `${pending.id}.json`),
+      `${JSON.stringify(pending, null, 2)}\n`
+    );
+
+    const [consolidated] = await enqueueManagedPrGuardianJobs({
+      stateDir,
+      config,
+      repo: 'o/r',
+      pullRequests: [managedPullRequest()]
+    });
+
+    expect(consolidated).toMatchObject({ id: pending.id, status: 'pending' });
   });
 
   it('enqueues only marked same-repository generated sync pull requests', async () => {
