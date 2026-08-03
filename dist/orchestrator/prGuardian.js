@@ -975,7 +975,9 @@ function normalizeReviewerLogin(login) {
     return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
 }
 function isAuditableCheckActivity(check) {
-    const result = String(check.conclusion ?? check.state ?? check.status ?? '').toUpperCase();
+    const result = [check.conclusion, check.state, check.status]
+        .find((value) => typeof value === 'string' && value.trim().length > 0)
+        ?.toUpperCase() ?? '';
     return Boolean(result) && !PASSING_CHECK_CONCLUSIONS.has(result);
 }
 function isAuditedReady(gate, evidenceNotBefore) {

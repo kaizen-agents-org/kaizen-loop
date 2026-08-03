@@ -1218,7 +1218,7 @@ describe('runPrGuardianSkill', () => {
             statusCheckRollup: [{
               name: 'optional-analysis',
               status: 'IN_PROGRESS',
-              conclusion: null,
+              conclusion: '',
               startedAt: '2026-07-13T01:16:21Z'
             }]
           })
