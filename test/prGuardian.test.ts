@@ -1136,6 +1136,54 @@ describe('runPrGuardianSkill', () => {
     expect(result.summary).not.toContain('not for current PR head');
   });
 
+  it('runs Guardian when an optional check fails after no-findings evidence', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? isRequiredChecks(args)
+          ? requiredChecksResponse()
+          : ghResponse(args, [], {
+            headRefOid: 'abc123456789',
+            mergeStateStatus: 'UNSTABLE',
+            comments: [{
+              author: { login: 'chatgpt-codex-connector[bot]' },
+              updatedAt: '2026-07-13T01:16:21Z',
+              body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+            }],
+            statusCheckRollup: [{
+              name: 'optional-analysis',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+              startedAt: '2026-07-13T01:16:21Z',
+              completedAt: '2026-07-13T01:16:22Z'
+            }]
+          })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
   it('does not accept a current-head Codex findings comment as no-findings evidence', async () => {
     const config = configSchema.parse({
       version: 1,

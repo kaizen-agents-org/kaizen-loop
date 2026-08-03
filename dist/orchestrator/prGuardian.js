@@ -624,6 +624,7 @@ async function inspectPullRequest(runCommand, req) {
     }
     const parsed = JSON.parse(result.stdout || '{}');
     const codexEvidence = currentHeadCodexNoFindingsEvidence(parsed);
+    const auditableCheckActivity = (parsed.statusCheckRollup ?? []).filter(isAuditableCheckActivity);
     return {
         state: parsed.state,
         isDraft: parsed.isDraft,
@@ -634,6 +635,13 @@ async function inspectPullRequest(runCommand, req) {
         activityFingerprint: JSON.stringify({
             headRefOid: parsed.headRefOid,
             checks: requiredChecks,
+            checkRollup: (parsed.statusCheckRollup ?? []).map((check) => [
+                check.name ?? check.context,
+                check.status ?? check.state,
+                check.conclusion,
+                check.startedAt,
+                check.completedAt
+            ]),
             reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
             comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
         }),
@@ -641,13 +649,14 @@ async function inspectPullRequest(runCommand, req) {
             ...currentHeadReviewBlockers(parsed, reviews)
         ],
         hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
-        hasUndatedAuditableActivity: false,
+        hasUndatedAuditableActivity: auditableCheckActivity.some((check) => !check.completedAt && !check.startedAt),
         codexNoFindingsAt: codexEvidence?.observedAt,
         latestAuditableActivityAt: latestTimestamp([
             ...(parsed.comments ?? [])
                 .filter((comment) => comment !== codexEvidence?.comment)
                 .flatMap((comment) => [comment.updatedAt, comment.createdAt]),
-            ...reviews.map((review) => review.submitted_at)
+            ...reviews.map((review) => review.submitted_at),
+            ...auditableCheckActivity.flatMap((check) => [check.completedAt, check.startedAt])
         ]),
         checks: requiredChecks
     };
@@ -763,6 +772,10 @@ function currentHeadCodexNoFindingsEvidence(parsed) {
 }
 function normalizeReviewerLogin(login) {
     return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
+}
+function isAuditableCheckActivity(check) {
+    const result = String(check.conclusion ?? check.state ?? check.status ?? '').toUpperCase();
+    return Boolean(result) && !PASSING_CHECK_CONCLUSIONS.has(result);
 }
 function isAuditedReady(gate, evidenceNotBefore) {
     if (!gate.isReady)
