@@ -605,7 +605,7 @@ async function inspectPullRequestTerminalState(runCommand, req) {
     return JSON.parse(result.stdout || '{}');
 }
 async function inspectPullRequest(runCommand, req) {
-    const [result, reviews, reviewComments, requiredChecks] = await Promise.all([
+    const [result, reviews, reviewComments, issueComments, requiredChecks] = await Promise.all([
         runCommand('gh', [
             'pr',
             'view',
@@ -613,7 +613,7 @@ async function inspectPullRequest(runCommand, req) {
             '--repo',
             req.repo,
             '--json',
-            'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,comments,statusCheckRollup'
+            'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,statusCheckRollup'
         ], {
             cwd: req.workspaceDir,
             env: githubCliEnv(),
@@ -622,13 +622,24 @@ async function inspectPullRequest(runCommand, req) {
         }),
         listPullRequestReviews(runCommand, req),
         listPullRequestReviewComments(runCommand, req),
+        listPullRequestIssueComments(runCommand, req),
         listRequiredChecks(runCommand, req)
     ]);
     if (result.exitCode !== 0) {
         throw new Error(`Could not inspect PR mergeability: ${result.stderr || result.stdout}`);
     }
     const parsed = JSON.parse(result.stdout || '{}');
-    const codexEvidence = currentHeadCodexNoFindingsEvidence(parsed);
+    const auditedParsed = {
+        ...parsed,
+        comments: issueComments.map((comment) => ({
+            id: String(comment.id ?? ''),
+            createdAt: comment.created_at,
+            updatedAt: comment.updated_at,
+            author: comment.user,
+            body: comment.body
+        }))
+    };
+    const codexEvidence = currentHeadCodexNoFindingsEvidence(auditedParsed);
     const auditableCheckActivity = (parsed.statusCheckRollup ?? []).filter(isAuditableCheckActivity);
     return {
         state: parsed.state,
@@ -656,20 +667,26 @@ async function inspectPullRequest(runCommand, req) {
                 comment.in_reply_to_id,
                 comment.user?.login
             ]),
-            comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
+            comments: (auditedParsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt, comment.createdAt])
         }),
         reviewBlockers: [
-            ...currentHeadReviewBlockers(parsed, reviews)
+            ...currentHeadReviewBlockers(auditedParsed, reviews)
         ],
         hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
-        hasUndatedAuditableActivity: auditableCheckActivity.some((check) => !check.completedAt),
+        hasUndatedAuditableActivity: auditableCheckActivity.some((check) => !check.completedAt) ||
+            (auditedParsed.comments ?? []).some((comment) => {
+                if (comment === codexEvidence?.comment)
+                    return false;
+                const observedAt = comment.updatedAt ?? comment.createdAt;
+                return !observedAt || Number.isNaN(Date.parse(observedAt));
+            }),
         hasInProgressAuditableActivity: auditableCheckActivity.some((check) => {
             const status = String(check.status ?? check.state ?? '').toUpperCase();
             return ['EXPECTED', 'IN_PROGRESS', 'PENDING', 'QUEUED', 'REQUESTED', 'WAITING'].includes(status);
         }),
         codexNoFindingsAt: codexEvidence?.observedAt,
         latestAuditableActivityAt: latestTimestamp([
-            ...(parsed.comments ?? [])
+            ...(auditedParsed.comments ?? [])
                 .filter((comment) => comment !== codexEvidence?.comment)
                 .flatMap((comment) => [comment.updatedAt, comment.createdAt]),
             ...reviews.map((review) => review.submitted_at),
@@ -757,6 +774,27 @@ async function listPullRequestReviewComments(runCommand, req) {
         }
     }
     return comments;
+}
+async function listPullRequestIssueComments(runCommand, req) {
+    const result = await runCommand('gh', [
+        'api',
+        `repos/${req.repo}/issues/${req.prNumber}/comments?per_page=100`,
+        '--paginate',
+        '--slurp'
+    ], {
+        cwd: req.workspaceDir,
+        env: githubCliEnv(),
+        timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+        rejectOnNonZero: false
+    });
+    if (result.exitCode !== 0) {
+        throw new Error(`Could not inspect PR issue comments: ${result.stderr || result.stdout}`);
+    }
+    const pages = JSON.parse(result.stdout || '[]');
+    if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+        throw new Error('Could not inspect PR issue comments: response was not a paginated array.');
+    }
+    return pages.flat();
 }
 function currentHeadReviewBlockers(parsed, reviews) {
     if (!parsed.headRefOid || parsed.state === 'MERGED')

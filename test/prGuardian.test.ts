@@ -282,7 +282,7 @@ describe('runPrGuardianSkill', () => {
         if (isReviewApi(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[]', stderr: '', durationMs: 1 };
         }
-        if (isReviewCommentsApi(args)) {
+        if (isReviewCommentsApi(args) || isIssueCommentsApi(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[[]]', stderr: '', durationMs: 1 };
         }
         if (isRequiredChecks(args)) {
@@ -353,7 +353,7 @@ describe('runPrGuardianSkill', () => {
         if (isReviewApi(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[]', stderr: '', durationMs: 1 };
         }
-        if (isReviewCommentsApi(args)) {
+        if (isReviewCommentsApi(args) || isIssueCommentsApi(args)) {
           return { command, args, cwd: options?.cwd, exitCode: 0, stdout: '[[]]', stderr: '', durationMs: 1 };
         }
         if (isRequiredChecks(args)) {
@@ -1327,6 +1327,55 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
+  it('runs Guardian for a top-level comment on a later pagination page', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh' && isIssueCommentsApi(args)
+        ? JSON.stringify([[
+          {
+            id: 41,
+            user: { login: 'chatgpt-codex-connector[bot]' },
+            created_at: '2026-07-13T01:16:21Z',
+            updated_at: '2026-07-13T01:16:21Z',
+            body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+          }
+        ], [
+          {
+            id: 42,
+            user: { login: 'reviewer' },
+            created_at: '2026-07-13T01:16:22Z',
+            updated_at: '2026-07-13T01:16:22Z',
+            body: 'Please audit this later comment.'
+          }
+        ]])
+        : command === 'gh'
+          ? ghResponse(args, [], { headRefOid: 'abc123456789' })
+          : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
+  });
+
   it('fails closed when review comment activity has no valid timestamp', async () => {
     const config = configSchema.parse({
       version: 1,
@@ -2043,6 +2092,15 @@ function ghResponse(
   if (isPrView(args)) return mergeablePrResponse(pr);
   if (isReviewApi(args)) return JSON.stringify([]);
   if (isReviewCommentsApi(args)) return JSON.stringify([[]]);
+  if (isIssueCommentsApi(args)) return JSON.stringify([(
+    pr.comments ?? []
+  ).map((comment, index) => ({
+    id: comment.id ?? index + 1,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    body: comment.body,
+    user: comment.author
+  }))]);
   if (isCheckRunsApi(args)) return JSON.stringify([{ check_runs: [] }]);
   if (isCheckAnnotationsApi(args)) return JSON.stringify([[]]);
   if (isRequiredChecks(args)) return requiredChecksResponse(pr.statusCheckRollup);
@@ -2059,6 +2117,10 @@ function isReviewApi(args: string[]): boolean {
 
 function isReviewCommentsApi(args: string[]): boolean {
   return args[0] === 'api' && args.some((arg) => /\/pulls\/\d+\/comments/.test(arg));
+}
+
+function isIssueCommentsApi(args: string[]): boolean {
+  return args[0] === 'api' && args.some((arg) => /\/issues\/\d+\/comments/.test(arg));
 }
 
 function isCheckRunsApi(args: string[]): boolean {
