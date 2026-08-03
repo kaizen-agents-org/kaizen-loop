@@ -12,7 +12,31 @@ export function evaluateIssueIntake(options) {
             evidence: ['Issue comments or related PR state indicate an existing resolution path.']
         };
     }
-    const upstreamRepo = referencedUpstreamRepo(text, options.repo);
+    const explicitOwners = explicitOwnershipRepos(options.issue.body ?? '');
+    if (explicitOwners.length > 1) {
+        return {
+            status: 'needs_context',
+            reason: 'The issue contains conflicting explicit ownership statements.',
+            evidence: explicitOwners.map((repo) => `Explicitly named owner: ${repo}`)
+        };
+    }
+    const explicitOwner = explicitOwners[0];
+    const currentRepoIsExplicitOwner = explicitOwner
+        ? sameRepo(explicitOwner, options.repo)
+        : false;
+    const inferredUpstreamRepos = explicitOwner
+        ? []
+        : referencedUpstreamRepos(text, options.repo);
+    if (mentionsSourceOfTruthSync(normalized) && inferredUpstreamRepos.length > 1) {
+        return {
+            status: 'needs_context',
+            reason: 'The issue names multiple possible upstream repositories without an explicit owner.',
+            evidence: inferredUpstreamRepos.map((repo) => `Possible upstream repository: ${repo}`)
+        };
+    }
+    const upstreamRepo = currentRepoIsExplicitOwner
+        ? undefined
+        : explicitOwner ?? inferredUpstreamRepos[0];
     if (upstreamRepo && mentionsSourceOfTruthSync(normalized)) {
         return {
             status: 'upstream_first',
@@ -75,14 +99,32 @@ function issueText(issue) {
 function alreadyResolvedText(normalized) {
     return /\balready\s+(resolved|fixed|addressed)\b/.test(normalized) || /\b(resolved|fixed|addressed)\s+by\s+#\d+\b/.test(normalized);
 }
-function referencedUpstreamRepo(text, currentRepo) {
+function explicitOwnershipRepos(body) {
+    const repos = [];
+    const ownerPattern = /\b(?:implementation|canonical)(?:\s+repository)?\s+owner\s+(?:is|:)\s*(?:\*{1,2}|_{1,2}|`)*([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/gi;
+    for (const match of body.matchAll(ownerPattern)) {
+        repos.push(match[1]);
+    }
+    const ownershipKeyPattern = /^##\s+Ownership key\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/gim;
+    for (const section of body.matchAll(ownershipKeyPattern)) {
+        const repo = section[1].match(/^\s*(?:```[^\n]*\n)?\s*([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\s*$/m)?.[1];
+        if (repo)
+            repos.push(repo);
+    }
+    return repos.filter((repo, index) => repos.findIndex((candidate) => sameRepo(candidate, repo)) === index);
+}
+function sameRepo(left, right) {
+    return left.toLowerCase() === right.toLowerCase();
+}
+function referencedUpstreamRepos(text, currentRepo) {
     const [currentOwner] = currentRepo.split('/');
     const urlRepos = [...text.matchAll(/(?:https?:\/\/)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=$|[/?#\s).,;:'"`\]])/g)]
         .map((match) => match[1]);
     const bareRepos = [...text.matchAll(/(?:^|[\s([`])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)(?=$|[\s).,;:'"`\]])/g)]
         .map((match) => match[1])
         .filter((repo) => !isPathLikeRepoReference(repo, currentOwner));
-    return [...urlRepos, ...bareRepos].find((repo) => repo !== currentRepo);
+    const repos = [...urlRepos, ...bareRepos].filter((repo) => !sameRepo(repo, currentRepo));
+    return repos.filter((repo, index) => repos.findIndex((candidate) => sameRepo(candidate, repo)) === index);
 }
 function isPathLikeRepoReference(repo, currentOwner) {
     const [owner, name] = repo.split('/');
@@ -128,7 +170,7 @@ function reportsExistingFailure(title) {
     return /\b(?:blocked|bug|cannot|dispatch(?:ed|es|ing)?|fail(?:ed|ing|s|ure)?|invalid|wrong)\b/i.test(title);
 }
 function mentionsExternalRepositoryTarget(text, normalized, currentRepo) {
-    if (referencedUpstreamRepo(text, currentRepo))
+    if (referencedUpstreamRepos(text, currentRepo).length > 0)
         return true;
     return (/\b(?:another|different|external|non[- ]node|other|separate)(?:\s+[a-z0-9.+#-]+){0,3}\s+repositor(?:y|ies)\b/.test(normalized) ||
         /\brepositor(?:y|ies)\s+(?:different\s+from|other\s+than|outside)\b/.test(normalized));
