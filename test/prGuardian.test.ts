@@ -1516,6 +1516,72 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
   });
 
+  it('reactivates a successful same-head job when a resolved thread receives a late reply', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
+    });
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'head-sha'
+    });
+    let lateReply = false;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') lateReply = false;
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh' && isReviewCommentsApi(args)
+          ? lateReply
+            ? JSON.stringify([[{
+              id: 42,
+              in_reply_to_id: 41,
+              user: { login: 'reviewer' },
+              created_at: '2026-07-13T01:16:22Z',
+              updated_at: '2026-07-13T01:16:22Z',
+              commit_id: 'head-sha'
+            }]])
+            : '[[]]'
+          : command === 'gh'
+            ? ghResponse(args, [])
+            : 'done',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const first = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+    expect(first[0].status).toBe('success');
+
+    lateReply = true;
+    const second = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ status: 'success', reactivationCount: 1 });
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
   it('continues pending jobs when an old successful pull request is inaccessible', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
     const config = configSchema.parse({

@@ -51,6 +51,7 @@ export interface PrGuardianSkillResult {
   raw: string;
   durationMs: number;
   jobId?: string;
+  activityFingerprint?: string;
 }
 
 interface PullRequestTerminalState {
@@ -194,7 +195,8 @@ export async function runPrGuardianJob(options: {
     status: result.status === 'success' ? 'success' : result.status === 'skipped' ? 'skipped' : 'blocked',
     updatedAt: new Date().toISOString(),
     lastCheckedAt: new Date().toISOString(),
-    lastBlocker: result.status === 'success' ? undefined : result.summary
+    lastBlocker: result.status === 'success' ? undefined : result.summary,
+    lastObservedFingerprint: result.activityFingerprint ?? running.lastObservedFingerprint
   };
   await writeGuardianJob(options.stateDir, finished);
   await syncImplementationState(options.stateDir, finished);
@@ -271,13 +273,27 @@ export async function runPendingPrGuardianJobs(options: {
     const observedJob = gate.headRefOid && gate.headRefOid !== job.headSha
       ? { ...job, headSha: gate.headRefOid }
       : job;
+    if (gate.isReady && observedJob === job && job.lastObservedFingerprint === undefined) {
+      await writeGuardianJob(options.stateDir, {
+        ...job,
+        lastObservedFingerprint: gate.activityFingerprint
+      });
+      continue;
+    }
+    if (gate.isReady && observedJob === job && job.lastObservedFingerprint === gate.activityFingerprint) {
+      continue;
+    }
     if (gate.isReady) {
-      if (observedJob !== job || job.lastObservedFingerprint !== gate.activityFingerprint) {
-        await writeGuardianJob(options.stateDir, {
-          ...observedJob,
-          lastObservedFingerprint: gate.activityFingerprint
-        });
-      }
+      await writeGuardianJob(options.stateDir, {
+        ...observedJob,
+        status: 'pending',
+        reactivationCount: (job.reactivationCount ?? 0) + 1,
+        lastObservedFingerprint: gate.activityFingerprint,
+        updatedAt: new Date().toISOString(),
+        lastBlocker: observedJob !== job
+          ? 'PR head changed after guardian success.'
+          : 'New PR activity appeared after guardian success.'
+      });
       continue;
     }
     await writeGuardianJob(options.stateDir, {
@@ -375,7 +391,8 @@ export async function runPrGuardianSkill(
         status: 'success',
         summary: successSummary({ ...initialState, isReady: true, blockers: [] }),
         raw: '',
-        durationMs: Date.now() - startMs
+        durationMs: Date.now() - startMs,
+        activityFingerprint: initialState.activityFingerprint
       };
     }
     const initialGate = await inspectPrGate(runCommand, req);
@@ -387,7 +404,8 @@ export async function runPrGuardianSkill(
         status: 'success',
         summary: successSummary(settledInitialGate),
         raw: '',
-        durationMs: Date.now() - startMs
+        durationMs: Date.now() - startMs,
+        activityFingerprint: settledInitialGate.activityFingerprint
       };
     }
     rawOutputs.push(`PR was not stably merge-ready before the first guardian pass:\n${summarizeGate(settledInitialGate)}`);
@@ -401,7 +419,8 @@ export async function runPrGuardianSkill(
               status: 'success',
               summary: successSummary(stablePreflight),
               raw: rawOutputs.join('\n'),
-              durationMs: Date.now() - startMs
+              durationMs: Date.now() - startMs,
+              activityFingerprint: stablePreflight.activityFingerprint
             };
           }
           rawOutputs.push(`PR became not merge-ready after retry preflight settle wait before pass ${attempt}:\n${summarizeGate(stablePreflight)}`);
@@ -464,7 +483,8 @@ export async function runPrGuardianSkill(
           status: 'success',
           summary: successSummary(lateGate),
           raw: rawOutputs.join('\n'),
-          durationMs: Date.now() - startMs
+          durationMs: Date.now() - startMs,
+          activityFingerprint: lateGate.activityFingerprint
         };
       }
       rawOutputs.push(`PR still not merge-ready after guardian pass ${attempt}:\n${summarizeGate(gate)}`);
@@ -1239,7 +1259,8 @@ async function finishAfterGuardianCommandFailure(
     status: reconciled ? 'success' : 'failed',
     summary: reconciled ? successSummary(reconciled) : failureSummary,
     raw: rawOutputs.join('\n'),
-    durationMs: Date.now() - startMs
+    durationMs: Date.now() - startMs,
+    activityFingerprint: reconciled?.activityFingerprint
   };
 }
 
