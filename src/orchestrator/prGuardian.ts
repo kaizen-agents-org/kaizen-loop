@@ -281,7 +281,10 @@ export async function runPendingPrGuardianJobs(options: {
       });
       continue;
     }
-    if (gate.isReady && observedJob === job && job.lastObservedFingerprint === gate.activityFingerprint) {
+    if (gate.isReady && job.lastObservedFingerprint === gate.activityFingerprint) {
+      if (observedJob !== job) {
+        await writeGuardianJob(options.stateDir, observedJob);
+      }
       continue;
     }
     if (gate.isReady) {
@@ -1116,7 +1119,7 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
   const latestByBot = new Map<string, PullRequestReviewResponse>();
   for (const review of reviews) {
     const login = normalizeReviewerLogin(review.user?.login);
-    if (!login.includes('codex') && !login.includes('coderabbit')) continue;
+    if (!isExpectedBotLogin(login)) continue;
     if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(review.state ?? '')) {
       latestByBot.set(login, review);
       continue;
@@ -1127,7 +1130,7 @@ function currentHeadReviewBlockers(parsed: PullRequestViewResponse, reviews: Pul
   }
   for (const request of parsed.reviewRequests ?? []) {
     const login = normalizeReviewerLogin(request.login);
-    if (!login.includes('codex') && !login.includes('coderabbit')) continue;
+    if (!isExpectedBotLogin(login)) continue;
     const review = latestByBot.get(login);
     if (hasCurrentHeadBotEvidence(login, parsed)) continue;
     if (
@@ -1159,6 +1162,10 @@ function hasCurrentHeadBotEvidence(login: string, parsed: PullRequestViewRespons
     });
   }
   return false;
+}
+
+function isExpectedBotLogin(login: string): boolean {
+  return login === 'chatgpt-codex-connector' || login === 'coderabbitai';
 }
 
 function currentHeadCodexNoFindingsEvidence(parsed: PullRequestViewResponse): {

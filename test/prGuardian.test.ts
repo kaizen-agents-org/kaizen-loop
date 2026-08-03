@@ -1563,6 +1563,46 @@ describe('runPrGuardianSkill', () => {
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
+  it('does not treat a human reviewer with codex in the login as an expected bot', async () => {
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: command === 'gh'
+        ? ghResponse(args, [], {
+          headRefOid: 'abc123456789',
+          reviewRequests: [{ login: 'codex-maintainer' }],
+          comments: [{
+            id: 1,
+            author: { login: 'chatgpt-codex-connector[bot]' },
+            updatedAt: '2026-07-13T01:16:21Z',
+            body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `abc1234567`"
+          }]
+        })
+        : 'guardian pass complete',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const result = await runPrGuardianSkill(runner, {
+      config,
+      workspaceDir: '/tmp/workspace',
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'branch',
+      baseBranch: 'main'
+    });
+
+    expect(result.status).toBe('success');
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(0);
+  });
+
   it('enforces a 30-second minimum between audited early-success snapshots', async () => {
     sleepMock.mockClear();
     const config = configSchema.parse({
@@ -1888,6 +1928,70 @@ describe('runPrGuardianSkill', () => {
     expect(second).toHaveLength(1);
     expect(second[0]).toMatchObject({ status: 'success', headSha: 'new-head', reactivationCount: 1 });
     expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(2);
+  });
+
+  it('preserves success when Guardian itself advances the audited head', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const config = configSchema.parse({
+      version: 1,
+      guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 1, reviewSettleSeconds: 0 }
+    });
+    await enqueuePrGuardianJob({
+      stateDir,
+      config,
+      repo: 'o/r',
+      prUrl: 'https://github.com/o/r/pull/4',
+      prNumber: 4,
+      branch: 'kaizen/issue-1-fix',
+      baseBranch: 'main',
+      headSha: 'old-head'
+    });
+    let headRefOid = 'old-head';
+    let initialBlocker = true;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'codex') {
+        headRefOid = 'new-head';
+        initialBlocker = false;
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh'
+          ? ghResponse(
+            args,
+            initialBlocker ? [{ path: 'src/file.ts', line: 12, author: 'codex', body: 'Fix this.' }] : [],
+            { headRefOid, mergeStateStatus: initialBlocker ? 'BLOCKED' : 'CLEAN' }
+          )
+          : 'done',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+
+    const first = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+    expect(first[0]).toMatchObject({ status: 'success', headSha: 'old-head' });
+
+    const second = await runPendingPrGuardianJobs({
+      stateDir,
+      config,
+      workspaceDir: '/tmp/workspace',
+      runCommand: runner,
+      isolateWorktree: false
+    });
+
+    expect(second).toEqual([]);
+    const jobs = await listPrGuardianJobs(stateDir);
+    expect(jobs).toEqual([expect.objectContaining({ status: 'success', headSha: 'new-head' })]);
+    expect(jobs[0].reactivationCount).toBeUndefined();
+    expect(runner.mock.calls.filter(([command]) => command === 'codex')).toHaveLength(1);
   });
 
   it('enqueues only marked same-repository generated sync pull requests', async () => {
