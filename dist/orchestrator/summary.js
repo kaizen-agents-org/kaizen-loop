@@ -6,15 +6,15 @@ export function summarizeQueue(options) {
         .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason));
     if (options.result === 'failed') {
         const failureReason = options.skipped.find((item) => item.number === 0)?.reason;
-        return queueSummary(options, skipReasons, 'blocked', options.processedCount === 0 ? 1 : 0, options.processedCount === 0 ? options.observedAt : undefined, failureReason
+        return queueSummary(options, skipReasons, 'blocked', options.processedCount === 0 ? 1 : 0, 'run_failed', options.processedCount === 0 ? options.observedAt : undefined, failureReason
             ? `Queue blocked because the run failed: ${failureReason}`
             : 'Queue blocked because the run failed.');
     }
     if (options.backlogCount === 0) {
-        return queueSummary(options, skipReasons, 'idle', 0);
+        return queueSummary(options, skipReasons, 'idle', 0, 'empty_queue');
     }
     if (options.eligibleCount > 0 && options.processedCount === 0) {
-        return queueSummary(options, skipReasons, 'degraded', 1, options.observedAt, `Queue degraded because ${options.eligibleCount} eligible issue(s) were not processed.`);
+        return queueSummary(options, skipReasons, 'degraded', 1, 'eligible_not_processed', options.observedAt, `Queue degraded because ${options.eligibleCount} eligible issue(s) were not processed.`);
     }
     const gate = singleSkipGate(skipReasons, options.backlogCount);
     const fullySkippedByOneGate = options.eligibleCount === 0 &&
@@ -41,7 +41,7 @@ export function summarizeQueue(options) {
         : options.observedAt;
     const state = consecutive >= options.starvationRuns ? 'starved' : 'degraded';
     const displayedReason = skipReasons.length === 1 ? skipReasons[0].reason : gate;
-    return queueSummary(options, skipReasons, state, consecutive, since, state === 'starved'
+    return queueSummary(options, skipReasons, state, consecutive, 'repeated_gate', since, state === 'starved'
         ? `Queue starvation: ${options.backlogCount} backlog issue(s) skipped by "${displayedReason}" for ${consecutive} consecutive run(s).`
         : undefined);
 }
@@ -60,13 +60,13 @@ function normalizeSkipReason(reason) {
     const detailSeparator = reason.indexOf(': ');
     return detailSeparator === -1 ? reason : reason.slice(0, detailSeparator);
 }
-function queueSummary(options, skipReasons, state, consecutiveZeroThroughputRuns, since, warning) {
+function queueSummary(options, skipReasons, state, consecutiveZeroThroughputRuns, reasonCode, since, warning) {
     return {
         backlogCount: options.backlogCount,
         eligibleCount: options.eligibleCount,
         processedCount: options.processedCount,
         skipReasons,
-        health: { state, consecutiveZeroThroughputRuns, since, warning }
+        health: { state, consecutiveZeroThroughputRuns, reasonCode, since, warning }
     };
 }
 //# sourceMappingURL=summary.js.map

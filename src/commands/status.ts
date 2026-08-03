@@ -260,9 +260,17 @@ export async function listProjects() {
   const registry = await loadRegistry();
   const projects = await Promise.all(Object.entries(registry.projects).map(async ([slug, project]) => {
     const lastRun = await readLastRun(projectStateDir(slug)) ?? project.lastRun;
-    return [slug, { ...project, lastRun, queueHealth: lastRun?.queue?.health }] as const;
+    const queueHealth = lastRun?.queue?.health as RunQueueSummary['health'] | undefined;
+    return [slug, { ...project, lastRun, queueHealth }] as const;
   }));
   const projectEntries = Object.fromEntries(projects);
+  const affectedRepositories = Object.entries(projectEntries)
+    .flatMap(([slug, project]) => {
+      const health = project.queueHealth;
+      if (!health || !isAffectedQueueHealthState(health.state)) return [];
+      return [{ slug, repo: project.repo, state: health.state, since: health.since, warning: health.warning, reasonCode: health.reasonCode }];
+    })
+    .sort((left, right) => queueHealthPriority(right.state) - queueHealthPriority(left.state) || left.slug.localeCompare(right.slug));
   const starvedRepositories = Object.entries(projectEntries)
     .filter(([, project]) => project.queueHealth?.state === 'starved')
     .map(([slug, project]) => ({
@@ -271,10 +279,14 @@ export async function listProjects() {
       since: project.queueHealth?.since,
       warning: project.queueHealth?.warning
     }));
+  const fleetHealthState: 'blocked' | 'starved' | 'degraded' | 'healthy' = affectedRepositories.length > 0
+    ? affectedRepositories[0].state
+    : 'healthy';
   return {
     ...registry,
     health: {
-      state: starvedRepositories.length > 0 ? 'starved' as const : 'healthy' as const,
+      state: fleetHealthState,
+      affectedRepositories,
       starvedRepositories
     },
     projects: projectEntries
@@ -288,11 +300,24 @@ function currentQueueStatus(openBacklog: number, latest?: RunQueueSummary): RunQ
       eligibleCount: 0,
       processedCount: 0,
       skipReasons: [],
-      health: { state: 'idle', consecutiveZeroThroughputRuns: 0 }
+      health: { state: 'idle', consecutiveZeroThroughputRuns: 0, reasonCode: 'empty_queue' }
     };
   }
   if (latest?.health.state === 'idle') return undefined;
   return latest;
+}
+
+function queueHealthPriority(state: string): number {
+  if (state === 'blocked') return 3;
+  if (state === 'starved') return 2;
+  if (state === 'degraded') return 1;
+  return 0;
+}
+
+function isAffectedQueueHealthState(
+  state: RunQueueSummary['health']['state']
+): state is 'blocked' | 'starved' | 'degraded' {
+  return state === 'blocked' || state === 'starved' || state === 'degraded';
 }
 
 async function readLatestSummary(stateDir: string) {

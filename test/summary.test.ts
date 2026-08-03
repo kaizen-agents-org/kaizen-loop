@@ -48,6 +48,7 @@ describe('summarizeQueue', () => {
     expect(queue.health).toEqual({
       state: 'idle',
       consecutiveZeroThroughputRuns: 0,
+      reasonCode: 'empty_queue',
       since: undefined,
       warning: undefined
     });
@@ -96,6 +97,7 @@ describe('summarizeQueue', () => {
     ]);
     expect(queue.health).toMatchObject({
       state: 'starved',
+      reasonCode: 'repeated_gate',
       consecutiveZeroThroughputRuns: 2,
       since: '2026-07-19T02:00:00.000Z'
     });
@@ -116,6 +118,7 @@ describe('summarizeQueue', () => {
 
     expect(queue.health).toMatchObject({
       state: 'blocked',
+      reasonCode: 'run_failed',
       consecutiveZeroThroughputRuns: 1
     });
     expect(queue.health.warning).toContain('run failed');
@@ -135,6 +138,7 @@ describe('summarizeQueue', () => {
 
     expect(queue.health).toMatchObject({
       state: 'degraded',
+      reasonCode: 'eligible_not_processed',
       consecutiveZeroThroughputRuns: 1
     });
     expect(queue.health.warning).toContain('eligible issue(s) were not processed');

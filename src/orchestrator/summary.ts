@@ -37,6 +37,7 @@ export interface RunQueueSummary {
   health: {
     state: 'healthy' | 'idle' | 'degraded' | 'starved' | 'blocked';
     consecutiveZeroThroughputRuns: number;
+    reasonCode?: 'run_failed' | 'eligible_not_processed' | 'repeated_gate' | 'empty_queue';
     since?: string;
     warning?: string;
   };
@@ -76,6 +77,7 @@ export function summarizeQueue(options: {
       skipReasons,
       'blocked',
       options.processedCount === 0 ? 1 : 0,
+      'run_failed',
       options.processedCount === 0 ? options.observedAt : undefined,
       failureReason
         ? `Queue blocked because the run failed: ${failureReason}`
@@ -83,7 +85,7 @@ export function summarizeQueue(options: {
     );
   }
   if (options.backlogCount === 0) {
-    return queueSummary(options, skipReasons, 'idle', 0);
+    return queueSummary(options, skipReasons, 'idle', 0, 'empty_queue');
   }
 
   if (options.eligibleCount > 0 && options.processedCount === 0) {
@@ -92,6 +94,7 @@ export function summarizeQueue(options: {
       skipReasons,
       'degraded',
       1,
+      'eligible_not_processed',
       options.observedAt,
       `Queue degraded because ${options.eligibleCount} eligible issue(s) were not processed.`
     );
@@ -128,6 +131,7 @@ export function summarizeQueue(options: {
     skipReasons,
     state,
     consecutive,
+    'repeated_gate',
     since,
     state === 'starved'
       ? `Queue starvation: ${options.backlogCount} backlog issue(s) skipped by "${displayedReason}" for ${consecutive} consecutive run(s).`
@@ -155,6 +159,7 @@ function queueSummary(
   skipReasons: RunQueueSummary['skipReasons'],
   state: RunQueueSummary['health']['state'],
   consecutiveZeroThroughputRuns: number,
+  reasonCode?: RunQueueSummary['health']['reasonCode'],
   since?: string,
   warning?: string
 ): RunQueueSummary {
@@ -163,6 +168,6 @@ function queueSummary(
     eligibleCount: options.eligibleCount,
     processedCount: options.processedCount,
     skipReasons,
-    health: { state, consecutiveZeroThroughputRuns, since, warning }
+    health: { state, consecutiveZeroThroughputRuns, reasonCode, since, warning }
   };
 }
