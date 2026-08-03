@@ -4,7 +4,7 @@ import { type CommandRunner } from '../utils/command.js';
 import { type DiffStats } from '../workspace/manager.js';
 import { RunLock } from './lock.js';
 import { type ReflectionDecision } from './reflection.js';
-import { type RunSummary } from './summary.js';
+import { type RunIssueSummary, type RunSummary } from './summary.js';
 export interface RunOptions {
     cwd: string;
     project?: string;
@@ -59,4 +59,5 @@ export declare function preflightVerifier(options: {
 }): Promise<string | undefined>;
 export declare function applyImplementationBudget(selection: RunIssueSelection, maxIssues: number): RunIssueSelection;
 export declare function selectPreferredBackends(config: KaizenConfig, issue: GitHubIssue, requested: 'claude' | 'codex' | undefined): Array<'claude' | 'codex'>;
+export declare function resultFor(issues: RunIssueSummary[]): RunSummary['result'];
 export {};

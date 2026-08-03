@@ -2096,14 +2096,18 @@ function modelFor(config, agent) {
 function shortSummary(summary) {
     return (summary || 'fix issue').split('\n')[0].slice(0, 80);
 }
-function resultFor(issues) {
+export function resultFor(issues) {
     if (issues.length === 0)
         return 'success';
-    if (issues.every((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit'))
+    if (issues.every(issueCompletedSuccessfully))
         return 'success';
-    if (issues.some((issue) => issue.outcome === 'pr-created' || issue.outcome === 'direct-commit'))
+    if (issues.some(issueCompletedSuccessfully))
         return 'partial';
     return 'failed';
+}
+function issueCompletedSuccessfully(issue) {
+    const delivered = issue.outcome === 'pr-created' || issue.outcome === 'direct-commit';
+    return delivered && issue.guardian?.status !== 'failed';
 }
 async function persistRunSummary(slug, summary) {
     const runDir = path.join(projectStateDir(slug), 'runs', toRunId(new Date(summary.startedAt)));

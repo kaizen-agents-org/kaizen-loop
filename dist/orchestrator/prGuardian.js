@@ -29,17 +29,61 @@ export async function enqueuePrGuardianJob(options) {
         updatedAt: now,
         lastBlocker: options.config.guardian.enabled ? undefined : 'PR guardian is disabled.'
     };
-    const existing = await readGuardianJob(options.stateDir, job.id);
-    if (existing) {
-        if (options.issueNumber && !existing.issueNumber) {
-            const linked = { ...existing, issueNumber: options.issueNumber, updatedAt: now };
-            await writeGuardianJob(options.stateDir, linked);
-            return linked;
+    const jobs = await listPrGuardianJobs(options.stateDir);
+    const existing = jobs.find((candidate) => candidate.id === job.id);
+    const matches = jobs
+        .filter((candidate) => candidate.repo === options.repo &&
+        candidate.prNumber === options.prNumber &&
+        candidate.headSha === options.headSha)
+        .sort(compareGuardianJobs);
+    const matching = matches[0];
+    if (matching) {
+        const issueNumber = options.issueNumber ?? matching.issueNumber ?? matches.find((candidate) => candidate.issueNumber)?.issueNumber;
+        if (matches.length === 1 && (!issueNumber || matching.issueNumber))
+            return matching;
+        const attemptCount = Math.max(...matches.map((candidate) => candidate.attemptCount));
+        const reactivationCount = Math.max(...matches.map((candidate) => candidate.reactivationCount ?? 0));
+        const budgetExhausted = matching.status === 'pending' && attemptCount >= matching.retryBudget;
+        const canonical = {
+            ...matching,
+            issueNumber,
+            attemptCount,
+            reactivationCount: reactivationCount > 0 ? reactivationCount : undefined,
+            status: budgetExhausted ? 'blocked' : matching.status,
+            createdAt: matches.map((candidate) => candidate.createdAt).sort()[0],
+            updatedAt: now,
+            lastCheckedAt: matches
+                .map((candidate) => candidate.lastCheckedAt)
+                .filter((value) => Boolean(value))
+                .sort()
+                .at(-1),
+            lastBlocker: budgetExhausted
+                ? `PR guardian retry budget exhausted after ${attemptCount} attempts while a duplicate pending audit remained.`
+                : matching.lastBlocker
+        };
+        await writeGuardianJob(options.stateDir, canonical);
+        await syncImplementationState(options.stateDir, canonical);
+        for (const duplicate of matches.slice(1)) {
+            await fs.rm(path.join(guardianJobsDir(options.stateDir), `${duplicate.id}.json`), { force: true });
         }
-        return existing;
+        return canonical;
     }
-    await writeGuardianJob(options.stateDir, job);
-    return job;
+    const created = existing && existing.headSha !== options.headSha
+        ? { ...job, issueNumber: job.issueNumber ?? existing.issueNumber }
+        : job;
+    await writeGuardianJob(options.stateDir, created);
+    return created;
+}
+function compareGuardianJobs(a, b) {
+    const isActive = (status) => status === 'running' || status === 'pending';
+    const groupDifference = Number(isActive(b.status)) - Number(isActive(a.status));
+    if (groupDifference !== 0)
+        return groupDifference;
+    const updatedDifference = b.updatedAt.localeCompare(a.updatedAt);
+    if (updatedDifference !== 0)
+        return updatedDifference;
+    const tieRank = (status) => status === 'running' ? 5 : status === 'pending' ? 4 : status === 'blocked' ? 3 : status === 'success' ? 2 : 1;
+    return tieRank(b.status) - tieRank(a.status);
 }
 export async function enqueueManagedPrGuardianJobs(options) {
     const [owner] = options.repo.split('/');
@@ -112,10 +156,12 @@ export async function runPrGuardianJob(options) {
     }
     const finished = {
         ...running,
+        headSha: result.headRefOid ?? running.headSha,
         status: result.status === 'success' ? 'success' : result.status === 'skipped' ? 'skipped' : 'blocked',
         updatedAt: new Date().toISOString(),
         lastCheckedAt: new Date().toISOString(),
-        lastBlocker: result.status === 'success' ? undefined : result.summary
+        lastBlocker: result.status === 'success' ? undefined : result.summary,
+        lastObservedFingerprint: result.activityFingerprint ?? running.lastObservedFingerprint
     };
     await writeGuardianJob(options.stateDir, finished);
     await syncImplementationState(options.stateDir, finished);
@@ -128,7 +174,7 @@ async function syncImplementationState(stateDir, job) {
     await saveImplementationState(stateDir, {
         issue: job.issueNumber,
         branch: job.branch,
-        phase: job.status === 'success' ? 'complete' : 'guardian',
+        phase: job.status === 'success' ? 'complete' : job.status === 'skipped' ? 'handoff' : 'guardian',
         attempt: current?.attempt ?? job.attemptCount,
         pr: job.prNumber,
         prUrl: job.prUrl,
@@ -185,23 +231,51 @@ export async function runPendingPrGuardianJobs(options) {
         const observedJob = gate.headRefOid && gate.headRefOid !== job.headSha
             ? { ...job, headSha: gate.headRefOid }
             : job;
-        if (gate.isReady) {
-            if (observedJob !== job || job.lastObservedFingerprint !== gate.activityFingerprint) {
-                await writeGuardianJob(options.stateDir, {
-                    ...observedJob,
-                    lastObservedFingerprint: gate.activityFingerprint
-                });
+        const canReactivate = job.attemptCount < job.retryBudget;
+        if (gate.isReady && observedJob === job && job.lastObservedFingerprint === undefined) {
+            await writeGuardianJob(options.stateDir, {
+                ...job,
+                lastObservedFingerprint: gate.activityFingerprint
+            });
+            continue;
+        }
+        if (gate.isReady && job.lastObservedFingerprint === gate.activityFingerprint) {
+            if (observedJob !== job) {
+                await writeGuardianJob(options.stateDir, observedJob);
             }
             continue;
         }
-        await writeGuardianJob(options.stateDir, {
+        if (gate.isReady) {
+            const reactivated = {
+                ...observedJob,
+                status: canReactivate ? 'pending' : 'blocked',
+                reactivationCount: (job.reactivationCount ?? 0) + 1,
+                lastObservedFingerprint: gate.activityFingerprint,
+                updatedAt: new Date().toISOString(),
+                lastBlocker: canReactivate
+                    ? observedJob !== job
+                        ? 'PR head changed after guardian success.'
+                        : 'New PR activity appeared after guardian success.'
+                    : `PR guardian retry budget exhausted after ${job.attemptCount} attempts while new PR activity remained unaudited.`
+            };
+            await writeGuardianJob(options.stateDir, reactivated);
+            if (!canReactivate)
+                await syncImplementationState(options.stateDir, reactivated);
+            continue;
+        }
+        const reactivated = {
             ...observedJob,
-            status: 'pending',
+            status: canReactivate ? 'pending' : 'blocked',
             reactivationCount: (job.reactivationCount ?? 0) + 1,
             lastObservedFingerprint: gate.activityFingerprint,
             updatedAt: new Date().toISOString(),
-            lastBlocker: `PR regressed after guardian success: ${gate.blockers.join('; ')}`
-        });
+            lastBlocker: canReactivate
+                ? `PR regressed after guardian success: ${gate.blockers.join('; ')}`
+                : `PR guardian retry budget exhausted after ${job.attemptCount} attempts while the PR remained regressed: ${gate.blockers.join('; ')}`
+        };
+        await writeGuardianJob(options.stateDir, reactivated);
+        if (!canReactivate)
+            await syncImplementationState(options.stateDir, reactivated);
     }
     jobs = await listPrGuardianJobs(options.stateDir);
     for (const job of jobs) {
@@ -218,7 +292,7 @@ export async function runPendingPrGuardianJobs(options) {
             await syncImplementationState(options.stateDir, blocked);
         }
     }
-    const runnable = jobs.filter((job) => job.status === 'pending' ||
+    const runnable = jobs.filter((job) => (job.status === 'pending' && job.attemptCount < job.retryBudget) ||
         (isStaleRunningJob(job, options.config.guardian.timeoutMinutes) && job.attemptCount < job.retryBudget) ||
         (job.status === 'blocked' && job.attemptCount < job.retryBudget));
     const results = [];
@@ -273,20 +347,41 @@ export async function runPrGuardianSkill(runCommand, req) {
                 status: 'success',
                 summary: successSummary({ ...initialState, isReady: true, blockers: [] }),
                 raw: '',
-                durationMs: Date.now() - startMs
+                durationMs: Date.now() - startMs,
+                activityFingerprint: initialState.activityFingerprint,
+                headRefOid: initialState.headRefOid
             };
         }
+        const initialGate = await inspectPrGate(runCommand, req);
+        const settledInitialGate = isAuditedReady(initialGate)
+            ? await waitForStablePrGate(runCommand, req, initialGate, 30)
+            : initialGate.isReady
+                ? initialGate
+                : await waitForInitiallyReadyPrGate(runCommand, req, initialGate);
+        if (isAuditedReady(settledInitialGate)) {
+            return {
+                status: 'success',
+                summary: successSummary(settledInitialGate),
+                raw: '',
+                durationMs: Date.now() - startMs,
+                activityFingerprint: settledInitialGate.activityFingerprint,
+                headRefOid: settledInitialGate.headRefOid
+            };
+        }
+        rawOutputs.push(`PR was not stably merge-ready before the first guardian pass:\n${summarizeGate(settledInitialGate)}`);
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             if (attempt > 1) {
                 const preflight = await inspectPrGate(runCommand, req);
-                if (preflight.isReady) {
-                    const stablePreflight = await waitForStablePrGate(runCommand, req, preflight);
-                    if (stablePreflight.isReady) {
+                if (isAuditedReady(preflight)) {
+                    const stablePreflight = await waitForStablePrGate(runCommand, req, preflight, 30);
+                    if (isAuditedReady(stablePreflight)) {
                         return {
                             status: 'success',
                             summary: successSummary(stablePreflight),
                             raw: rawOutputs.join('\n'),
-                            durationMs: Date.now() - startMs
+                            durationMs: Date.now() - startMs,
+                            activityFingerprint: stablePreflight.activityFingerprint,
+                            headRefOid: stablePreflight.headRefOid
                         };
                     }
                     rawOutputs.push(`PR became not merge-ready after retry preflight settle wait before pass ${attempt}:\n${summarizeGate(stablePreflight)}`);
@@ -295,26 +390,30 @@ export async function runPrGuardianSkill(runCommand, req) {
                     rawOutputs.push(`PR still not merge-ready before guardian pass ${attempt}:\n${summarizeGate(preflight)}`);
                 }
             }
-            const result = await runCommand(req.config.guardian.command, [
-                'exec',
-                '--cd',
-                req.workspaceDir,
-                '--dangerously-bypass-approvals-and-sandbox',
-                buildPrompt(req, attempt)
-            ], {
-                cwd: req.workspaceDir,
-                env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
-                timeoutMs: boundedTimeoutMs(req.config.guardian.timeoutMinutes * 60_000, req.runDeadlineAt),
-                rejectOnNonZero: false
-            });
+            const guardianAttemptStartedAt = Date.now();
+            let result;
+            try {
+                result = await runCommand(req.config.guardian.command, [
+                    'exec',
+                    '--cd',
+                    req.workspaceDir,
+                    '--dangerously-bypass-approvals-and-sandbox',
+                    buildPrompt(req, attempt)
+                ], {
+                    cwd: req.workspaceDir,
+                    env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
+                    timeoutMs: boundedTimeoutMs(req.config.guardian.timeoutMinutes * 60_000, req.runDeadlineAt),
+                    rejectOnNonZero: false
+                });
+            }
+            catch (error) {
+                const failure = error instanceof Error ? error.message : String(error);
+                rawOutputs.push(failure);
+                return finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, guardianAttemptStartedAt, failure);
+            }
             rawOutputs.push(`${result.stdout}${result.stderr}`);
             if (result.exitCode !== 0) {
-                return {
-                    status: 'failed',
-                    summary: `PR guardian skill exited with code ${result.exitCode}.`,
-                    raw: rawOutputs.join('\n'),
-                    durationMs: Date.now() - startMs
-                };
+                return finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, guardianAttemptStartedAt, `PR guardian skill exited with code ${result.exitCode}.`);
             }
             const gate = await inspectPrGate(runCommand, req);
             if (gate.isReady) {
@@ -327,7 +426,9 @@ export async function runPrGuardianSkill(runCommand, req) {
                     status: 'success',
                     summary: successSummary(lateGate),
                     raw: rawOutputs.join('\n'),
-                    durationMs: Date.now() - startMs
+                    durationMs: Date.now() - startMs,
+                    activityFingerprint: lateGate.activityFingerprint,
+                    headRefOid: lateGate.headRefOid
                 };
             }
             rawOutputs.push(`PR still not merge-ready after guardian pass ${attempt}:\n${summarizeGate(gate)}`);
@@ -478,10 +579,17 @@ async function inspectPrGate(runCommand, req) {
         inspectPullRequest(runCommand, req),
         listUnresolvedReviewThreads(runCommand, req)
     ]);
+    const checkAnnotations = pullRequest.headRefOid
+        ? await listCheckAnnotations(runCommand, req, pullRequest.headRefOid)
+        : [];
+    const auditableCheckAnnotations = checkAnnotations.filter((annotation) => annotation.level === 'failure' || annotation.level === 'warning');
     const terminal = pullRequest.state === 'MERGED';
+    const hasUndatedAuditableActivity = pullRequest.hasUndatedAuditableActivity ||
+        auditableCheckAnnotations.some((annotation) => !annotation.checkCompletedAt);
     const blockers = [
         ...mergeabilityBlockers(pullRequest),
         ...(pullRequest.reviewBlockers ?? []),
+        ...(terminal || !pullRequest.hasInProgressAuditableActivity ? [] : ['auditable PR activity is still in progress']),
         ...(terminal ? [] : unresolvedThreads.map((thread) => {
             const location = thread.line ? `${thread.path}:${thread.line}` : thread.path;
             const author = thread.author ? ` by ${thread.author}` : '';
@@ -492,11 +600,73 @@ async function inspectPrGate(runCommand, req) {
         ...pullRequest,
         activityFingerprint: JSON.stringify({
             pullRequest: pullRequest.activityFingerprint,
-            unresolvedThreads
+            unresolvedThreads,
+            checkAnnotations
         }),
         blockers,
-        isReady: blockers.length === 0
+        isReady: blockers.length === 0,
+        hasCurrentHeadCodexNoFindings: pullRequest.hasCurrentHeadCodexNoFindings,
+        hasUndatedAuditableActivity,
+        hasInProgressAuditableActivity: pullRequest.hasInProgressAuditableActivity,
+        codexNoFindingsAt: pullRequest.codexNoFindingsAt,
+        latestAuditableActivityAt: latestTimestamp([
+            pullRequest.latestAuditableActivityAt,
+            ...auditableCheckAnnotations.map((annotation) => annotation.checkCompletedAt)
+        ])
     };
+}
+async function listCheckAnnotations(runCommand, req, headRefOid) {
+    const runsResult = await runCommand('gh', [
+        'api',
+        `repos/${req.repo}/commits/${headRefOid}/check-runs?per_page=100`,
+        '--paginate',
+        '--slurp'
+    ], {
+        cwd: req.workspaceDir,
+        env: githubCliEnv(),
+        timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+        rejectOnNonZero: false
+    });
+    if (runsResult.exitCode !== 0) {
+        throw new Error(`Could not inspect PR check runs: ${runsResult.stderr || runsResult.stdout}`);
+    }
+    const runPages = JSON.parse(runsResult.stdout || '[]');
+    const checkRuns = runPages.flatMap((page) => page.check_runs ?? []);
+    const annotatedRuns = checkRuns.filter((run) => (run.output?.annotations_count ?? 0) > 0);
+    for (const checkRun of annotatedRuns) {
+        if (!checkRun.id)
+            throw new Error('Could not inspect check annotations: check run id is missing.');
+    }
+    const annotations = [];
+    for (let index = 0; index < annotatedRuns.length; index += 4) {
+        const batch = await Promise.all(annotatedRuns.slice(index, index + 4).map(async (checkRun) => {
+            const result = await runCommand('gh', [
+                'api',
+                `repos/${req.repo}/check-runs/${checkRun.id}/annotations?per_page=100`,
+                '--paginate',
+                '--slurp'
+            ], {
+                cwd: req.workspaceDir,
+                env: githubCliEnv(),
+                timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+                rejectOnNonZero: false
+            });
+            if (result.exitCode !== 0) {
+                throw new Error(`Could not inspect annotations for check ${checkRun.name ?? checkRun.id}: ${result.stderr || result.stdout}`);
+            }
+            const pages = JSON.parse(result.stdout || '[]');
+            return pages.flat().map((annotation) => ({
+                checkName: checkRun.name ?? String(checkRun.id),
+                level: String(annotation.annotation_level ?? 'unknown').toLowerCase(),
+                path: annotation.path,
+                startLine: annotation.start_line,
+                message: annotation.message,
+                checkCompletedAt: checkRun.completed_at
+            }));
+        }));
+        annotations.push(...batch.flat());
+    }
+    return annotations;
 }
 async function inspectPullRequestTerminalState(runCommand, req) {
     const result = await runCommand('gh', [
@@ -519,7 +689,7 @@ async function inspectPullRequestTerminalState(runCommand, req) {
     return JSON.parse(result.stdout || '{}');
 }
 async function inspectPullRequest(runCommand, req) {
-    const [result, reviews, requiredChecks] = await Promise.all([
+    const [result, reviews, reviewComments, issueComments, requiredChecks] = await Promise.all([
         runCommand('gh', [
             'pr',
             'view',
@@ -527,7 +697,7 @@ async function inspectPullRequest(runCommand, req) {
             '--repo',
             req.repo,
             '--json',
-            'state,isDraft,mergeStateStatus,mergeable,reviewDecision,headRefOid,comments,statusCheckRollup'
+            'state,isDraft,mergeStateStatus,mergeable,reviewDecision,reviewRequests,headRefOid,statusCheckRollup'
         ], {
             cwd: req.workspaceDir,
             env: githubCliEnv(),
@@ -535,12 +705,26 @@ async function inspectPullRequest(runCommand, req) {
             rejectOnNonZero: false
         }),
         listPullRequestReviews(runCommand, req),
+        listPullRequestReviewComments(runCommand, req),
+        listPullRequestIssueComments(runCommand, req),
         listRequiredChecks(runCommand, req)
     ]);
     if (result.exitCode !== 0) {
         throw new Error(`Could not inspect PR mergeability: ${result.stderr || result.stdout}`);
     }
     const parsed = JSON.parse(result.stdout || '{}');
+    const auditedParsed = {
+        ...parsed,
+        comments: issueComments.map((comment) => ({
+            id: String(comment.id ?? ''),
+            createdAt: comment.created_at,
+            updatedAt: comment.updated_at,
+            author: comment.user,
+            body: comment.body
+        }))
+    };
+    const codexEvidence = currentHeadCodexNoFindingsEvidence(auditedParsed);
+    const auditableCheckActivity = (parsed.statusCheckRollup ?? []).filter(isAuditableCheckActivity);
     return {
         state: parsed.state,
         isDraft: parsed.isDraft,
@@ -551,12 +735,61 @@ async function inspectPullRequest(runCommand, req) {
         activityFingerprint: JSON.stringify({
             headRefOid: parsed.headRefOid,
             checks: requiredChecks,
+            checkRollup: auditableCheckActivity.map((check) => [
+                check.name ?? check.context,
+                check.status ?? check.state,
+                check.conclusion,
+                check.startedAt,
+                check.completedAt
+            ]),
             reviews: reviews.map((review) => [review.id, review.submitted_at, review.state, review.commit_id]),
-            comments: (parsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt])
+            reviewRequests: (parsed.reviewRequests ?? []).map((request) => [
+                request.__typename ?? request.typename,
+                request.login,
+                request.slug,
+                request.name
+            ]),
+            reviewComments: reviewComments.map((comment) => [
+                comment.id,
+                comment.updated_at,
+                comment.created_at,
+                comment.commit_id,
+                comment.in_reply_to_id,
+                comment.user?.login
+            ]),
+            comments: (auditedParsed.comments ?? []).map((comment) => [comment.id, comment.updatedAt, comment.createdAt])
         }),
-        reviewBlockers: currentHeadReviewBlockers(parsed, reviews),
+        reviewBlockers: [
+            ...currentHeadReviewBlockers(auditedParsed, reviews)
+        ],
+        hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
+        hasUndatedAuditableActivity: auditableCheckActivity.some((check) => !check.completedAt) ||
+            reviews.some((review) => isExpectedBotReview(review) && !review.submitted_at) ||
+            (auditedParsed.comments ?? []).some((comment) => {
+                if (comment === codexEvidence?.comment)
+                    return false;
+                const observedAt = comment.updatedAt ?? comment.createdAt;
+                return !observedAt || Number.isNaN(Date.parse(observedAt));
+            }),
+        hasInProgressAuditableActivity: auditableCheckActivity.some((check) => {
+            const status = String(check.status ?? check.state ?? '').toUpperCase();
+            return ['EXPECTED', 'IN_PROGRESS', 'PENDING', 'QUEUED', 'REQUESTED', 'WAITING'].includes(status);
+        }) || reviews.some((review) => isExpectedBotReview(review) &&
+            !['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(review.state ?? '')),
+        codexNoFindingsAt: codexEvidence?.observedAt,
+        latestAuditableActivityAt: latestTimestamp([
+            ...(auditedParsed.comments ?? [])
+                .filter((comment) => comment !== codexEvidence?.comment)
+                .flatMap((comment) => [comment.updatedAt, comment.createdAt]),
+            ...reviews.map((review) => review.submitted_at),
+            ...reviewComments.flatMap((comment) => [comment.updated_at, comment.created_at]),
+            ...auditableCheckActivity.flatMap((check) => [check.completedAt, check.startedAt])
+        ]),
         checks: requiredChecks
     };
+}
+function isExpectedBotReview(review) {
+    return isExpectedBotLogin(normalizeReviewerLogin(review.user?.login));
 }
 async function listRequiredChecks(runCommand, req) {
     const result = await runCommand('gh', [
@@ -607,19 +840,86 @@ async function listPullRequestReviews(runCommand, req) {
         ? pages.flat()
         : pages;
 }
+async function listPullRequestReviewComments(runCommand, req) {
+    const result = await runCommand('gh', [
+        'api',
+        `repos/${req.repo}/pulls/${req.prNumber}/comments?per_page=100`,
+        '--paginate',
+        '--slurp'
+    ], {
+        cwd: req.workspaceDir,
+        env: githubCliEnv(),
+        timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+        rejectOnNonZero: false
+    });
+    if (result.exitCode !== 0) {
+        throw new Error(`Could not inspect PR review comments: ${result.stderr || result.stdout}`);
+    }
+    const pages = JSON.parse(result.stdout || '[]');
+    if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+        throw new Error('Could not inspect PR review comments: response was not a paginated array.');
+    }
+    const comments = pages.flat();
+    for (const comment of comments) {
+        const observedAt = comment.updated_at ?? comment.created_at;
+        if (typeof comment.id !== 'number' ||
+            !observedAt ||
+            Number.isNaN(Date.parse(observedAt))) {
+            throw new Error('Could not inspect PR review comments: response contained activity without an id or valid timestamp.');
+        }
+    }
+    return comments;
+}
+async function listPullRequestIssueComments(runCommand, req) {
+    const result = await runCommand('gh', [
+        'api',
+        `repos/${req.repo}/issues/${req.prNumber}/comments?per_page=100`,
+        '--paginate',
+        '--slurp'
+    ], {
+        cwd: req.workspaceDir,
+        env: githubCliEnv(),
+        timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
+        rejectOnNonZero: false
+    });
+    if (result.exitCode !== 0) {
+        throw new Error(`Could not inspect PR issue comments: ${result.stderr || result.stdout}`);
+    }
+    const pages = JSON.parse(result.stdout || '[]');
+    if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+        throw new Error('Could not inspect PR issue comments: response was not a paginated array.');
+    }
+    return pages.flat();
+}
 function currentHeadReviewBlockers(parsed, reviews) {
     if (!parsed.headRefOid || parsed.state === 'MERGED')
         return [];
+    const blockers = [];
     const latestByBot = new Map();
     for (const review of reviews) {
         const login = normalizeReviewerLogin(review.user?.login);
-        if (!login.includes('codex') && !login.includes('coderabbit'))
+        if (!isExpectedBotLogin(login))
             continue;
+        if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(review.state ?? '')) {
+            latestByBot.set(login, review);
+            continue;
+        }
         const current = latestByBot.get(login);
+        if (current && !['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(current.state ?? ''))
+            continue;
         if (!current || String(review.submitted_at ?? '') > String(current.submitted_at ?? ''))
             latestByBot.set(login, review);
     }
-    return [...latestByBot.entries()].flatMap(([login, review]) => {
+    for (const request of parsed.reviewRequests ?? []) {
+        if ((request.__typename ?? request.typename)?.toLowerCase() === 'team' || (!request.login && (request.slug || request.name))) {
+            continue;
+        }
+        const login = normalizeReviewerLogin(request.login);
+        if (!isExpectedBotLogin(login))
+            continue;
+        blockers.push(`${login} requested review is not terminal for current PR head ${parsed.headRefOid}`);
+    }
+    blockers.push(...[...latestByBot.entries()].flatMap(([login, review]) => {
         if (hasCurrentHeadBotEvidence(login, parsed))
             return [];
         if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'].includes(review.state ?? '')) {
@@ -628,21 +928,15 @@ function currentHeadReviewBlockers(parsed, reviews) {
         return review.commit_id === parsed.headRefOid
             ? []
             : [`${login} review is not for current PR head ${parsed.headRefOid}`];
-    });
+    }));
+    return [...new Set(blockers)];
 }
 function hasCurrentHeadBotEvidence(login, parsed) {
     if (!parsed.headRefOid)
         return false;
-    if (login.includes('codex')) {
-        return (parsed.comments ?? []).some((comment) => {
-            if (!normalizeReviewerLogin(comment.author?.login).includes('codex'))
-                return false;
-            const reviewedCommit = comment.body?.match(/Reviewed commit:\*{0,2}\s*`([0-9a-f]{7,40})`/i)?.[1];
-            const noFindings = /did(?:n't| not) find any (?:major )?issues/i.test(comment.body ?? '');
-            return Boolean(reviewedCommit && parsed.headRefOid?.startsWith(reviewedCommit) && noFindings);
-        });
-    }
-    if (login.includes('coderabbit')) {
+    if (login === 'chatgpt-codex-connector')
+        return Boolean(currentHeadCodexNoFindingsEvidence(parsed));
+    if (login === 'coderabbitai') {
         return (parsed.statusCheckRollup ?? []).some((check) => {
             const name = `${check.name ?? ''} ${check.context ?? ''}`.toLowerCase();
             const result = String(check.conclusion ?? check.state ?? '').toUpperCase();
@@ -651,8 +945,60 @@ function hasCurrentHeadBotEvidence(login, parsed) {
     }
     return false;
 }
+function isExpectedBotLogin(login) {
+    return login === 'chatgpt-codex-connector' || login === 'coderabbitai';
+}
+function currentHeadCodexNoFindingsEvidence(parsed) {
+    if (!parsed.headRefOid)
+        return undefined;
+    const candidates = [];
+    for (const comment of parsed.comments ?? []) {
+        if (normalizeReviewerLogin(comment.author?.login) !== 'chatgpt-codex-connector')
+            continue;
+        const body = comment.body ?? '';
+        const noFindings = body.match(/^Codex Review:\s*Didn['’]t find any (?:major )?issues\.([^\r\n]*)/i);
+        const reviewedCommit = body.match(/\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`/i);
+        const contradictoryTail = /\b(?:however|but|finding(?:s)?|found|issues? remain)\b/i.test(noFindings?.[1] ?? '');
+        const observedAt = comment.updatedAt ?? comment.createdAt;
+        if (noFindings &&
+            !contradictoryTail &&
+            reviewedCommit?.[1] &&
+            parsed.headRefOid.startsWith(reviewedCommit[1]) &&
+            observedAt &&
+            !Number.isNaN(Date.parse(observedAt))) {
+            candidates.push({ comment, observedAt });
+        }
+    }
+    return candidates.sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))[0];
+}
 function normalizeReviewerLogin(login) {
     return (login ?? 'automated reviewer').toLowerCase().replace(/\[bot\]$/, '');
+}
+function isAuditableCheckActivity(check) {
+    const result = [check.conclusion, check.state, check.status]
+        .find((value) => typeof value === 'string' && value.trim().length > 0)
+        ?.toUpperCase() ?? '';
+    return Boolean(result) && !PASSING_CHECK_CONCLUSIONS.has(result);
+}
+function isAuditedReady(gate, evidenceNotBefore) {
+    if (!gate.isReady)
+        return false;
+    if (gate.state === 'MERGED')
+        return true;
+    const evidenceAt = Date.parse(gate.codexNoFindingsAt ?? '');
+    if (Number.isNaN(evidenceAt))
+        return false;
+    if (gate.hasUndatedAuditableActivity)
+        return false;
+    const latestActivityAt = Date.parse(gate.latestAuditableActivityAt ?? '');
+    if (!Number.isNaN(latestActivityAt) && evidenceAt <= latestActivityAt)
+        return false;
+    return evidenceNotBefore === undefined || evidenceAt > Math.floor(evidenceNotBefore / 1_000) * 1_000;
+}
+function latestTimestamp(values) {
+    return values
+        .filter((value) => Boolean(value) && !Number.isNaN(Date.parse(value)))
+        .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
 }
 function mergeabilityBlockers(state) {
     const blockers = [];
@@ -682,8 +1028,8 @@ function isPassingCheck(check) {
         return check.status === 'COMPLETED' && PASSING_CHECK_CONCLUSIONS.has(check.conclusion);
     return check.status === 'SUCCESS';
 }
-async function waitForStablePrGate(runCommand, req, initial) {
-    const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
+async function waitForStablePrGate(runCommand, req, initial, minimumSettleSeconds = 0) {
+    const settleMs = Math.max(req.config.guardian.reviewSettleSeconds, minimumSettleSeconds) * 1_000;
     if (settleMs > 0)
         await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
     const first = await inspectPrGate(runCommand, req);
@@ -701,6 +1047,46 @@ async function waitForStablePrGate(runCommand, req, initial) {
         return { ...second, isReady: false, blockers: ['PR activity changed during stabilization'] };
     }
     return second;
+}
+async function waitForInitiallyReadyPrGate(runCommand, req, initial) {
+    const settleMs = req.config.guardian.reviewSettleSeconds * 1_000;
+    if (settleMs <= 0)
+        return initial;
+    await sleep(boundedTimeoutMs(settleMs, req.runDeadlineAt));
+    const gate = await inspectPrGate(runCommand, req);
+    if (!gate.isReady)
+        return gate;
+    return waitForStablePrGate(runCommand, req, gate, isAuditedReady(gate) ? 30 : 0);
+}
+async function finishAfterGuardianCommandFailure(runCommand, req, rawOutputs, startMs, guardianAttemptStartedAt, failureSummary) {
+    const reconciled = await reconcileReadyPrGate(runCommand, req, rawOutputs, guardianAttemptStartedAt);
+    return {
+        status: reconciled ? 'success' : 'failed',
+        summary: reconciled ? successSummary(reconciled) : failureSummary,
+        raw: rawOutputs.join('\n'),
+        durationMs: Date.now() - startMs,
+        activityFingerprint: reconciled?.activityFingerprint,
+        headRefOid: reconciled?.headRefOid
+    };
+}
+async function reconcileReadyPrGate(runCommand, req, rawOutputs, guardianAttemptStartedAt) {
+    try {
+        const gate = await inspectPrGate(runCommand, req);
+        if (!isAuditedReady(gate, guardianAttemptStartedAt)) {
+            rawOutputs.push(`PR remained blocked after guardian command failure:\n${summarizeGate(gate)}`);
+            return undefined;
+        }
+        const stable = await waitForStablePrGate(runCommand, req, gate, 30);
+        if (!isAuditedReady(stable, guardianAttemptStartedAt)) {
+            rawOutputs.push(`PR was not stably merge-ready after guardian command failure:\n${summarizeGate(stable)}`);
+            return undefined;
+        }
+        return stable;
+    }
+    catch (error) {
+        rawOutputs.push(`Could not reconcile PR state after guardian command failure: ${String(error)}`);
+        return undefined;
+    }
 }
 function boundedTimeoutMs(configuredTimeoutMs, runDeadlineAt) {
     if (!runDeadlineAt)
