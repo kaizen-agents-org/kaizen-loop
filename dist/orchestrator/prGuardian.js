@@ -759,7 +759,7 @@ async function inspectPullRequest(runCommand, req) {
         ],
         hasCurrentHeadCodexNoFindings: Boolean(codexEvidence),
         hasUndatedAuditableActivity: auditableCheckActivity.some((check) => !check.completedAt) ||
-            reviews.some((review) => !review.submitted_at) ||
+            reviews.some((review) => isExpectedBotReview(review) && !review.submitted_at) ||
             (auditedParsed.comments ?? []).some((comment) => {
                 if (comment === codexEvidence?.comment)
                     return false;
@@ -769,7 +769,8 @@ async function inspectPullRequest(runCommand, req) {
         hasInProgressAuditableActivity: auditableCheckActivity.some((check) => {
             const status = String(check.status ?? check.state ?? '').toUpperCase();
             return ['EXPECTED', 'IN_PROGRESS', 'PENDING', 'QUEUED', 'REQUESTED', 'WAITING'].includes(status);
-        }) || reviews.some((review) => !['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(review.state ?? '')),
+        }) || reviews.some((review) => isExpectedBotReview(review) &&
+            !['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(review.state ?? '')),
         codexNoFindingsAt: codexEvidence?.observedAt,
         latestAuditableActivityAt: latestTimestamp([
             ...(auditedParsed.comments ?? [])
@@ -781,6 +782,9 @@ async function inspectPullRequest(runCommand, req) {
         ]),
         checks: requiredChecks
     };
+}
+function isExpectedBotReview(review) {
+    return isExpectedBotLogin(normalizeReviewerLogin(review.user?.login));
 }
 async function listRequiredChecks(runCommand, req) {
     const result = await runCommand('gh', [
