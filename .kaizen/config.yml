@@ -69,9 +69,6 @@ verifier:
   command: "verifier"
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
-  update:
-    mode: canonical-main
-    timeoutMinutes: 15
 
 guardian:
   enabled: true
