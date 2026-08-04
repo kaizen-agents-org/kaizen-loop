@@ -59,6 +59,8 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 |---|---|
 | `policy.mode` | `pr-only` |
 | `verifier.enabled` | `true` |
+| `verifier.update.mode` | `pinned` |
+| `verifier.update.timeoutMinutes` | `15` |
 | `safety.operationMode` | `external` |
 
 さらに `policy.protectedPaths` / `policy.forbiddenPaths` の最低集合は欠けていれば復元され、`safety.wipLimit` は 5 を超えていれば 5 に切り下げられる。復元・切り下げが起きた場合は警告を stderr に出力し、`--json` 出力の `safetyFloorCorrections` にも記録する。
@@ -103,6 +105,8 @@ kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
 | `--agent` | この実行に限りエージェントを上書き |
 
 `--scheduled` は常に registry の専用 workspace にある `.kaizen/config.yml` を運用設定として使う。通常の手動実行は開発 checkout の設定を使う。scheduled実行ではprojectの有効状態やdry-runの有無にかかわらず、workspace設定が欠落または不正な場合は開発checkoutへfallbackせず失敗するため、先に `kaizen fleet refresh --sync` でworkspaceを復旧する。
+
+`verifier.update.mode` の既定値 `pinned` は Verifier を自動更新せず、鮮度不一致を fail-closed で報告する。`canonical-main` は Organization dogfood 専用の明示opt-inであり、`safety.operationMode: dogfood`、標準の `verifier` command、`kaizen-agents-org/verifier` repository、`refs/heads/main` trust root の組み合わせでだけ受理する。選択時は期待commitごとの管理checkoutでinstall/buildを完了してからglobal linkを切り替え、共有lockで複数projectの同時更新を直列化する。更新後のprovenanceが一致しなければ以前のpackage linkへ戻してrunを停止する。external operation modeはこの更新経路を使用できず、review済みrelease更新を維持する。
 
 ### 終了時の通知(macOS)
 

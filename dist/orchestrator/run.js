@@ -26,6 +26,7 @@ import { enqueueManagedPrGuardianJobs, enqueuePrGuardianJob, runPendingPrGuardia
 import { buildIssueIntakeComment, evaluateIssueIntake, hasIssueIntakeDecisionComment } from './issueIntake.js';
 import { decideReflection } from './reflection.js';
 import { summarizeQueue } from './summary.js';
+import { refreshCanonicalVerifier } from './verifierRefresh.js';
 import { GENERATED_PULL_REQUEST_FETCH_LIMIT, generatedPullRequestWipLimitReason, isSyncPullRequest, summarizeGeneratedPullRequestBacklog } from './wipLimit.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
 import { forbiddenCheckpointPublicationReason, isResumableImplementationState, listImplementationStates, loadImplementationState, openCheckpointStates, saveImplementationState } from './implementationState.js';
@@ -408,33 +409,92 @@ export async function preflightVerifier(options) {
     let expectedCommit;
     try {
         expectedCommit = await resolveExpectedVerifierCommit(options);
-        const runtime = await adapter.inspectRuntime();
-        const observedBuildCommit = runtime.protocol === 'structured' ? runtime.build.commit : null;
-        const observedRuntimeCommit = runtime.protocol === 'structured' ? runtime.runtime.commit : null;
-        const matchesExpected = observedBuildCommit === expectedCommit && observedRuntimeCommit === expectedCommit;
-        const clean = runtime.protocol === 'structured' && runtime.build.dirty === false && runtime.runtime.dirty === false;
-        const freshness = {
-            ...source,
-            resolvedAt: new Date().toISOString(),
-            expectedCommit,
-            observedBuildCommit,
-            observedRuntimeCommit,
-            status: runtime.protocol === 'structured' && matchesExpected && clean ? 'current' : 'stale'
-        };
-        await fs.writeFile(runtimePath, `${JSON.stringify({ ...runtime, freshness }, null, 2)}\n`);
-        if (runtime.protocol !== 'structured') {
-            return `Verifier preflight failed: ${runtime.command} does not provide structured build provenance. Install a current verifier build from ${source.repository} ${source.ref}.`;
+        const initial = await adapter.inspectRuntime();
+        const initialFailure = verifierRuntimeFailure(initial, expectedCommit, source);
+        if (!initialFailure) {
+            await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source);
+            return undefined;
         }
-        if (runtime.stale) {
-            return `Verifier preflight failed: stale build (built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Rebuild and relink ${runtime.command}.`;
+        if (options.config.verifier.update.mode !== 'canonical-main' ||
+            initial.protocol !== 'structured' ||
+            !initial.runtime.packageRoot) {
+            await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source);
+            return initialFailure;
         }
-        if (!matchesExpected) {
-            return `Verifier preflight failed: obsolete build (expected ${expectedCommit} from ${source.repository} ${source.ref}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Refresh, rebuild, and relink ${runtime.command}.`;
+        const previousPackageRoot = initial.runtime.packageRoot;
+        let refresh;
+        try {
+            refresh = await refreshCanonicalVerifier({
+                config: options.config,
+                expectedCommit,
+                previousPackageRoot,
+                runCommand: options.runCommand
+            });
         }
-        if (!clean) {
-            return `Verifier preflight failed: verifier build or runtime checkout is dirty at ${expectedCommit}. Rebuild and relink ${runtime.command} from a clean checkout.`;
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await writeVerifierRuntimeDiagnostic(runtimePath, initial, expectedCommit, source, {
+                attempted: true,
+                status: 'failed',
+                error: message
+            });
+            return `Verifier preflight failed: canonical-main refresh failed: ${message}`;
         }
-        return undefined;
+        try {
+            let refreshed;
+            let refreshedFailure;
+            let refreshedCommand;
+            try {
+                refreshed = await adapter.inspectRuntime();
+                refreshedFailure = verifierRuntimeFailure(refreshed, expectedCommit, source) ?? '';
+                if (!refreshedFailure) {
+                    try {
+                        refreshedCommand = await pinnedVerifierExecutable(refreshed, refresh.packageRoot);
+                    }
+                    catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        refreshedFailure = `Verifier preflight failed: post-refresh artifact validation failed: ${message}`;
+                    }
+                }
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                refreshedFailure = `Verifier preflight failed: post-refresh runtime inspection failed: ${message}`;
+            }
+            if (!refreshedFailure && refreshed && refreshedCommand) {
+                options.config.verifier.command = refreshedCommand;
+                await writeVerifierRuntimeDiagnostic(runtimePath, refreshed, expectedCommit, source, {
+                    attempted: true,
+                    status: 'recovered'
+                });
+                return undefined;
+            }
+            let rollbackError;
+            try {
+                await refresh.rollback();
+                const rolledBack = await adapter.inspectRuntime();
+                if (rolledBack.protocol !== 'structured' ||
+                    rolledBack.runtime.packageRoot !== previousPackageRoot ||
+                    rolledBack.runtime.commit !== initial.runtime.commit ||
+                    rolledBack.build.commit !== initial.build.commit) {
+                    throw new Error('previous Verifier provenance was not restored');
+                }
+            }
+            catch (error) {
+                rollbackError = error instanceof Error ? error.message : String(error);
+            }
+            await writeVerifierRuntimeDiagnostic(runtimePath, refreshed ?? initial, expectedCommit, source, {
+                attempted: true,
+                status: rollbackError ? 'rollback-failed' : 'rolled-back',
+                error: rollbackError ?? refreshedFailure
+            });
+            return rollbackError
+                ? `${refreshedFailure} Automatic refresh produced invalid provenance and rollback failed: ${rollbackError}`
+                : `${refreshedFailure} Automatic refresh produced invalid provenance; restored the previous Verifier link.`;
+        }
+        finally {
+            await refresh.release();
+        }
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -453,6 +513,57 @@ export async function preflightVerifier(options) {
         }, null, 2)}\n`);
         return `Verifier preflight failed: ${message}`;
     }
+}
+async function pinnedVerifierExecutable(runtime, expectedPackageRoot) {
+    if (runtime.protocol !== 'structured') {
+        throw new Error('cannot pin a legacy Verifier runtime');
+    }
+    const packageRoot = await fs.realpath(runtime.runtime.packageRoot);
+    const expectedRoot = await fs.realpath(expectedPackageRoot);
+    if (packageRoot !== expectedRoot) {
+        throw new Error(`Verifier reported package root ${packageRoot}, expected ${expectedRoot}`);
+    }
+    const executable = await fs.realpath(path.join(packageRoot, 'dist', 'cli.js'));
+    const relative = path.relative(packageRoot, executable);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new Error(`Verifier executable escapes its validated package root: ${executable}`);
+    }
+    if (((await fs.stat(executable)).mode & 0o111) === 0) {
+        throw new Error(`validated Verifier CLI is not executable: ${executable}`);
+    }
+    return executable;
+}
+function verifierRuntimeFailure(runtime, expectedCommit, source) {
+    if (runtime.protocol !== 'structured') {
+        return `Verifier preflight failed: ${runtime.command} does not provide structured build provenance. Install a current verifier build from ${source.repository} ${source.ref}.`;
+    }
+    if (runtime.stale) {
+        return `Verifier preflight failed: stale build (built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Rebuild and relink ${runtime.command}.`;
+    }
+    const matchesExpected = runtime.build.commit === expectedCommit && runtime.runtime.commit === expectedCommit;
+    if (!matchesExpected) {
+        return `Verifier preflight failed: obsolete build (expected ${expectedCommit} from ${source.repository} ${source.ref}, built ${runtime.build.commit ?? '<unknown>'}, runtime ${runtime.runtime.commit ?? '<unknown>'}). Refresh, rebuild, and relink ${runtime.command}.`;
+    }
+    if (runtime.build.dirty !== false || runtime.runtime.dirty !== false) {
+        return `Verifier preflight failed: verifier build or runtime checkout is dirty at ${expectedCommit}. Rebuild and relink ${runtime.command} from a clean checkout.`;
+    }
+    return undefined;
+}
+async function writeVerifierRuntimeDiagnostic(runtimePath, runtime, expectedCommit, source, recovery) {
+    const observedBuildCommit = runtime.protocol === 'structured' ? runtime.build.commit : null;
+    const observedRuntimeCommit = runtime.protocol === 'structured' ? runtime.runtime.commit : null;
+    const clean = runtime.protocol === 'structured' && runtime.build.dirty === false && runtime.runtime.dirty === false;
+    const current = runtime.protocol === 'structured' &&
+        observedBuildCommit === expectedCommit && observedRuntimeCommit === expectedCommit && clean;
+    const freshness = {
+        ...source,
+        resolvedAt: new Date().toISOString(),
+        expectedCommit,
+        observedBuildCommit,
+        observedRuntimeCommit,
+        status: current ? 'current' : 'stale'
+    };
+    await fs.writeFile(runtimePath, `${JSON.stringify({ ...runtime, freshness, ...(recovery ? { recovery } : {}) }, null, 2)}\n`);
 }
 export function applyImplementationBudget(selection, maxIssues) {
     if (selection.selected.length <= maxIssues)

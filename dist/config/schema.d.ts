@@ -178,6 +178,13 @@ export declare const configSchema: z.ZodObject<{
         expectedRepository: z.ZodDefault<z.ZodString>;
         expectedRef: z.ZodDefault<z.ZodString>;
         freshnessTimeoutSeconds: z.ZodDefault<z.ZodNumber>;
+        update: z.ZodDefault<z.ZodObject<{
+            mode: z.ZodDefault<z.ZodEnum<{
+                pinned: "pinned";
+                "canonical-main": "canonical-main";
+            }>>;
+            timeoutMinutes: z.ZodDefault<z.ZodNumber>;
+        }, z.core.$strict>>;
     }, z.core.$strict>>;
     guardian: z.ZodDefault<z.ZodObject<{
         enabled: z.ZodDefault<z.ZodBoolean>;

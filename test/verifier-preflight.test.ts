@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
+import { VerifierAgentAdapter } from '../src/agents/verifier.js';
 import { preflightVerifier } from '../src/orchestrator/run.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
@@ -52,6 +53,179 @@ describe('verifier freshness preflight', () => {
     expect(failure).toContain('does not provide structured build provenance');
     expect(diagnostic).toMatchObject({ protocol: 'legacy', freshness: { expectedCommit: currentCommit, status: 'stale' } });
   });
+
+  it('refreshes an obsolete Verifier exactly once for opted-in dogfood', async () => {
+    const { failure, diagnostic, runner, globalLink } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true
+    });
+
+    expect(failure).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      freshness: { expectedCommit: currentCommit, status: 'current' },
+      recovery: { attempted: true, status: 'recovered' }
+    });
+    expect(runner.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'clone')).toHaveLength(1);
+    expect((await fs.stat(path.join(globalLink, 'dist', 'cli.js'))).mode & 0o111).not.toBe(0);
+  });
+
+  it('keeps pinned runtimes fail-closed without attempting an update', async () => {
+    const { failure, runner } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit
+    });
+
+    expect(failure).toContain('obsolete build');
+    expect(runner.mock.calls.some(([command]) => command === 'pnpm' || command === 'npm')).toBe(false);
+  });
+
+  it('reports refresh failure and leaves the existing link untouched', async () => {
+    const { failure, diagnostic, globalLink, previousPackageRoot } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      refreshFails: true
+    });
+
+    expect(failure).toContain('canonical-main refresh failed');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'failed' });
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
+  });
+
+  it('removes a partial managed build when installation or build fails', async () => {
+    const { failure, globalLink, previousPackageRoot, home } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      buildFails: true
+    });
+
+    expect(failure).toContain('canonical-main refresh failed');
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
+    const buildsRoot = path.join(home, 'toolchain', 'verifier-builds');
+    expect(await fs.readdir(buildsRoot)).toEqual([]);
+  });
+
+  it('does not auto-update a legacy runtime without a rollback package root', async () => {
+    const { failure, runner } = await inspect({
+      expectedCommit: currentCommit,
+      legacy: true,
+      canonicalMainUpdate: true
+    });
+
+    expect(failure).toContain('does not provide structured build provenance');
+    expect(runner.mock.calls.some(([command]) => command === 'pnpm' || command === 'npm')).toBe(false);
+  });
+
+  it('reports a rollback failure without claiming the previous runtime was restored', async () => {
+    const { failure, diagnostic } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      invalidAfterRefresh: true,
+      rollbackFails: true
+    });
+
+    expect(failure).toContain('rollback failed');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'rollback-failed' });
+  });
+
+  it('restores the previous link when refreshed provenance is invalid', async () => {
+    const { failure, diagnostic, globalLink, previousPackageRoot } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      invalidAfterRefresh: true
+    });
+
+    expect(failure).toContain('restored the previous Verifier link');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'rolled-back' });
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
+  });
+
+  it('restores the previous link when post-refresh inspection throws', async () => {
+    const { failure, diagnostic, globalLink, previousPackageRoot } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      postRefreshInspectionFails: true
+    });
+
+    expect(failure).toContain('post-refresh runtime inspection failed');
+    expect(failure).toContain('restored the previous Verifier link');
+    expect(diagnostic.recovery).toMatchObject({ attempted: true, status: 'rolled-back' });
+    expect(await fs.realpath(globalLink)).toBe(previousPackageRoot);
+  });
+
+  it('holds the shared refresh lock through inspection and the rollback decision', async () => {
+    const { failure, refreshLockObservations } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      invalidAfterRefresh: true,
+      observeRefreshLock: true
+    });
+
+    expect(failure).toContain('restored the previous Verifier link');
+    expect(refreshLockObservations).toEqual([true, true]);
+  });
+
+  it('runs the validated package artifact after the global link changes', async () => {
+    const { failure, config, runner, globalLink, home, runDir, executedVerifierCommands } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true
+    });
+    expect(failure).toBeUndefined();
+    const validatedCommand = config.verifier.command;
+    const competingPackageRoot = path.join(home!, 'competing-verifier', 'packages', 'core');
+    await fs.mkdir(path.join(competingPackageRoot, 'dist'), { recursive: true });
+    await fs.writeFile(path.join(competingPackageRoot, 'dist', 'cli.js'), '');
+    const temporaryLink = `${globalLink}.competing`;
+    await fs.symlink(competingPackageRoot, temporaryLink, 'dir');
+    await fs.rename(temporaryLink, globalLink);
+
+    const result = await new VerifierAgentAdapter(runner, {
+      ...config.verifier,
+      envAllowlist: config.safety.envAllowlist
+    }).run({ workspaceDir: runDir, prompt: 'verify' });
+
+    expect(result.status).toBe('open_pr');
+    expect(validatedCommand).toMatch(/\/toolchain\/verifier-builds\/.+\/packages\/core\/dist\/cli\.js$/);
+    expect(executedVerifierCommands).toEqual([validatedCommand]);
+    expect(validatedCommand).not.toContain(competingPackageRoot);
+  });
+
+  it('fails closed when another process holds the shared refresh lock', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
+    const globalRoot = path.join(home, 'global', 'node_modules');
+    await fs.mkdir(path.join(globalRoot, '@verifier', '.kaizen-update-lock'), { recursive: true });
+    await fs.writeFile(
+      path.join(globalRoot, '@verifier', '.kaizen-update-lock', 'run.lock'),
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
+    );
+    const { failure } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      home,
+      globalRoot
+    });
+
+    expect(failure).toContain('canonical-main refresh failed');
+    expect(failure).toContain('already active');
+  });
 });
 
 async function inspect(options: {
@@ -59,11 +233,52 @@ async function inspect(options: {
   buildCommit?: string;
   runtimeCommit?: string;
   legacy?: boolean;
+  canonicalMainUpdate?: boolean;
+  refreshFails?: boolean;
+  buildFails?: boolean;
+  invalidAfterRefresh?: boolean;
+  rollbackFails?: boolean;
+  postRefreshInspectionFails?: boolean;
+  observeRefreshLock?: boolean;
+  home?: string;
+  globalRoot?: string;
 }) {
   const runDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-preflight-'));
-  const config = configSchema.parse({ version: 1 });
+  const previousHome = process.env.KAIZEN_HOME;
+  process.env.KAIZEN_HOME = options.home ?? await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
+  const globalRoot = options.globalRoot ?? path.join(process.env.KAIZEN_HOME, 'global', 'node_modules');
+  const previousPackageRoot = path.join(process.env.KAIZEN_HOME, 'previous-verifier', 'packages', 'core');
+  const globalLink = path.join(globalRoot, '@verifier', 'core');
+  await fs.mkdir(path.join(previousPackageRoot, 'dist'), { recursive: true });
+  await fs.writeFile(path.join(previousPackageRoot, 'dist', 'cli.js'), '');
+  await fs.chmod(path.join(previousPackageRoot, 'dist', 'cli.js'), 0o755);
+  const previousPackageRootReal = await fs.realpath(previousPackageRoot);
+  await fs.mkdir(path.dirname(globalLink), { recursive: true });
+  try {
+    await fs.lstat(globalLink);
+  } catch {
+    await fs.symlink(previousPackageRoot, globalLink, 'dir');
+  }
+  const config = configSchema.parse({
+    version: 1,
+    ...(options.canonicalMainUpdate ? {
+      safety: { operationMode: 'dogfood' },
+      verifier: { update: { mode: 'canonical-main' } }
+    } : {})
+  });
+  let refreshed = false;
+  let verifierCommandCalls = 0;
+  const refreshLockObservations: boolean[] = [];
+  const executedVerifierCommands: string[] = [];
   const runner = vi.fn<CommandRunner>(async (command, args, commandOptions) => {
     if (command === 'git') {
+      if (args[0] === 'clone') {
+        if (options.refreshFails) throw new Error('clone failed');
+        await fs.mkdir(args.at(-1)!, { recursive: true });
+        return result(command, args, commandOptions?.cwd, '');
+      }
+      if (args[0] === 'checkout') return result(command, args, commandOptions?.cwd, '');
+      if (args.join(' ') === 'rev-parse HEAD') return result(command, args, commandOptions?.cwd, `${currentCommit}\n`);
       return {
         command,
         args,
@@ -73,6 +288,45 @@ async function inspect(options: {
         stderr: options.expectedCommit ? '' : 'remote unavailable',
         durationMs: 1
       };
+    }
+    if (command === 'pnpm') {
+      if (args.join(' ') === 'build') {
+        const dist = path.join(commandOptions!.cwd!, 'packages', 'core', 'dist');
+        await fs.mkdir(dist, { recursive: true });
+        await fs.writeFile(path.join(dist, 'cli.js'), '');
+        if (options.buildFails) throw new Error('build failed');
+      }
+      return result(command, args, commandOptions?.cwd, '');
+    }
+    if (command === 'npm' && args.join(' ') === 'root -g') {
+      return result(command, args, commandOptions?.cwd, `${globalRoot}\n`);
+    }
+    if (args.length === 0) {
+      executedVerifierCommands.push(command);
+      await fs.writeFile(commandOptions!.env!.KAIZEN_VERIFIER_RESULT_PATH!, JSON.stringify({
+        status: 'open_pr',
+        summary: 'validated runtime executed',
+        notes: '',
+        evidence_grade: 'executed'
+      }));
+      return result(command, args, commandOptions?.cwd, '');
+    }
+    const currentPackageRoot = await fs.realpath(globalLink);
+    refreshed = currentPackageRoot !== previousPackageRootReal;
+    verifierCommandCalls += 1;
+    if (verifierCommandCalls > 1 && options.observeRefreshLock) {
+      try {
+        await fs.access(path.join(globalRoot, '@verifier', '.kaizen-update-lock', 'run.lock'));
+        refreshLockObservations.push(true);
+      } catch {
+        refreshLockObservations.push(false);
+      }
+    }
+    if (refreshed && options.rollbackFails) {
+      await fs.rm(previousPackageRootReal, { recursive: true, force: true });
+    }
+    if (refreshed && options.postRefreshInspectionFails) {
+      throw new Error('refreshed verifier failed to start');
     }
     return {
       command,
@@ -84,15 +338,34 @@ async function inspect(options: {
         version: '0.0.0',
         status: options.buildCommit === options.runtimeCommit ? 'current' : 'stale',
         stale: options.buildCommit === options.runtimeCommit ? false : true,
-        build: { commit: options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
-        runtime: { commit: options.runtimeCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
+        build: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
+        runtime: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.runtimeCommit, dirty: false, packageRoot: currentPackageRoot }
       }),
       stderr: '',
       durationMs: 1
     };
   });
+  try {
+    const failure = await preflightVerifier({ config, runCommand: runner, runDir });
+    const diagnostic = JSON.parse(await fs.readFile(path.join(runDir, 'verifier-runtime.json'), 'utf8'));
+    return {
+      failure,
+      diagnostic,
+      runner,
+      globalLink,
+      previousPackageRoot: previousPackageRootReal,
+      home: process.env.KAIZEN_HOME,
+      runDir,
+      config,
+      refreshLockObservations,
+      executedVerifierCommands
+    };
+  } finally {
+    if (previousHome === undefined) delete process.env.KAIZEN_HOME;
+    else process.env.KAIZEN_HOME = previousHome;
+  }
+}
 
-  const failure = await preflightVerifier({ config, runCommand: runner, runDir });
-  const diagnostic = JSON.parse(await fs.readFile(path.join(runDir, 'verifier-runtime.json'), 'utf8'));
-  return { failure, diagnostic, runner };
+function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
+  return { command, args, cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
 }

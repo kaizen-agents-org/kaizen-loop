@@ -69,6 +69,11 @@ verifier:
   command: "verifier"
   resultPath: ".kaizen/verifier/verify-result.json"
   timeoutMinutes: 15
+  update:
+    # Organization dogfood follows the trusted Verifier main branch. External
+    # adopters keep the default pinned mode and update through a reviewed release.
+    mode: canonical-main
+    timeoutMinutes: 15
 
 guardian:
   enabled: true
