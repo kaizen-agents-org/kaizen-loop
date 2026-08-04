@@ -39,6 +39,7 @@ describe('configSchema', () => {
     expect(config.verifier.expectedRepository).toBe('https://github.com/kaizen-agents-org/verifier.git');
     expect(config.verifier.expectedRef).toBe('refs/heads/main');
     expect(config.verifier.freshnessTimeoutSeconds).toBe(30);
+    expect(config.verifier.update).toEqual({ mode: 'pinned', timeoutMinutes: 15 });
     expect(config.guardian.enabled).toBe(true);
     expect(config.guardian.command).toBe('codex');
     expect(config.goal.maxIterations).toBe(5);
@@ -93,6 +94,28 @@ describe('configSchema', () => {
       version: 1,
       verifier: { expectedRepository: 'file:///tmp/untrusted-verifier.git' }
     })).toThrow('expectedRepository must use HTTPS');
+  });
+
+  it('allows canonical Verifier updates only for the trusted dogfood runtime', () => {
+    expect(() => configSchema.parse({
+      version: 1,
+      verifier: { update: { mode: 'canonical-main' } }
+    })).toThrow('available only in dogfood operation mode');
+
+    expect(configSchema.parse({
+      version: 1,
+      safety: { operationMode: 'dogfood' },
+      verifier: { update: { mode: 'canonical-main' } }
+    }).verifier.update.mode).toBe('canonical-main');
+
+    expect(() => configSchema.parse({
+      version: 1,
+      safety: { operationMode: 'dogfood' },
+      verifier: {
+        expectedRepository: 'https://github.com/example/verifier.git',
+        update: { mode: 'canonical-main' }
+      }
+    })).toThrow('require the trusted Kaizen Verifier');
   });
 
   it.each(['refs/heads/release.', 'refs/heads/.hidden'])('rejects Git-invalid trusted verifier ref %s', (expectedRef) => {
