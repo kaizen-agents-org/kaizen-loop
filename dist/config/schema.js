@@ -187,7 +187,11 @@ export const configSchema = z
             .refine((value) => !value.includes('..') && !value.includes('//') && !value.endsWith('/') &&
             value.split('/').every((component) => !component.startsWith('.') && !component.endsWith('.')), 'expectedRef must be a canonical branch ref')
             .default('refs/heads/main'),
-        freshnessTimeoutSeconds: z.number().int().positive().max(300).default(30)
+        freshnessTimeoutSeconds: z.number().int().positive().max(300).default(30),
+        update: z.object({
+            mode: z.enum(['pinned', 'canonical-main']).default('pinned'),
+            timeoutMinutes: z.number().int().positive().max(60).default(15)
+        }).strict().default({ mode: 'pinned', timeoutMinutes: 15 })
     })
         .strict()
         .default({
@@ -197,7 +201,8 @@ export const configSchema = z
         timeoutMinutes: 15,
         expectedRepository: 'https://github.com/kaizen-agents-org/verifier.git',
         expectedRef: 'refs/heads/main',
-        freshnessTimeoutSeconds: 30
+        freshnessTimeoutSeconds: 30,
+        update: { mode: 'pinned', timeoutMinutes: 15 }
     }),
     guardian: z
         .object({
@@ -346,6 +351,24 @@ export const configSchema = z
             path: ['verifier', 'command'],
             message: 'verifier.command must be verifier when safety.operationMode is external'
         });
+    }
+    if (config.verifier.update.mode === 'canonical-main') {
+        if (config.safety.operationMode !== 'dogfood') {
+            context.addIssue({
+                code: 'custom',
+                path: ['verifier', 'update', 'mode'],
+                message: 'verifier canonical-main updates are available only in dogfood operation mode'
+            });
+        }
+        if (config.verifier.command !== 'verifier' ||
+            config.verifier.expectedRepository !== 'https://github.com/kaizen-agents-org/verifier.git' ||
+            config.verifier.expectedRef !== 'refs/heads/main') {
+            context.addIssue({
+                code: 'custom',
+                path: ['verifier', 'update', 'mode'],
+                message: 'verifier canonical-main updates require the trusted Kaizen Verifier command, repository, and main ref'
+            });
+        }
     }
 });
 export const registryProjectSchema = z
