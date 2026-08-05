@@ -2636,7 +2636,7 @@ describe('runKaizen PR flow', () => {
             {
               ...issue(80, {
                 title: 'Verifier pending linkage repair',
-                body: '## Bug\nPending linkage.\n\n## Routing\nFiled in `kaizen-agents-org/verifier` from explicit ownership while processing `o/r#1`.\n\n## Notes\n- Kaizen run: prior-run'
+                body: '## Bug\nPending linkage.\n\nManual triage note: preserve this investigation.\n\n## Routing\nFiled in `kaizen-agents-org/verifier` from explicit ownership while processing `o/r#1`.\n\n## Notes\n- Kaizen run: prior-run'
               }),
               url: 'https://github.com/kaizen-agents-org/verifier/issues/80'
             }
@@ -2778,7 +2778,9 @@ describe('runKaizen PR flow', () => {
       && args.includes('80')
     );
     expect(repairedIssueEdit).toBeDefined();
-    expect(String(repairedIssueEdit![1].at(repairedIssueEdit![1].indexOf('--body') + 1))).toContain('`Closes #80`');
+    const repairedBody = String(repairedIssueEdit![1].at(repairedIssueEdit![1].indexOf('--body') + 1));
+    expect(repairedBody).toContain('Manual triage note: preserve this investigation.');
+    expect(repairedBody).toContain('`Closes #80`');
     const discoveredIssueLog = await fs.readFile(
       path.join(home, 'projects', 'o-r', 'runs', runIds[0], 'issue-1', 'discovered-issues.log'),
       'utf8'

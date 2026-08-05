@@ -2627,15 +2627,7 @@ async function repairDiscoveredIssueBodyIfNeeded(options: {
     await options.github.updateIssueBody({
       repo: options.repo,
       issue: options.existing.number,
-      body: buildDiscoveredIssueBody({
-        issue: options.issue,
-        repo: options.repo,
-        routingReason: options.routingReason,
-        sourceIssue: options.sourceIssue,
-        sourceRepo: options.sourceRepo,
-        runId: options.runId,
-        createdIssueNumber: options.existing.number
-      })
+      body: `${options.existing.body.trimEnd()}\n\n${buildPrLinkageRequirement(options.repo, options.existing.number)}`
     });
   } catch (error) {
     await fs.appendFile(
@@ -2675,16 +2667,18 @@ ${expected}
 ## Routing
 Filed in \`${options.repo}\` ${options.routingReason} while processing \`${options.sourceRepo}#${options.sourceIssue.number}\`.
 
-${options.createdIssueNumber ? `## PR linkage requirement
-- Target this repository's default branch.
-- Include \`Closes #${options.createdIssueNumber}\` in the PR body for same-repository work, or \`Closes ${options.repo}#${options.createdIssueNumber}\` for cross-repository work.
-- Before reporting the PR ready, verify \`gh pr view <pr> --json baseRefName,closingIssuesReferences,isDraft\` shows the default base branch, this issue in \`closingIssuesReferences\`, and a non-draft PR.
-
-` : ''}## Notes
+${options.createdIssueNumber ? `${buildPrLinkageRequirement(options.repo, options.createdIssueNumber)}\n\n` : ''}## Notes
 - Source issue: ${options.sourceIssue.url ?? `${options.sourceRepo}#${options.sourceIssue.number}`}
 - Source title: ${options.sourceIssue.title}
 - Kaizen run: ${options.runId}
 ${options.issue.severity ? `- Reported severity: ${options.issue.severity}` : ''}`;
+}
+
+function buildPrLinkageRequirement(repo: string, issueNumber: number): string {
+  return `## PR linkage requirement
+- Target this repository's default branch.
+- Include \`Closes #${issueNumber}\` in the PR body for same-repository work, or \`Closes ${repo}#${issueNumber}\` for cross-repository work.
+- Before reporting the PR ready, verify \`gh pr view <pr> --json baseRefName,closingIssuesReferences,isDraft\` shows the default base branch, this issue in \`closingIssuesReferences\`, and a non-draft PR.`;
 }
 
 function resolveDiscoveredIssueRepo(options: {
