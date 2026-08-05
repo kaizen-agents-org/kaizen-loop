@@ -126,7 +126,7 @@ export class GitHubClient {
             '--state',
             'open',
             '--json',
-            'number,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
+            'number,title,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
             '--limit',
             String(limit)
         ]);
@@ -422,6 +422,7 @@ query($searchQuery: String!, $limit: Int!, $cursor: String) {
     nodes {
       ... on PullRequest {
         number
+        title
         headRefName
         createdAt
         url
@@ -446,6 +447,7 @@ query($searchQuery: String!, $limit: Int!, $cursor: String) {
     nodes {
       ... on PullRequest {
         number
+        title
         headRefName
         createdAt
         mergedAt
@@ -575,6 +577,7 @@ function parseOwnerPullRequestSearchPage(stdout) {
             ?.filter((node) => Boolean(node?.number && node.url))
             .map((node) => ({
             number: node.number,
+            title: node.title,
             headRefName: node.headRefName,
             createdAt: node.createdAt,
             mergedAt: node.mergedAt,
@@ -650,6 +653,7 @@ function parsePaginatedOpenPullRequests(stdout) {
         .filter((pullRequest) => Boolean(pullRequest.number && pullRequest.html_url))
         .map((pullRequest) => ({
         number: pullRequest.number,
+        title: pullRequest.title,
         isDraft: pullRequest.draft,
         body: pullRequest.body ?? undefined,
         baseRefName: pullRequest.base?.ref,
