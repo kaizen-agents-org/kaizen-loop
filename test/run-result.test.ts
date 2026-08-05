@@ -16,6 +16,10 @@ function issue(overrides: Partial<RunIssueSummary> = {}): RunIssueSummary {
 }
 
 describe('resultFor', () => {
+  it('treats an already-fixed issue as successful', () => {
+    expect(resultFor([issue({ outcome: 'already-fixed' })])).toBe('success');
+  });
+
   it('does not report success when a created PR has a failed guardian', () => {
     expect(resultFor([issue({ guardian: { status: 'failed', summary: 'timed out' } })])).toBe('failed');
   });

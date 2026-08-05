@@ -124,6 +124,23 @@ describe('result comments', () => {
     expect(countAttempts([{ body: infrastructureFailure }])).toBe(0);
   });
 
+  it('labels a verified zero-diff result as already fixed', () => {
+    const alreadyFixed = buildResultComment({
+      runId: '2026-08-03T22-36-47Z',
+      issue: 193,
+      attempt: 1,
+      outcome: 'already-fixed',
+      agent: 'builder',
+      summary: 'The default branch already contains the fix.',
+      verifyResults: [{ command: 'npm test', ok: true }],
+      maxAttempts: 3
+    });
+
+    expect(alreadyFixed).toContain('Already fixed; verification passed with no changes');
+    expect(alreadyFixed).toContain('`npm test` passed');
+    expect(alreadyFixed).toContain('"outcome":"already-fixed"');
+  });
+
   it('counts only the latest consecutive retryable blocks', () => {
     const retryable = buildResultComment({
       runId: 'run', issue: 1, attempt: 1, outcome: 'blocked', agent: 'codex', summary: 'retry',

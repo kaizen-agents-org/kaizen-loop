@@ -4,7 +4,7 @@ export interface ResultCommentOptions {
     runId: string;
     issue: number;
     attempt: number;
-    outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped' | 'infrastructure-failure';
+    outcome: 'direct-commit' | 'pr-created' | 'already-fixed' | 'failed' | 'blocked' | 'skipped' | 'infrastructure-failure';
     agent: string;
     summary: string;
     notes?: string;

@@ -4077,6 +4077,264 @@ describe('runKaizen PR flow', () => {
     expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
   });
 
+  it('treats a fixed result with passing verification and no diff as already fixed', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace,
+          schedule: '02:00', enabled: false, createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let resultComment = '';
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(193)]));
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'comment') {
+        resultComment = String(args[args.indexOf('--body') + 1]);
+        return result(command, args, repo, '');
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: 'origin/main already contains the requested change.',
+          notes: ''
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, options?.cwd, '112 passed, 5 skipped');
+      if (command === 'verifier' && args[0] !== '--version') throw new Error('PR verifier must not run for a zero-diff success');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
+    });
+
+    expect('issues' in summary && summary).toMatchObject({
+      result: 'success',
+      issues: [{ number: 193, outcome: 'already-fixed', changedFiles: 0, changedLines: 0 }],
+      queue: {
+        backlogCount: 1,
+        eligibleCount: 1,
+        processedCount: 1,
+        health: { state: 'healthy' }
+      }
+    });
+    expect(resultComment).toContain('Already fixed; verification passed with no changes');
+    expect(resultComment).toContain('`npm test` passed');
+    expect(resultComment).toContain('"outcome":"already-fixed"');
+    expect(runner.mock.calls).toContainEqual([
+      'gh', ['issue', 'close', '193'], expect.any(Object)
+    ]);
+    await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 193)).resolves.toMatchObject({
+      phase: 'complete', attempt: 1
+    });
+    const lastRun = JSON.parse(await fs.readFile(path.join(home, 'projects', 'o-r', 'last-run.json'), 'utf8'));
+    expect(lastRun).toMatchObject({ result: 'success', processed: 1, fixed: 1, alreadyFixed: 1, failed: 0 });
+  });
+
+  it('publishes tracked changes created by successful zero-diff verification', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ verifier: { enabled: false } }, { agent: 'claude', setup: null, verify: ['npm test'] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace,
+          schedule: '02:00', enabled: false, createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let verifyCalls = 0;
+    let verificationCreatedChanges = false;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue()]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'Already fixed.', notes: ''
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') {
+        return result(command, args, workspace, verificationCreatedChanges ? 'M generated.txt\n' : '');
+      }
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') {
+        return result(command, args, workspace, verificationCreatedChanges ? 'generated.txt\n' : '');
+      }
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') {
+        return result(command, args, workspace, verificationCreatedChanges ? '1\t0\tgenerated.txt\n' : '');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm test') {
+        verifyCalls += 1;
+        if (verifyCalls === 2) verificationCreatedChanges = true;
+        return result(command, args, options?.cwd, 'passed and updated generated output');
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
+    });
+
+    expect('issues' in summary && summary.issues[0]).toMatchObject({
+      number: 1, outcome: 'pr-created', changedFiles: 1, changedLines: 1
+    });
+    expect(verifyCalls).toBe(2);
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'gh' && args[0] === 'issue' && args[1] === 'close'
+    )).toBe(false);
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'gh' && args[0] === 'pr' && args[1] === 'create'
+    )).toBe(true);
+    expect(runner.mock.calls).toContainEqual([
+      'git', ['commit', '-m', 'kaizen: Already fixed. (#1)'], expect.any(Object)
+    ]);
+  });
+
+  it('fails closed when a fixed result has no diff and configured verification fails', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace,
+          schedule: '02:00', enabled: false, createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    let verifyCalls = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(193)]));
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'Already fixed.', notes: ''
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') {
+        verifyCalls += 1;
+        return verifyCalls === 1
+          ? result(command, args, options?.cwd, 'baseline passed')
+          : failedResult(command, args, options?.cwd, 'verification failed');
+      }
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
+    });
+
+    expect('issues' in summary && summary).toMatchObject({
+      result: 'failed',
+      issues: [{ number: 193, outcome: 'failed', reason: 'Verification failed: npm test' }],
+      queue: { health: { state: 'blocked' } }
+    });
+    expect(verifyCalls).toBe(2);
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'gh' && args[0] === 'issue' && args[1] === 'close'
+    )).toBe(false);
+  });
+
+  it('fails closed when a fixed result has no diff and verification is not configured', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: [] }));
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace,
+          schedule: '02:00', enabled: false, createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(193)]));
+      }
+      if (command === 'gh') return githubReadinessResult(command, args, repo);
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'Already fixed.', notes: ''
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
+    });
+
+    expect('issues' in summary && summary).toMatchObject({
+      result: 'failed',
+      issues: [{ number: 193, outcome: 'failed', reason: 'Agent produced no changes.' }],
+      queue: { health: { state: 'blocked' } }
+    });
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'gh' && args[0] === 'issue' && args[1] === 'close'
+    )).toBe(false);
+  });
+
   it('fails an issue immediately when worktree setup fails', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
