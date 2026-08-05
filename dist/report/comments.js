@@ -133,6 +133,8 @@ function formatOutcome(options) {
         return `PR created${options.prUrl ? ` (${options.prUrl})` : ''}`;
     if (options.outcome === 'direct-commit')
         return `Direct commit${options.commit ? ` (${options.commit})` : ''}`;
+    if (options.outcome === 'already-fixed')
+        return 'Already fixed; verification passed with no changes';
     if (options.outcome === 'blocked') {
         if (options.blockDisposition === 'retryable')
             return 'Blocked; retryable external dependency';

@@ -116,6 +116,7 @@ export declare function statusProject(options: {
             processed: number;
             prCreated: number;
             directCommit: number;
+            alreadyFixed: number;
             failed: number;
             infrastructureFailed: number;
             blocked: number;
@@ -156,6 +157,7 @@ export declare function statusProject(options: {
         processed: number;
         prCreated: number;
         directCommit: number;
+        alreadyFixed: number;
         failed: number;
         infrastructureFailed: number;
         blocked: number;

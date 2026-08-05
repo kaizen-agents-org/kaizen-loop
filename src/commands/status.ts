@@ -533,6 +533,7 @@ function summarizeRunIssues(summaries: RunSummary[]) {
   metrics.processed = issues.length;
   metrics.prCreated = countOutcome(issues, 'pr-created');
   metrics.directCommit = countOutcome(issues, 'direct-commit');
+  metrics.alreadyFixed = countOutcome(issues, 'already-fixed');
   metrics.failed = countOutcome(issues, 'failed');
   metrics.infrastructureFailed = countOutcome(issues, 'infrastructure-failure');
   metrics.blocked = countOutcome(issues, 'blocked');
@@ -557,6 +558,7 @@ function emptyRunMetrics() {
     processed: 0,
     prCreated: 0,
     directCommit: 0,
+    alreadyFixed: 0,
     failed: 0,
     infrastructureFailed: 0,
     blocked: 0,

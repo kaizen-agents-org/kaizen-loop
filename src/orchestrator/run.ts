@@ -1193,6 +1193,30 @@ async function processIssue(options: {
       await commitLeftovers(workspace, options.issue, agentResult);
       const diff = await workspace.collectDiffStats(options.config);
       if (diff.changedFiles === 0) {
+        if (!skipBuilder && agentResult.status === 'fixed' && options.config.commands.verify.length > 0) {
+          await saveImplementationState(options.stateDir, {
+            issue: options.issue.number,
+            branch,
+            phase: 'verifying',
+            attempt: attempts,
+            lastFailure: previousFailure,
+            pr: previousState?.pr,
+            prUrl: previousState?.prUrl
+          });
+          verifyResults = await workspace.runVerify(options.config, options.runDeadlineAt);
+          await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
+          const failedVerify = verifyResults.find((item) => !item.ok);
+          if (failedVerify) {
+            return withDiscoveredFollowups(
+              await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults),
+              discoveredFollowups
+            );
+          }
+          return withDiscoveredFollowups(
+            await finishAlreadyFixed(options, agent, attempts, agentResult, verifyResults, started),
+            discoveredFollowups
+          );
+        }
         return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent produced no changes.', started), discoveredFollowups);
       }
       if (diff.forbiddenFiles.length > 0) {
@@ -1572,6 +1596,64 @@ async function finishPr(
     reason,
     changedFiles: finalDiff.changedFiles,
     changedLines: finalDiff.changedLines,
+    verifyRetries: 0,
+    durationMs: Date.now() - started
+  };
+}
+
+async function finishAlreadyFixed(
+  options: {
+    issue: GitHubIssue;
+    config: KaizenConfig;
+    runId: string;
+    github: GitHubClient;
+    trigger: RunSummary['trigger'];
+    stateDir: string;
+    branch: string;
+  },
+  agent: AgentAdapter,
+  attempt: number,
+  agentResult: AgentResult,
+  verifyResults: Array<{ command: string; ok: boolean; output: string }>,
+  started: number
+): Promise<RunIssueSummary> {
+  const reason = 'Agent reported fixed; configured verification passed with no changes.';
+  await options.github.comment(
+    options.issue.number,
+    buildResultComment({
+      runId: options.runId,
+      issue: options.issue.number,
+      attempt,
+      outcome: 'already-fixed',
+      agent: agent.name,
+      summary: agentSummary(agentResult),
+      notes: agentResult.notes,
+      verifyResults,
+      reason,
+      trigger: options.trigger,
+      maxAttempts: options.config.run.maxAttemptsPerIssue
+    })
+  );
+  await options.github.closeIssue(options.issue.number);
+  await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+  await applyIssueDisposition(options.github, options.issue.number);
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: options.branch,
+    phase: 'complete',
+    attempt
+  });
+  return {
+    number: options.issue.number,
+    title: options.issue.title,
+    priority: priorityLabel(options.issue, options.config),
+    agent: agent.name,
+    attempt,
+    outcome: 'already-fixed',
+    branch: options.branch,
+    reason,
+    changedFiles: 0,
+    changedLines: 0,
     verifyRetries: 0,
     durationMs: Date.now() - started
   };
@@ -2828,7 +2910,7 @@ export function resultFor(issues: RunIssueSummary[]): RunSummary['result'] {
 }
 
 function issueCompletedSuccessfully(issue: RunIssueSummary): boolean {
-  const delivered = issue.outcome === 'pr-created' || issue.outcome === 'direct-commit';
+  const delivered = issue.outcome === 'pr-created' || issue.outcome === 'direct-commit' || issue.outcome === 'already-fixed';
   return delivered && issue.guardian?.status !== 'failed';
 }
 
@@ -2854,7 +2936,10 @@ async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
     finishedAt: summary.finishedAt,
     result: summary.result,
     processed: summary.issues.length,
-    fixed: summary.issues.filter((issue) => issue.outcome === 'direct-commit' || issue.outcome === 'pr-created').length,
+    fixed: summary.issues.filter((issue) =>
+      issue.outcome === 'direct-commit' || issue.outcome === 'pr-created' || issue.outcome === 'already-fixed'
+    ).length,
+    alreadyFixed: summary.issues.filter((issue) => issue.outcome === 'already-fixed').length,
     prCreated: summary.issues.filter((issue) => issue.outcome === 'pr-created').length,
     failed: summary.issues.filter((issue) => issue.outcome === 'failed').length,
     infrastructureFailed: summary.issues.filter((issue) => issue.outcome === 'infrastructure-failure').length,

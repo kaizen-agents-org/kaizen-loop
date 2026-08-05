@@ -5,7 +5,7 @@ export interface ResultCommentOptions {
   runId: string;
   issue: number;
   attempt: number;
-  outcome: 'direct-commit' | 'pr-created' | 'failed' | 'blocked' | 'skipped' | 'infrastructure-failure';
+  outcome: 'direct-commit' | 'pr-created' | 'already-fixed' | 'failed' | 'blocked' | 'skipped' | 'infrastructure-failure';
   agent: string;
   summary: string;
   notes?: string;
@@ -180,6 +180,7 @@ function pullRequestNumber(value: string): number | undefined {
 function formatOutcome(options: ResultCommentOptions): string {
   if (options.outcome === 'pr-created') return `PR created${options.prUrl ? ` (${options.prUrl})` : ''}`;
   if (options.outcome === 'direct-commit') return `Direct commit${options.commit ? ` (${options.commit})` : ''}`;
+  if (options.outcome === 'already-fixed') return 'Already fixed; verification passed with no changes';
   if (options.outcome === 'blocked') {
     if (options.blockDisposition === 'retryable') return 'Blocked; retryable external dependency';
     if (options.blockDisposition === 'human-input-required') return 'Blocked; needs human input';
