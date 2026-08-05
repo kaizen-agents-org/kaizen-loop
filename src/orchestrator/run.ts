@@ -1150,6 +1150,7 @@ async function processIssue(options: {
     const filedDiscoveredIssues = new Set<string>();
 
     for (let retry = 0; retry <= options.config.run.maxVerifyRetries; retry += 1) {
+      let verificationPassedAfterZeroDiff = false;
       const skipBuilder = resumeAtVerifier && retry === 0;
       if (!skipBuilder) {
         if (resumeAtVerifier && retry === 1) agent = await selectAgent(options.config, options.runCommand);
@@ -1191,7 +1192,7 @@ async function processIssue(options: {
 
       if (!agentResult) throw new Error('Agent did not produce a result.');
       await commitLeftovers(workspace, options.issue, agentResult);
-      const diff = await workspace.collectDiffStats(options.config);
+      let diff = await workspace.collectDiffStats(options.config);
       if (diff.changedFiles === 0) {
         if (!skipBuilder && agentResult.status === 'fixed' && options.config.commands.verify.length > 0) {
           await saveImplementationState(options.stateDir, {
@@ -1212,12 +1213,18 @@ async function processIssue(options: {
               discoveredFollowups
             );
           }
-          return withDiscoveredFollowups(
-            await finishAlreadyFixed(options, agent, attempts, agentResult, verifyResults, started),
-            discoveredFollowups
-          );
+          await commitLeftovers(workspace, options.issue, agentResult);
+          diff = await workspace.collectDiffStats(options.config);
+          if (diff.changedFiles === 0) {
+            return withDiscoveredFollowups(
+              await finishAlreadyFixed(options, agent, attempts, agentResult, verifyResults, started),
+              discoveredFollowups
+            );
+          }
+          verificationPassedAfterZeroDiff = true;
+        } else {
+          return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent produced no changes.', started), discoveredFollowups);
         }
-        return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent produced no changes.', started), discoveredFollowups);
       }
       if (diff.forbiddenFiles.length > 0) {
         return withDiscoveredFollowups(
@@ -1235,18 +1242,20 @@ async function processIssue(options: {
         pr: previousState?.pr,
         prUrl: previousState?.prUrl
       });
-      verifyResults = await workspace.runVerify(options.config, options.runDeadlineAt);
-      await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
-      const failedVerify = verifyResults.find((item) => !item.ok);
-      if (failedVerify) {
-        if (retry >= options.config.run.maxVerifyRetries) {
-          return withDiscoveredFollowups(
-            await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults),
-            discoveredFollowups
-          );
+      if (!verificationPassedAfterZeroDiff) {
+        verifyResults = await workspace.runVerify(options.config, options.runDeadlineAt);
+        await fs.writeFile(path.join(issueDir, 'verify.log'), verifyResults.map((item) => `# ${item.command}\n${item.output}`).join('\n\n'));
+        const failedVerify = verifyResults.find((item) => !item.ok);
+        if (failedVerify) {
+          if (retry >= options.config.run.maxVerifyRetries) {
+            return withDiscoveredFollowups(
+              await finishFailed(options, agent, attempts, `Verification failed: ${failedVerify.command}`, started, verifyResults),
+              discoveredFollowups
+            );
+          }
+          previousFailure = `Verification failed: ${failedVerify.command}\n\n${tailLines(failedVerify.output, 200)}`;
+          continue;
         }
-        previousFailure = `Verification failed: ${failedVerify.command}\n\n${tailLines(failedVerify.output, 200)}`;
-        continue;
       }
 
       if (!verifier) break;
