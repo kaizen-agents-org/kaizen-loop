@@ -52,6 +52,7 @@ commands:
   verify:
     - "npm test"
     - "npm run typecheck"
+    - "npm run check:dist"
     - "npm run build"
     - "test -f skills/gh-link-issue-pr/SKILL.md && test -f skills/kaizen-bug-router/SKILL.md && test -f skills/pr-guardian/SKILL.md"
   verifyTimeoutMinutes: 15
