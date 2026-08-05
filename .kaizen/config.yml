@@ -53,6 +53,7 @@ commands:
     - "npm test"
     - "npm run typecheck"
     - "npm run build"
+    - "npm run check:dist"
     - "test -f skills/gh-link-issue-pr/SKILL.md && test -f skills/kaizen-bug-router/SKILL.md && test -f skills/pr-guardian/SKILL.md"
   verifyTimeoutMinutes: 15
 
