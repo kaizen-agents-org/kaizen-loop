@@ -664,6 +664,30 @@ describe('GitHubClient', () => {
     }
   );
 
+  it('updates an issue body in an explicitly targeted repository', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const client = new GitHubClient(runner, '/repo');
+
+    await client.updateIssueBody({
+      repo: 'kaizen-agents-org/verifier',
+      issue: 77,
+      body: 'updated details'
+    });
+
+    expect(runner).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'edit', '77', '--body', 'updated details', '--repo', 'kaizen-agents-org/verifier'],
+      expect.any(Object)
+    );
+  });
+
   it('retries without an optional label while retaining every required label', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       const labelValue = String(args.at(args.indexOf('--label') + 1));

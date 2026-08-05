@@ -2631,10 +2631,26 @@ describe('runKaizen PR flow', () => {
             }
           ]));
         }
+        if (args.join(' ').includes('Verifier pending linkage repair')) {
+          return result(command, args, repo, JSON.stringify([
+            {
+              ...issue(80, {
+                title: 'Verifier pending linkage repair',
+                body: '## Bug\nPending linkage.\n\nManual triage note: preserve this investigation.\n\n## Routing\nFiled in `kaizen-agents-org/verifier` from explicit ownership while processing `o/r#1`.\n\n## Notes\n- Kaizen run: prior-run'
+              }),
+              url: 'https://github.com/kaizen-agents-org/verifier/issues/80'
+            }
+          ]));
+        }
         return result(command, args, repo, '[]');
       }
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
-        return result(command, args, repo, 'https://github.com/kaizen-agents-org/verifier/issues/77\n');
+        const title = String(args.at(args.indexOf('--title') + 1));
+        const issueNumber = title === 'Verifier linkage edit failure' ? 79 : 77;
+        return result(command, args, repo, `https://github.com/kaizen-agents-org/verifier/issues/${issueNumber}\n`);
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'edit' && args.includes('79')) {
+        throw new Error('simulated exhausted issue body edit retries');
       }
       if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, repo, 'https://github.com/o/r/pull/4\n');
       if (command === 'gh') return githubReadinessResult(command, args, repo);
@@ -2658,6 +2674,20 @@ describe('runKaizen PR flow', () => {
               repo: 'verifier',
               body: 'Verifier already has this follow-up open.',
               expected: 'The duplicate should not be filed again.',
+              evidence: 'existing issue'
+            },
+            {
+              title: 'Verifier linkage edit failure',
+              repo: 'verifier',
+              body: 'The issue is created before its enriched body can be saved.',
+              expected: 'Creation should remain visible when enrichment fails.',
+              evidence: 'failureClass=transient gh issue edit exhausted retries after issue create succeeded'
+            },
+            {
+              title: 'Verifier pending linkage repair',
+              repo: 'verifier',
+              body: 'A prior run created this issue but failed to enrich its body.',
+              expected: 'A duplicate check should repair the generated issue body.',
               evidence: 'existing issue'
             }
           ]
@@ -2701,6 +2731,18 @@ describe('runKaizen PR flow', () => {
         repo: 'kaizen-agents-org/verifier',
         status: 'duplicate',
         url: 'https://github.com/kaizen-agents-org/verifier/issues/78'
+      },
+      {
+        title: 'Verifier linkage edit failure',
+        repo: 'kaizen-agents-org/verifier',
+        status: 'created',
+        url: 'https://github.com/kaizen-agents-org/verifier/issues/79'
+      },
+      {
+        title: 'Verifier pending linkage repair',
+        repo: 'kaizen-agents-org/verifier',
+        status: 'duplicate',
+        url: 'https://github.com/kaizen-agents-org/verifier/issues/80'
       }
     ];
     expect('issues' in summary && summary.issues[0].discoveredFollowups).toEqual(expectedFollowups);
@@ -2716,9 +2758,39 @@ describe('runKaizen PR flow', () => {
     expect(issueCreateArgs).toContain('kaizen,kaizen:approved,kaizen:queued,kaizen:P2');
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('Source issue');
     expect(String(issueCreateArgs.at(issueCreateArgs.indexOf('--body') + 1))).toContain('<!-- kaizen-loop:discovered-issue:v1');
+    const issueEdit = runner.mock.calls.find(([command, args]) =>
+      command === 'gh'
+      && args[0] === 'issue'
+      && args[1] === 'edit'
+      && args.includes('77')
+      && args.includes('kaizen-agents-org/verifier')
+    );
+    expect(issueEdit).toBeDefined();
+    const updatedBody = String(issueEdit![1].at(issueEdit![1].indexOf('--body') + 1));
+    expect(updatedBody).toContain('## PR linkage requirement');
+    expect(updatedBody).toContain('`Closes #77`');
+    expect(updatedBody).toContain('`Closes kaizen-agents-org/verifier#77`');
+    expect(updatedBody).toContain('gh pr view <pr> --json baseRefName,closingIssuesReferences,isDraft');
+    const repairedIssueEdit = runner.mock.calls.find(([command, args]) =>
+      command === 'gh'
+      && args[0] === 'issue'
+      && args[1] === 'edit'
+      && args.includes('80')
+    );
+    expect(repairedIssueEdit).toBeDefined();
+    const repairedBody = String(repairedIssueEdit![1].at(repairedIssueEdit![1].indexOf('--body') + 1));
+    expect(repairedBody).toContain('Manual triage note: preserve this investigation.');
+    expect(repairedBody).toContain('`Closes #80`');
+    const discoveredIssueLog = await fs.readFile(
+      path.join(home, 'projects', 'o-r', 'runs', runIds[0], 'issue-1', 'discovered-issues.log'),
+      'utf8'
+    );
+    expect(discoveredIssueLog).toContain('Created discovered issue kaizen-agents-org/verifier#79');
+    expect(discoveredIssueLog).toContain('a later duplicate check will retry the repair');
     const comments = runner.mock.calls.filter(([command, args]) => command === 'gh' && args.join(' ').startsWith('issue comment'));
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Kaizen discovered follow-up issue'))).toBe(true);
     expect(comments.some(([, args]) => String(args.at(-1)).includes('Existing in `kaizen-agents-org/verifier`'))).toBe(true);
+    expect(comments.some(([, args]) => String(args.at(-1)).includes('issues/79'))).toBe(true);
   });
 
   it('files recovered fallback issues without turning an invalid builder result into success or duplicating a retry', async () => {

@@ -35,6 +35,11 @@ export declare class GitHubClient {
     getPullRequestResolution(number: number): Promise<GitHubPullRequestResolution>;
     addLabels(issue: number, labels: string[]): Promise<void>;
     removeLabels(issue: number, labels: string[]): Promise<void>;
+    updateIssueBody(options: {
+        issue: number;
+        body: string;
+        repo?: string;
+    }): Promise<void>;
     comment(issue: number, body: string): Promise<void>;
     findOpenIssueByTitle(options: {
         repo?: string;
