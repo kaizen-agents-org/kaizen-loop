@@ -184,7 +184,7 @@ export class GitHubClient {
       '--state',
       'open',
       '--json',
-      'number,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
+      'number,title,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
       '--limit',
       String(limit)
     ]);
@@ -523,6 +523,7 @@ query($searchQuery: String!, $limit: Int!, $cursor: String) {
     nodes {
       ... on PullRequest {
         number
+        title
         headRefName
         createdAt
         url
@@ -548,6 +549,7 @@ query($searchQuery: String!, $limit: Int!, $cursor: String) {
     nodes {
       ... on PullRequest {
         number
+        title
         headRefName
         createdAt
         mergedAt
@@ -674,6 +676,7 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
         pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
         nodes?: Array<{
           number?: number;
+          title?: string;
           headRefName?: string;
           createdAt?: string;
           mergedAt?: string | null;
@@ -714,6 +717,7 @@ function parseOwnerPullRequestSearchPage(stdout: string): {
         ?.filter((node): node is NonNullable<typeof node> => Boolean(node?.number && node.url))
         .map((node) => ({
           number: node.number as number,
+          title: node.title,
           headRefName: node.headRefName,
           createdAt: node.createdAt,
           mergedAt: node.mergedAt,
@@ -809,6 +813,7 @@ function pullRequestKey(pullRequest: GitHubPullRequest): string {
 function parsePaginatedOpenPullRequests(stdout: string): GitHubPullRequest[] {
   type RestPullRequest = {
     number?: number;
+    title?: string;
     draft?: boolean;
     body?: string | null;
     base?: { ref?: string };
@@ -829,6 +834,7 @@ function parsePaginatedOpenPullRequests(stdout: string): GitHubPullRequest[] {
     )
     .map((pullRequest) => ({
       number: pullRequest.number,
+      title: pullRequest.title,
       isDraft: pullRequest.draft,
       body: pullRequest.body ?? undefined,
       baseRefName: pullRequest.base?.ref,

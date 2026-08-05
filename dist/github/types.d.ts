@@ -27,6 +27,7 @@ export interface PullRequestResult {
 }
 export interface GitHubPullRequest {
     number: number;
+    title?: string;
     isDraft?: boolean;
     body?: string;
     baseRefName?: string;

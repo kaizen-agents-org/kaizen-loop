@@ -336,6 +336,7 @@ describe('GitHubClient', () => {
       stdout: JSON.stringify([
         {
           number: 7,
+          title: '[scout] Improve generated PR limits',
           headRefName: 'kaizen/issue-1-x',
           headRepositoryOwner: { login: 'o' },
           createdAt: '2026-07-01T00:00:00Z',
@@ -353,6 +354,7 @@ describe('GitHubClient', () => {
       expect(prs).toEqual([
         {
           number: 7,
+          title: '[scout] Improve generated PR limits',
           headRefName: 'kaizen/issue-1-x',
           headRepositoryOwner: { login: 'o' },
           createdAt: '2026-07-01T00:00:00Z',
@@ -365,7 +367,7 @@ describe('GitHubClient', () => {
         '--state',
         'open',
         '--json',
-        'number,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
+        'number,title,body,baseRefName,headRefName,headRefOid,headRepositoryOwner,createdAt,url,isDraft',
         '--limit',
         '3'
       ]);
@@ -423,6 +425,7 @@ describe('GitHubClient', () => {
             nodes: [
               {
                 number: 7,
+                title: '[scout] Improve generated PR limits',
                 headRefName: 'codex/sync-kaizen-shared-skills',
                 createdAt: '2026-07-01T00:00:00Z',
                 author: { login: 'github-actions[bot]', __typename: 'Bot' },
@@ -442,6 +445,7 @@ describe('GitHubClient', () => {
 
     expect(prs[0]).toMatchObject({
       number: 7,
+      title: '[scout] Improve generated PR limits',
       headRefName: 'codex/sync-kaizen-shared-skills',
       createdAt: '2026-07-01T00:00:00Z',
       author: { login: 'github-actions[bot]', type: 'Bot' },
@@ -457,6 +461,7 @@ describe('GitHubClient', () => {
       '-F',
       'limit=5'
     ]);
+    expect(runner.mock.calls[0][1]).toContainEqual(expect.stringContaining('title'));
   });
 
   it('searches owner merged pull requests with commit source fields', async () => {
