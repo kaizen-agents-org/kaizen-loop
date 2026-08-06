@@ -1,4 +1,4 @@
-import { gitCliEnv } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv } from '../utils/command.js';
 export class GitClient {
     run;
     cwd;
@@ -155,12 +155,12 @@ export class GitClient {
         return result.stdout;
     }
     async push(ref, options = {}) {
-        await this.git(['push', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref]);
+        await this.git(['push', '--no-verify', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref], { env: gitPublicationEnv() });
     }
     git(args, options) {
         return this.run('git', args, {
             cwd: this.cwd,
-            env: gitCliEnv(),
+            env: options?.env ?? gitCliEnv(),
             rejectOnNonZero: options?.rejectOnNonZero
         });
     }

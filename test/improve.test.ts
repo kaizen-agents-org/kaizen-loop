@@ -148,7 +148,7 @@ describe('runImprove', () => {
     expect('issues' in output && output.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command === 'push -u origin main')).toBe(false);
-    expect(gitCommands.some((command) => command === 'push -u --force-with-lease origin kaizen/issue-8-issue-8')).toBe(true);
+    expect(gitCommands.some((command) => command === 'push --no-verify -u --force-with-lease origin kaizen/issue-8-issue-8')).toBe(true);
   });
 });
 

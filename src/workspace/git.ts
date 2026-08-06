@@ -1,4 +1,4 @@
-import { gitCliEnv, type CommandRunner } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv, type CommandRunner } from '../utils/command.js';
 
 export class GitClient {
   constructor(
@@ -189,13 +189,16 @@ export class GitClient {
   }
 
   async push(ref: string, options: { forceWithLease?: boolean } = {}): Promise<void> {
-    await this.git(['push', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref]);
+    await this.git(
+      ['push', '--no-verify', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref],
+      { env: gitPublicationEnv() }
+    );
   }
 
-  private git(args: string[], options?: { rejectOnNonZero?: boolean }) {
+  private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv }) {
     return this.run('git', args, {
       cwd: this.cwd,
-      env: gitCliEnv(),
+      env: options?.env ?? gitCliEnv(),
       rejectOnNonZero: options?.rejectOnNonZero
     });
   }

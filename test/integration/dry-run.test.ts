@@ -2234,6 +2234,7 @@ describe('runKaizen PR flow', () => {
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
     vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('GH_TOKEN', 'supervisor-publication-token');
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
@@ -2319,8 +2320,19 @@ describe('runKaizen PR flow', () => {
     const prCreateArgs = runner.mock.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
     expect(prCreateArgs?.[1]).not.toContain('--draft');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
-    expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
+    expect(gitCommands).toContain('push --no-verify -u --force-with-lease origin kaizen/issue-1-fix-bug');
     expect(gitCommands).not.toContain('push origin main');
+    const builderRuns = runner.mock.calls.filter(([command]) => command === 'builder-agent');
+    expect(builderRuns.every(([, , options]) => options?.env?.GH_TOKEN === undefined)).toBe(true);
+    const publicationPush = runner.mock.calls.find(
+      ([command, args]) => command === 'git' && args[0] === 'push'
+    );
+    expect(publicationPush?.[2]?.env).toMatchObject({
+      GH_TOKEN: 'supervisor-publication-token',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '!gh auth git-credential'
+    });
+    expect(runner.mock.calls.flatMap(([, args]) => args)).not.toContain('supervisor-publication-token');
     const prCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr create'));
     expect(String(prCreate?.[1].at(-1))).toContain('## Builder notes');
     expect(String(prCreate?.[1].at(-1))).toContain('Protected path changed');
@@ -3418,7 +3430,7 @@ describe('runKaizen PR flow', () => {
     expect(ghCommands.some((command) => command.startsWith('pr create'))).toBe(false);
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands).toContain('checkout --ignore-other-worktrees main');
-    expect(gitCommands).toContain('push -u origin main');
+    expect(gitCommands).toContain('push --no-verify -u origin main');
   });
 
   it('returns block_pr verifier results to the builder before creating a PR', async () => {
@@ -4074,7 +4086,7 @@ describe('runKaizen PR flow', () => {
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
     expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
-    expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
+    expect(gitCommands).toContain('push --no-verify -u --force-with-lease origin kaizen/issue-1-fix-bug');
   });
 
   it('treats a fixed result with passing verification and no diff as already fixed', async () => {

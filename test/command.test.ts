@@ -2,7 +2,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildAllowlistedEnv, gitCliEnv, githubCliEnv, runCommand, withRunDeadline, type CommandRunner } from '../src/utils/command.js';
+import {
+  buildAllowlistedEnv,
+  gitCliEnv,
+  gitPublicationEnv,
+  githubCliEnv,
+  runCommand,
+  withRunDeadline,
+  type CommandRunner
+} from '../src/utils/command.js';
 
 describe('buildAllowlistedEnv', () => {
   it('copies only allowlisted variables plus explicit extras', () => {
@@ -59,6 +67,24 @@ describe('gitCliEnv', () => {
       PATH: '/bin',
       SSH_AUTH_SOCK: '/ssh-agent',
       GIT_SSH_COMMAND: 'ssh -i key'
+    });
+  });
+});
+
+describe('gitPublicationEnv', () => {
+  it('provides GitHub HTTPS auth to git through the gh credential helper without embedding the token in arguments', () => {
+    expect(gitPublicationEnv({
+      PATH: '/bin',
+      GH_TOKEN: 'gh-token',
+      GH_CONFIG_DIR: '/gh-config',
+      SECRET_TOKEN: 'secret'
+    })).toEqual({
+      PATH: '/bin',
+      GH_TOKEN: 'gh-token',
+      GH_CONFIG_DIR: '/gh-config',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '!gh auth git-credential'
     });
   });
 });

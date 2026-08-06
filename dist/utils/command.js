@@ -150,6 +150,13 @@ export function githubCliEnv(source = process.env) {
 export function gitCliEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 }
+export function gitPublicationEnv(source = process.env) {
+    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST], {
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'credential.helper',
+        GIT_CONFIG_VALUE_0: '!gh auth git-credential'
+    });
+}
 export function withRunDeadline(runCommand, deadlineAt) {
     return async (command, args, options = {}) => {
         return runCommand(command, args, {

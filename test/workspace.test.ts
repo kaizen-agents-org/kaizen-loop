@@ -1,12 +1,16 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 import { GitClient } from '../src/workspace/git.js';
 import { CheckpointBranchDivergedError, CheckpointBranchMissingError, WorkspaceManager } from '../src/workspace/manager.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('workspace branch handling', () => {
   it('replaces an existing deterministic issue branch before retrying', async () => {
@@ -47,11 +51,37 @@ describe('workspace branch handling', () => {
 
     expect(runner.mock.calls[0][1]).toEqual([
       'push',
+      '--no-verify',
       '-u',
       '--force-with-lease',
       'origin',
       'kaizen/issue-12-retry-branch'
     ]);
+  });
+
+  it('uses supervisor GitHub credentials only for publication pushes', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const git = new GitClient(runner, '/workspace');
+
+    await git.statusPorcelain();
+    await git.push('kaizen/issue-330-fix', { forceWithLease: true });
+
+    expect(runner.mock.calls[0][2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(runner.mock.calls[1][1]).not.toContain('supervisor-token');
+    expect(runner.mock.calls[1][2]?.env).toMatchObject({
+      GH_TOKEN: 'supervisor-token',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '!gh auth git-credential'
+    });
   });
 
   it('can check out a branch even when another worktree has it checked out', async () => {
