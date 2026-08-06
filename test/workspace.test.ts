@@ -84,7 +84,7 @@ describe('workspace branch handling', () => {
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
-      GIT_CONFIG_VALUE_1: '!gh auth git-credential'
+      GIT_CONFIG_VALUE_1: '!"$KAIZEN_GH_EXECUTABLE" auth git-credential'
     });
   });
 

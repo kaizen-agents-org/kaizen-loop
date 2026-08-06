@@ -79,7 +79,7 @@ describe('gitPublicationEnv', () => {
       GH_TOKEN: 'gh-token',
       GH_CONFIG_DIR: '/gh-config',
       SECRET_TOKEN: 'secret'
-    })).toEqual({
+    }, '/trusted/gh')).toEqual({
       PATH: '/bin',
       GH_TOKEN: 'gh-token',
       GH_CONFIG_DIR: '/gh-config',
@@ -87,7 +87,8 @@ describe('gitPublicationEnv', () => {
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
-      GIT_CONFIG_VALUE_1: '!gh auth git-credential'
+      GIT_CONFIG_VALUE_1: '!"$KAIZEN_GH_EXECUTABLE" auth git-credential',
+      KAIZEN_GH_EXECUTABLE: '/trusted/gh'
     });
   });
 });

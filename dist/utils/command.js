@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { envWithKaizenTemp } from './temp.js';
 export const DEFAULT_ENV_ALLOWLIST = [
     'PATH',
@@ -24,6 +26,7 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
     'GITHUB_ENTERPRISE_TOKEN'
 ];
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
+const INITIAL_GH_EXECUTABLE = resolveExecutable('gh', process.env.PATH);
 const activeChildren = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
@@ -150,14 +153,32 @@ export function githubCliEnv(source = process.env) {
 export function gitCliEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 }
-export function gitPublicationEnv(source = process.env) {
+export function gitPublicationEnv(source = process.env, ghExecutable = INITIAL_GH_EXECUTABLE) {
+    if (!ghExecutable)
+        throw new Error('Could not resolve the gh executable before publication.');
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST], {
         GIT_CONFIG_COUNT: '2',
         GIT_CONFIG_KEY_0: 'credential.helper',
         GIT_CONFIG_VALUE_0: '',
         GIT_CONFIG_KEY_1: 'credential.helper',
-        GIT_CONFIG_VALUE_1: '!gh auth git-credential'
+        GIT_CONFIG_VALUE_1: '!"$KAIZEN_GH_EXECUTABLE" auth git-credential',
+        KAIZEN_GH_EXECUTABLE: ghExecutable
     });
+}
+function resolveExecutable(command, searchPath) {
+    for (const directory of searchPath?.split(path.delimiter) ?? []) {
+        if (!directory)
+            continue;
+        const candidate = path.join(directory, command);
+        try {
+            fs.accessSync(candidate, fs.constants.X_OK);
+            return fs.realpathSync(candidate);
+        }
+        catch {
+            // Try the next PATH entry.
+        }
+    }
+    return undefined;
 }
 export function gitSshPublicationEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], { GIT_SSH_COMMAND: source.GIT_SSH_COMMAND ?? 'ssh' });
