@@ -221,6 +221,25 @@ export class GitClient {
       await this.run(this.publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
         env: isolatedGitEnv()
       });
+      const lfsPointers = await this.run(this.publicationGitExecutable, [
+        'grep',
+        '-I',
+        '-l',
+        '-e',
+        '^version https://git-lfs.github.com/spec/v1$',
+        ref,
+        '--'
+      ], {
+        cwd: publicationDir,
+        env: isolatedGitEnv(),
+        rejectOnNonZero: false
+      });
+      if (lfsPointers.exitCode > 1) {
+        throw new Error(`Could not inspect ${ref} for Git LFS pointers before publication.`);
+      }
+      if (lfsPointers.exitCode === 0 && lfsPointers.stdout.trim()) {
+        throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${lfsPointers.stdout.trim()}`);
+      }
       const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
       const lease = options.forceWithLease
         ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]

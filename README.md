@@ -123,7 +123,9 @@ Kaizen. Publication captures that token at startup and exposes it only to the
 validated HTTPS push; `gh auth login` alone is not a publication credential.
 Scheduled providers must inject the token without writing it into the repository
 or generated launcher files (for example, use `launchctl setenv GH_TOKEN ...` for
-a local launchd session or the provider's secret manager).
+a local launchd session or the provider's secret manager). Supervisor publication
+rejects refs containing Git LFS pointers because it cannot safely run repository
+pre-push hooks or upload LFS objects with a separate trusted credential path.
 
 ```sh
 kaizen init --agent codex --schedule 02:00

@@ -167,6 +167,28 @@ describe('workspace branch handling', () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses to publish Git LFS pointers without a trusted object upload', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'https://github.com/o/r.git\n'
+        : args[0] === 'grep'
+          ? 'kaizen/issue-330-fix:assets/model.bin\n'
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    })).rejects.toThrow('Git LFS pointer');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
   it('can check out a branch even when another worktree has it checked out', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
