@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import type { KaizenConfig } from '../config/schema.js';
-import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
+import { buildAllowlistedEnv, type CommandResult, type CommandRunner } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from './git.js';
@@ -251,16 +251,33 @@ export class WorkspaceManager {
     config: KaizenConfig,
     runDeadlineAt: number | undefined,
     extraEnv: NodeJS.ProcessEnv = {}
-  ) {
-    return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
-      cwd: this.workspacePath,
-      env: await envWithKaizenTemp(
-        buildAllowlistedEnv(process.env, config.safety.envAllowlist, extraEnv),
-        this.workspacePath
-      ),
-      timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
-      rejectOnNonZero: false
-    });
+  ): Promise<CommandResult> {
+    const shell = process.platform === 'win32' ? 'cmd' : 'sh';
+    const args = process.platform === 'win32' ? ['/c', command] : ['-lc', command];
+    const startedAt = Date.now();
+    try {
+      return await this.run(shell, args, {
+        cwd: this.workspacePath,
+        env: await envWithKaizenTemp(
+          buildAllowlistedEnv(process.env, config.safety.envAllowlist, extraEnv),
+          this.workspacePath
+        ),
+        timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
+        rejectOnNonZero: false
+      });
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      const result = (failure as Error & { result?: CommandResult }).result;
+      return {
+        command: result?.command ?? shell,
+        args: result?.args ?? args,
+        cwd: result?.cwd ?? this.workspacePath,
+        exitCode: result?.exitCode || 1,
+        stdout: result?.stdout ?? '',
+        stderr: [result?.stderr, failure.message].filter(Boolean).join('\n'),
+        durationMs: result?.durationMs ?? Date.now() - startedAt
+      };
+    }
   }
 
   private async removeWorktreesForBranch(branch: string): Promise<void> {

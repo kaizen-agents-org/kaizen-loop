@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
@@ -9,6 +9,8 @@ import { GitClient } from '../src/workspace/git.js';
 import { CheckpointBranchDivergedError, CheckpointBranchMissingError, WorkspaceManager } from '../src/workspace/manager.js';
 
 describe('workspace branch handling', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it('replaces an existing deterministic issue branch before retrying', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
@@ -439,6 +441,7 @@ describe('workspace branch handling', () => {
   it('repairs transient Rollup optional dependency failures without a TTY', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
     const workspacePath = path.join(root, 'workspace');
+    vi.stubEnv('CI', 'baseline');
     let verifyAttempts = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       const shellCommand = args.at(-1);
@@ -484,6 +487,7 @@ describe('workspace branch handling', () => {
     const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
     const config = configSchema.parse({
       version: 1,
+      safety: { envAllowlist: ['PATH', 'CI'] },
       commands: {
         setup: 'pnpm install --frozen-lockfile',
         verify: ['pnpm test'],
@@ -508,8 +512,75 @@ describe('workspace branch handling', () => {
       'pnpm install --frozen-lockfile',
       'pnpm test'
     ]);
+    expect(runner.mock.calls[0][2]?.env?.CI).toBe('baseline');
     expect(runner.mock.calls[1][2]?.env?.CI).toBe('true');
     expect(runner.mock.calls[1][2]?.env?.PATH).toBe(process.env.PATH);
+    expect(runner.mock.calls[2][2]?.env?.CI).toBe('baseline');
+  });
+
+  it('preserves verification and dependency repair rejection evidence', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (args.at(-1) === 'pnpm test') {
+        throw Object.assign(new Error('Command timed out after 1000ms'), {
+          result: {
+            command,
+            args,
+            cwd: options?.cwd,
+            exitCode: 1,
+            stdout: '',
+            stderr: "Error: Cannot find module '@rollup/rollup-darwin-x64'\n",
+            durationMs: 1
+          }
+        });
+      }
+      throw new Error('spawn pnpm ENOENT');
+    });
+    const workspace = new WorkspaceManager(runner, workspacePath, 'https://github.com/o/r.git');
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        setup: 'pnpm install --frozen-lockfile',
+        verify: ['pnpm test'],
+        verifyTimeoutMinutes: 15
+      }
+    });
+
+    const results = await workspace.runVerify(config);
+
+    expect(results[0].ok).toBe(false);
+    expect(results[0].output).toContain("Cannot find module '@rollup/rollup-darwin-x64'");
+    expect(results[0].output).toContain('Command timed out after 1000ms');
+    expect(results[0].output).toContain('# kaizen-loop dependency repair: pnpm install --frozen-lockfile');
+    expect(results[0].output).toContain('spawn pnpm ENOENT');
+    expect(runner.mock.calls.map(([, args]) => args.at(-1))).toEqual([
+      'pnpm test',
+      'pnpm install --frozen-lockfile'
+    ]);
+  });
+
+  it('returns spawn failures as verification evidence', async () => {
+    const runner = vi.fn<CommandRunner>(async () => {
+      throw new Error('spawn sh ENOENT');
+    });
+    const workspace = new WorkspaceManager(runner, '/workspace', 'https://github.com/o/r.git');
+    const config = configSchema.parse({
+      version: 1,
+      commands: {
+        setup: 'pnpm install --frozen-lockfile',
+        verify: ['pnpm test']
+      }
+    });
+
+    await expect(workspace.runVerify(config)).resolves.toEqual([
+      {
+        command: 'pnpm test',
+        ok: false,
+        output: 'spawn sh ENOENT'
+      }
+    ]);
+    expect(runner).toHaveBeenCalledOnce();
   });
 
   it('does not retry verification when dependency repair setup fails', async () => {

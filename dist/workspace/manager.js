@@ -213,12 +213,30 @@ export class WorkspaceManager {
         return truncateText(diff.trim(), maxChars);
     }
     async runShell(command, timeoutMs, config, runDeadlineAt, extraEnv = {}) {
-        return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
-            cwd: this.workspacePath,
-            env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, config.safety.envAllowlist, extraEnv), this.workspacePath),
-            timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
-            rejectOnNonZero: false
-        });
+        const shell = process.platform === 'win32' ? 'cmd' : 'sh';
+        const args = process.platform === 'win32' ? ['/c', command] : ['-lc', command];
+        const startedAt = Date.now();
+        try {
+            return await this.run(shell, args, {
+                cwd: this.workspacePath,
+                env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, config.safety.envAllowlist, extraEnv), this.workspacePath),
+                timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
+                rejectOnNonZero: false
+            });
+        }
+        catch (error) {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            const result = failure.result;
+            return {
+                command: result?.command ?? shell,
+                args: result?.args ?? args,
+                cwd: result?.cwd ?? this.workspacePath,
+                exitCode: result?.exitCode || 1,
+                stdout: result?.stdout ?? '',
+                stderr: [result?.stderr, failure.message].filter(Boolean).join('\n'),
+                durationMs: result?.durationMs ?? Date.now() - startedAt
+            };
+        }
     }
     async removeWorktreesForBranch(branch) {
         const git = this.git();
