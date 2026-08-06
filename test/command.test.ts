@@ -82,9 +82,11 @@ describe('gitPublicationEnv', () => {
       PATH: '/bin',
       GH_TOKEN: 'gh-token',
       GH_CONFIG_DIR: '/gh-config',
-      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_COUNT: '2',
       GIT_CONFIG_KEY_0: 'credential.helper',
-      GIT_CONFIG_VALUE_0: '!gh auth git-credential'
+      GIT_CONFIG_VALUE_0: '',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '!gh auth git-credential'
     });
   });
 });

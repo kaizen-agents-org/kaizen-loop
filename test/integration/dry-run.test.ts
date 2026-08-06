@@ -2330,7 +2330,9 @@ describe('runKaizen PR flow', () => {
     expect(publicationPush?.[2]?.env).toMatchObject({
       GH_TOKEN: 'supervisor-publication-token',
       GIT_CONFIG_KEY_0: 'credential.helper',
-      GIT_CONFIG_VALUE_0: '!gh auth git-credential'
+      GIT_CONFIG_VALUE_0: '',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '!gh auth git-credential'
     });
     expect(runner.mock.calls.flatMap(([, args]) => args)).not.toContain('supervisor-publication-token');
     const prCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr create'));
