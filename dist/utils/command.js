@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { envWithKaizenTemp } from './temp.js';
@@ -26,7 +26,9 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
     'GITHUB_ENTERPRISE_TOKEN'
 ];
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
-const INITIAL_GH_EXECUTABLE = resolveExecutable('gh', process.env.PATH);
+const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
+export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
+const INITIAL_GITHUB_TOKEN = captureInitialGitHubToken();
 const activeChildren = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
@@ -134,6 +136,7 @@ export const runCommand = async (command, args, options = {}) => {
         child.stdin.end();
     });
 };
+Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, { value: true });
 export function buildAllowlistedEnv(source, allowlist, extra = {}) {
     const env = {};
     for (const key of allowlist) {
@@ -153,43 +156,113 @@ export function githubCliEnv(source = process.env) {
 export function gitCliEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 }
-export function gitPublicationEnv(source = process.env, ghExecutable = INITIAL_GH_EXECUTABLE) {
-    if (!ghExecutable)
-        throw new Error('Could not resolve the gh executable before publication.');
-    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST], {
+export function gitPublicationEnv(source = process.env, initialToken = INITIAL_GITHUB_TOKEN) {
+    const token = source.GH_TOKEN || source.GITHUB_TOKEN || initialToken;
+    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], {
         GIT_CONFIG_COUNT: '2',
         GIT_CONFIG_KEY_0: 'credential.helper',
         GIT_CONFIG_VALUE_0: '',
         GIT_CONFIG_KEY_1: 'credential.helper',
-        GIT_CONFIG_VALUE_1: '!"$KAIZEN_GH_EXECUTABLE" auth git-credential',
-        KAIZEN_GH_EXECUTABLE: ghExecutable
+        GIT_CONFIG_VALUE_1: '!f() { test "$1" = get || exit 0; printf "%s\\n" username=x-access-token "password=$KAIZEN_GIT_PASSWORD"; }; f',
+        GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+        KAIZEN_GIT_PASSWORD: token
     });
 }
-function resolveExecutable(command, searchPath) {
+export function publicationGitExecutable(command) {
+    if (process.env.NODE_ENV === 'test' && process.env.KAIZEN_TEST_GIT_EXECUTABLE === '1')
+        return 'git';
+    return command[TRUSTED_COMMAND_RUNNER]
+        ? INITIAL_GIT_EXECUTABLE
+        : 'git';
+}
+export function executableNames(command, platform = process.platform, pathExt = process.env.PATHEXT) {
+    if (platform !== 'win32' || path.extname(command))
+        return [command];
+    const extensions = (pathExt || '.COM;.EXE;.BAT;.CMD')
+        .split(';')
+        .map((extension) => extension.trim())
+        .filter(Boolean)
+        .map((extension) => extension.startsWith('.') ? extension : `.${extension}`);
+    return [command, ...extensions.map((extension) => `${command}${extension}`)];
+}
+function resolveTrustedExecutable(command, searchPath) {
+    return resolveExecutable(command, searchPath, isTrustedExecutablePath);
+}
+function resolveExecutable(command, searchPath, accept) {
     for (const directory of searchPath?.split(path.delimiter) ?? []) {
         if (!directory)
             continue;
-        const candidate = path.join(directory, command);
-        try {
-            fs.accessSync(candidate, fs.constants.X_OK);
-            return fs.realpathSync(candidate);
-        }
-        catch {
-            // Try the next PATH entry.
+        for (const name of executableNames(command)) {
+            const candidate = path.join(directory, name);
+            try {
+                fs.accessSync(candidate, fs.constants.X_OK);
+                const resolved = fs.realpathSync(candidate);
+                if (accept(resolved))
+                    return resolved;
+            }
+            catch {
+                // Try the next executable candidate.
+            }
         }
     }
     return undefined;
+}
+function captureInitialGitHubToken() {
+    const environmentToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+    if (environmentToken || process.env.NODE_ENV === 'test')
+        return environmentToken;
+    const ghExecutable = resolveExecutable('gh', process.env.PATH, () => true);
+    if (!ghExecutable)
+        return undefined;
+    const result = spawnSync(ghExecutable, ['auth', 'token', '--hostname', 'github.com'], {
+        encoding: 'utf8',
+        env: githubCliEnv(),
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 10_000
+    });
+    return result.status === 0 ? result.stdout.trim() || undefined : undefined;
+}
+function isTrustedExecutablePath(executable) {
+    if (process.platform === 'win32') {
+        const normalized = `${path.resolve(executable).toLowerCase()}${path.sep}`;
+        return ['ProgramFiles', 'ProgramW6432', 'SystemRoot']
+            .map((key) => process.env[key])
+            .filter((value) => Boolean(value))
+            .some((root) => normalized.startsWith(`${path.resolve(root).toLowerCase()}${path.sep}`));
+    }
+    const uid = process.getuid?.();
+    if (uid === undefined || uid === 0)
+        return false;
+    const groups = new Set([process.getgid?.(), ...(process.getgroups?.() ?? [])]);
+    let current = executable;
+    while (true) {
+        const stat = fs.statSync(current);
+        if (current === executable && !stat.isFile())
+            return false;
+        if (stat.uid === uid || (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && groups.has(stat.gid))) {
+            return false;
+        }
+        const parent = path.dirname(current);
+        if (parent === current)
+            return true;
+        current = parent;
+    }
 }
 export function gitSshPublicationEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], { GIT_SSH_COMMAND: source.GIT_SSH_COMMAND ?? 'ssh' });
 }
 export function withRunDeadline(runCommand, deadlineAt) {
-    return async (command, args, options = {}) => {
+    const deadlineCommand = async (command, args, options = {}) => {
         return runCommand(command, args, {
             ...options,
             timeoutMs: timeoutWithinDeadline(options.timeoutMs, deadlineAt)
         });
     };
+    if (runCommand[TRUSTED_COMMAND_RUNNER]) {
+        Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, { value: true });
+    }
+    return deadlineCommand;
 }
 export function throwIfShutdownRequested() {
     if (requestedShutdownSignal) {

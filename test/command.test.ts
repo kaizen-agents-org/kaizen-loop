@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildAllowlistedEnv,
+  executableNames,
   gitCliEnv,
   gitPublicationEnv,
   gitSshPublicationEnv,
@@ -73,23 +74,39 @@ describe('gitCliEnv', () => {
 });
 
 describe('gitPublicationEnv', () => {
-  it('provides GitHub HTTPS auth to git through the gh credential helper without embedding the token in arguments', () => {
+  it('provides GitHub HTTPS auth through an inline helper without an external executable', () => {
     expect(gitPublicationEnv({
       PATH: '/bin',
       GH_TOKEN: 'gh-token',
       GH_CONFIG_DIR: '/gh-config',
       SECRET_TOKEN: 'secret'
-    }, '/trusted/gh')).toEqual({
+    })).toEqual({
       PATH: '/bin',
-      GH_TOKEN: 'gh-token',
-      GH_CONFIG_DIR: '/gh-config',
       GIT_CONFIG_COUNT: '2',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
-      GIT_CONFIG_VALUE_1: '!"$KAIZEN_GH_EXECUTABLE" auth git-credential',
-      KAIZEN_GH_EXECUTABLE: '/trusted/gh'
+      GIT_CONFIG_VALUE_1: '!f() { test "$1" = get || exit 0; printf "%s\\n" username=x-access-token "password=$KAIZEN_GIT_PASSWORD"; }; f',
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      KAIZEN_GIT_PASSWORD: 'gh-token'
     });
+  });
+
+  it('falls back to GITHUB_TOKEN without requiring gh during publication', () => {
+    expect(gitPublicationEnv({ GITHUB_TOKEN: 'github-token' }).KAIZEN_GIT_PASSWORD).toBe('github-token');
+    expect(gitPublicationEnv({}, undefined).KAIZEN_GIT_PASSWORD).toBeUndefined();
+  });
+});
+
+describe('executableNames', () => {
+  it('honors PATHEXT when resolving Windows executables', () => {
+    expect(executableNames('git', 'win32', '.COM;.EXE;.CMD')).toEqual([
+      'git',
+      'git.COM',
+      'git.EXE',
+      'git.CMD'
+    ]);
   });
 });
 

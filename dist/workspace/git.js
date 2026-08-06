@@ -1,14 +1,16 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, publicationGitExecutable as resolvePublicationGitExecutable } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
 export class GitClient {
     run;
     cwd;
-    constructor(run, cwd) {
+    publicationGitExecutable;
+    constructor(run, cwd, publicationGitExecutable = resolvePublicationGitExecutable(run)) {
         this.run = run;
         this.cwd = cwd;
+        this.publicationGitExecutable = publicationGitExecutable;
     }
     async root() {
         const result = await this.git(['rev-parse', '--show-toplevel']);
@@ -173,14 +175,17 @@ export class GitClient {
             : undefined;
         const publicationDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-publication-'));
         try {
-            await this.run('git', ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
+            if (!this.publicationGitExecutable) {
+                throw new Error('Could not resolve a trusted Git executable before publication.');
+            }
+            await this.run(this.publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
                 env: gitCliEnv()
             });
             const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
             const lease = options.forceWithLease
                 ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
                 : [];
-            await this.run('git', ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
+            await this.run(this.publicationGitExecutable, ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
                 cwd: publicationDir,
                 env
             });

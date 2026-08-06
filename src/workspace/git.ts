@@ -1,13 +1,20 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, type CommandRunner } from '../utils/command.js';
+import {
+  gitCliEnv,
+  gitPublicationEnv,
+  gitSshPublicationEnv,
+  publicationGitExecutable as resolvePublicationGitExecutable,
+  type CommandRunner
+} from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
 
 export class GitClient {
   constructor(
     private readonly run: CommandRunner,
-    private readonly cwd: string
+    private readonly cwd: string,
+    private readonly publicationGitExecutable: string | undefined = resolvePublicationGitExecutable(run)
   ) {}
 
   async root(): Promise<string> {
@@ -207,14 +214,17 @@ export class GitClient {
       : undefined;
     const publicationDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-publication-'));
     try {
-      await this.run('git', ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
+      if (!this.publicationGitExecutable) {
+        throw new Error('Could not resolve a trusted Git executable before publication.');
+      }
+      await this.run(this.publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
         env: gitCliEnv()
       });
       const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
       const lease = options.forceWithLease
         ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
         : [];
-      await this.run('git', ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
+      await this.run(this.publicationGitExecutable, ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
         cwd: publicationDir,
         env
       });

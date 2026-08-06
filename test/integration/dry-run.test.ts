@@ -12,6 +12,10 @@ import type { CommandRunner } from '../../src/utils/command.js';
 
 const testVerifierCommit = 'b'.repeat(40);
 
+function isGitCommand(command: string): boolean {
+  return /^git(?:\.exe)?$/i.test(path.basename(command));
+}
+
 async function runKaizen(options: Parameters<typeof runKaizenCore>[0]) {
   if (!options.runCommand) return runKaizenCore(options);
   const supplied = options.runCommand;
@@ -1055,7 +1059,7 @@ describe('runKaizen PR flow', () => {
         consecutiveZeroThroughputRuns: 1
       }
     });
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands).toEqual(['fetch origin', 'checkout main', 'reset --hard origin/main', 'clean -fdx']);
   });
 
@@ -2319,21 +2323,20 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].reason).toContain('Verifier cleared PR');
     const prCreateArgs = runner.mock.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
     expect(prCreateArgs?.[1]).not.toContain('--draft');
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
     expect(gitCommands).not.toContain('push origin main');
     const builderRuns = runner.mock.calls.filter(([command]) => command === 'builder-agent');
     expect(builderRuns.every(([, , options]) => options?.env?.GH_TOKEN === undefined)).toBe(true);
-    const publicationPush = runner.mock.calls.find(
-      ([command, args]) => command === 'git' && args[0] === 'push'
-    );
+    const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
     expect(publicationPush?.[2]?.env).toMatchObject({
-      GH_TOKEN: 'supervisor-publication-token',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
-      GIT_CONFIG_VALUE_1: '!"$KAIZEN_GH_EXECUTABLE" auth git-credential'
+      GIT_CONFIG_VALUE_1: '!f() { test "$1" = get || exit 0; printf "%s\\n" username=x-access-token "password=$KAIZEN_GIT_PASSWORD"; }; f',
+      KAIZEN_GIT_PASSWORD: 'supervisor-publication-token'
     });
+    expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
     expect(runner.mock.calls.flatMap(([, args]) => args)).not.toContain('supervisor-publication-token');
     const prCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr create'));
     expect(String(prCreate?.[1].at(-1))).toContain('## Builder notes');
@@ -2594,7 +2597,7 @@ describe('runKaizen PR flow', () => {
     expect([...builderWorkspaces].every((item) => item.includes(`${path.basename(workspace)}-worktrees`))).toBe(true);
     expect(prBodies).toHaveLength(2);
     expect(prBodies).toEqual(expect.arrayContaining([expect.stringContaining('Closes #1'), expect.stringContaining('Closes #2')]));
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('worktree add -B kaizen/issue-1-fix-bug '))).toBe(true);
     expect(gitCommands.some((command) => command.startsWith('worktree add -B kaizen/issue-2-fix-bug '))).toBe(true);
     // 2 issues x (1 pre-cleanup remove in createIssueWorktree + 1 post-cleanup remove in removeIssueWorktree) = 4
@@ -3260,7 +3263,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args[0] === 'show-ref' && missingCheckpointRefs) {
         return { ...result(command, args, options?.cwd, ''), exitCode: 1 };
       }
-      if (command === 'git' && args[0] === 'push' && failPushes) throw new Error('push unavailable');
+      if (isGitCommand(command) && args[0] === 'push' && failPushes) throw new Error('push unavailable');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3285,7 +3288,7 @@ describe('runKaizen PR flow', () => {
     expect(ghCommands.some((command) => command.startsWith('pr create') && command.includes('--draft'))).toBe(true);
     const draftCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
     expect(String(draftCreate?.[1].at(draftCreate[1].indexOf('--body') + 1))).toContain('Direct commit rejected');
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('push'))).toBe(true);
 
     missingCheckpointRefs = true;
@@ -3430,7 +3433,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].commit).toBe('abc123');
     const ghCommands = runner.mock.calls.filter(([command]) => command === 'gh').map(([, args]) => args.join(' '));
     expect(ghCommands.some((command) => command.startsWith('pr create'))).toBe(false);
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands).toContain('checkout --ignore-other-worktrees main');
     expect(gitCommands).toContain('push --no-verify https://github.com/o/r.git main:refs/heads/main');
   });
@@ -4084,7 +4087,7 @@ describe('runKaizen PR flow', () => {
     });
 
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
     expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');

@@ -2,7 +2,8 @@ import { type CommandRunner } from '../utils/command.js';
 export declare class GitClient {
     private readonly run;
     private readonly cwd;
-    constructor(run: CommandRunner, cwd: string);
+    private readonly publicationGitExecutable;
+    constructor(run: CommandRunner, cwd: string, publicationGitExecutable?: string | undefined);
     root(): Promise<string>;
     remoteUrl(name?: string): Promise<string>;
     currentBranch(): Promise<string>;

@@ -1,4 +1,5 @@
 export declare const DEFAULT_ENV_ALLOWLIST: string[];
+export declare const INITIAL_GIT_EXECUTABLE: string | undefined;
 export interface CommandResult {
     command: string;
     args: string[];
@@ -20,7 +21,9 @@ export declare const runCommand: CommandRunner;
 export declare function buildAllowlistedEnv(source: NodeJS.ProcessEnv, allowlist: string[], extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function githubCliEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function gitCliEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
-export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv, ghExecutable?: string | undefined): NodeJS.ProcessEnv;
+export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv, initialToken?: string | undefined): NodeJS.ProcessEnv;
+export declare function publicationGitExecutable(command: CommandRunner): string | undefined;
+export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
 export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner;
 export declare function throwIfShutdownRequested(): void;

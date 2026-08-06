@@ -36,6 +36,7 @@ describe('workspace branch handling', () => {
   });
 
   it('can force-with-lease when pushing regenerated issue branches', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
       args,
@@ -45,7 +46,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace');
+    const git = new GitClient(runner, '/workspace', '/trusted/git');
 
     await git.push('kaizen/issue-12-retry-branch', { forceWithLease: true, expectedRepo: 'o/r' });
 
@@ -70,7 +71,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace');
+    const git = new GitClient(runner, '/workspace', '/trusted/git');
 
     await git.statusPorcelain();
     await git.push('kaizen/issue-330-fix', { forceWithLease: true, expectedRepo: 'o/r' });
@@ -80,12 +81,14 @@ describe('workspace branch handling', () => {
     expect(publicationPush?.[1]).not.toContain('supervisor-token');
     expect(publicationPush?.[2]?.cwd).not.toBe('/workspace');
     expect(publicationPush?.[2]?.env).toMatchObject({
-      GH_TOKEN: 'supervisor-token',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
-      GIT_CONFIG_VALUE_1: '!"$KAIZEN_GH_EXECUTABLE" auth git-credential'
+      GIT_CONFIG_VALUE_1: '!f() { test "$1" = get || exit 0; printf "%s\\n" username=x-access-token "password=$KAIZEN_GIT_PASSWORD"; }; f',
+      KAIZEN_GIT_PASSWORD: 'supervisor-token'
     });
+    expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(publicationPush?.[0]).toBe('/trusted/git');
   });
 
   it('does not expose GitHub tokens to SSH publication transports', async () => {
@@ -101,7 +104,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await new GitClient(runner, '/workspace').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
+    await new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
 
     const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
     expect(publicationPush?.[2]?.env).toMatchObject({
@@ -109,6 +112,7 @@ describe('workspace branch handling', () => {
       GIT_SSH_COMMAND: 'ssh'
     });
     expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(publicationPush?.[0]).toBe('/trusted/git');
   });
 
   it('refuses publication through unsupported origins', async () => {
