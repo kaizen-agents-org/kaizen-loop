@@ -201,7 +201,15 @@ export class GitClient {
   }
 
   async push(ref: string, options: { forceWithLease?: boolean; expectedRepo: string }): Promise<void> {
-    const pushUrlResult = await this.git(['remote', 'get-url', '--push', '--all', 'origin']);
+    if (!this.publicationGitExecutable) {
+      throw new Error('Could not resolve a trusted Git executable before publication.');
+    }
+    const publicationGitExecutable = this.publicationGitExecutable;
+    const publicationLocalEnv = isolatedGitEnv();
+    const pushUrlResult = await this.run(publicationGitExecutable, ['remote', 'get-url', '--push', '--all', 'origin'], {
+      cwd: this.cwd,
+      env: publicationLocalEnv
+    });
     const pushUrls = pushUrlResult.stdout.split('\n').map((url) => url.trim()).filter(Boolean);
     if (pushUrls.length !== 1) throw new Error(`Refusing to publish through ${pushUrls.length} origin push URLs.`);
     const pushUrl = pushUrls[0];
@@ -211,17 +219,18 @@ export class GitClient {
     }
 
     const expectedRemote = options.forceWithLease
-      ? await this.git(['rev-parse', '--verify', `refs/remotes/origin/${ref}`], { rejectOnNonZero: false })
+      ? await this.run(publicationGitExecutable, ['rev-parse', '--verify', `refs/remotes/origin/${ref}`], {
+          cwd: this.cwd,
+          env: publicationLocalEnv,
+          rejectOnNonZero: false
+        })
       : undefined;
     const publicationDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-publication-'));
     try {
-      if (!this.publicationGitExecutable) {
-        throw new Error('Could not resolve a trusted Git executable before publication.');
-      }
-      await this.run(this.publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
-        env: isolatedGitEnv()
+      await this.run(publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
+        env: publicationLocalEnv
       });
-      const lfsPointers = await this.run(this.publicationGitExecutable, [
+      const lfsPointers = await this.run(publicationGitExecutable, [
         'grep',
         '-I',
         '-l',
@@ -244,27 +253,29 @@ export class GitClient {
       const lease = options.forceWithLease
         ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
         : [];
-      await this.run(this.publicationGitExecutable, ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
+      await this.run(publicationGitExecutable, ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
         cwd: publicationDir,
         env
       });
-      const publishedSha = await this.revParse(ref);
-      const localMutationEnv = isolatedGitEnv();
+      const publishedSha = await this.run(publicationGitExecutable, ['rev-parse', ref], {
+        cwd: this.cwd,
+        env: publicationLocalEnv
+      });
       const disabledHooksPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
-      await this.run(this.publicationGitExecutable, [
+      await this.run(publicationGitExecutable, [
         '-c',
         `core.hooksPath=${disabledHooksPath}`,
         'update-ref',
         `refs/remotes/origin/${ref}`,
-        publishedSha
-      ], { cwd: this.cwd, env: localMutationEnv });
-      await this.run(this.publicationGitExecutable, ['config', `branch.${ref}.remote`, 'origin'], {
+        publishedSha.stdout.trim()
+      ], { cwd: this.cwd, env: publicationLocalEnv });
+      await this.run(publicationGitExecutable, ['config', `branch.${ref}.remote`, 'origin'], {
         cwd: this.cwd,
-        env: localMutationEnv
+        env: publicationLocalEnv
       });
-      await this.run(this.publicationGitExecutable, ['config', `branch.${ref}.merge`, `refs/heads/${ref}`], {
+      await this.run(publicationGitExecutable, ['config', `branch.${ref}.merge`, `refs/heads/${ref}`], {
         cwd: this.cwd,
-        env: localMutationEnv
+        env: publicationLocalEnv
       });
     } finally {
       await fs.rm(publicationDir, { recursive: true, force: true });

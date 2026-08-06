@@ -62,6 +62,7 @@ describe('workspace branch handling', () => {
 
   it('uses supervisor GitHub credentials only for publication pushes', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    vi.stubEnv('SSH_AUTH_SOCK', '/supervisor-agent');
     const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
       command,
       args,
@@ -77,6 +78,13 @@ describe('workspace branch handling', () => {
     await git.push('kaizen/issue-330-fix', { forceWithLease: true, expectedRepo: 'o/r' });
 
     expect(runner.mock.calls[0][2]?.env?.GH_TOKEN).toBeUndefined();
+    const publicationValidation = runner.mock.calls.find(([, args]) => args[0] === 'remote' && args[1] === 'get-url');
+    expect(publicationValidation?.[0]).toBe('/trusted/git');
+    expect(publicationValidation?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
+    expect(publicationValidation?.[2]?.env).toMatchObject({
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
+    });
     const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
     expect(publicationPush?.[1]).not.toContain('supervisor-token');
     expect(publicationPush?.[2]?.cwd).not.toBe('/workspace');
