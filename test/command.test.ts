@@ -137,7 +137,7 @@ describe('gitSshPublicationEnv', () => {
       SSH_AUTH_SOCK: '/ssh-agent',
       GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',
-      GIT_SSH_COMMAND: "'/trusted/ssh'"
+      GIT_SSH_COMMAND: `'/trusted/ssh' -F '${process.platform === 'win32' ? 'NUL' : '/dev/null'}'`
     });
   });
 });

@@ -262,7 +262,7 @@ export function gitSshPublicationEnv(source = process.env, sshExecutable = INITI
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], {
         GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
         GIT_CONFIG_NOSYSTEM: '1',
-        GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}'`
+        GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}' -F '${process.platform === 'win32' ? 'NUL' : '/dev/null'}'`
     });
 }
 export function withRunDeadline(runCommand, deadlineAt) {

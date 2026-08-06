@@ -318,7 +318,7 @@ export function gitSshPublicationEnv(
     {
       GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',
-      GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}'`
+      GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}' -F '${process.platform === 'win32' ? 'NUL' : '/dev/null'}'`
     }
   );
 }
