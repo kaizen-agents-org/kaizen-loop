@@ -103,8 +103,7 @@ export class WorkspaceManager {
       return result;
     }
 
-    const setup = await this.runSetup(config, runDeadlineAt);
-    if (!setup) return result;
+    const setup = await this.runDependencyRepair(config.commands.setup, config, runDeadlineAt);
     const retried = setup.ok
       ? await this.runShell(command, timeoutMs, config, runDeadlineAt)
       : result;
@@ -120,6 +119,19 @@ export class WorkspaceManager {
         retryOutput
       ].filter(Boolean).join('\n'),
       stderr: ''
+    };
+  }
+
+  private async runDependencyRepair(
+    command: string,
+    config: KaizenConfig,
+    runDeadlineAt?: number
+  ): Promise<WorkspaceCommandResult> {
+    const result = await this.runShell(command, undefined, config, runDeadlineAt, { CI: 'true' });
+    return {
+      command,
+      ok: result.exitCode === 0,
+      output: `${result.stdout}${result.stderr}`
     };
   }
 
@@ -233,10 +245,19 @@ export class WorkspaceManager {
     return truncateText(diff.trim(), maxChars);
   }
 
-  private async runShell(command: string, timeoutMs: number | undefined, config: KaizenConfig, runDeadlineAt: number | undefined) {
+  private async runShell(
+    command: string,
+    timeoutMs: number | undefined,
+    config: KaizenConfig,
+    runDeadlineAt: number | undefined,
+    extraEnv: NodeJS.ProcessEnv = {}
+  ) {
     return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
       cwd: this.workspacePath,
-      env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, config.safety.envAllowlist), this.workspacePath),
+      env: await envWithKaizenTemp(
+        buildAllowlistedEnv(process.env, config.safety.envAllowlist, extraEnv),
+        this.workspacePath
+      ),
       timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
       rejectOnNonZero: false
     });

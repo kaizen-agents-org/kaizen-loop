@@ -436,7 +436,7 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls[0][2]?.timeoutMs).toBeGreaterThan(0);
   });
 
-  it('repairs transient Rollup optional dependency verification failures once', async () => {
+  it('repairs transient Rollup optional dependency failures without a TTY', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
     const workspacePath = path.join(root, 'workspace');
     let verifyAttempts = 0;
@@ -457,6 +457,17 @@ describe('workspace branch handling', () => {
                   'npm has a bug related to optional dependencies'
                 ].join('\n')
               : '',
+          durationMs: 1
+        };
+      }
+      if (options?.env?.CI !== 'true') {
+        return {
+          command,
+          args,
+          cwd: options?.cwd,
+          exitCode: 1,
+          stdout: '',
+          stderr: 'ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY\n',
           durationMs: 1
         };
       }
@@ -497,6 +508,8 @@ describe('workspace branch handling', () => {
       'pnpm install --frozen-lockfile',
       'pnpm test'
     ]);
+    expect(runner.mock.calls[1][2]?.env?.CI).toBe('true');
+    expect(runner.mock.calls[1][2]?.env?.PATH).toBe(process.env.PATH);
   });
 
   it('does not retry verification when dependency repair setup fails', async () => {
@@ -551,6 +564,7 @@ describe('workspace branch handling', () => {
       'pnpm test',
       'pnpm install --frozen-lockfile'
     ]);
+    expect(runner.mock.calls[1][2]?.env?.CI).toBe('true');
   });
 
   it('does not run setup for ordinary verification failures', async () => {
