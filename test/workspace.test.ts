@@ -121,6 +121,19 @@ describe('workspace branch handling', () => {
     expect(publicationPush?.[2]?.env?.GIT_SSH_COMMAND).toMatch(/ssh(?:\.exe)?' -F '(?:NUL|\/dev\/null)'$/i);
     expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
     expect(publicationPush?.[0]).toBe('/trusted/git');
+    const updateRef = runner.mock.calls.find(([, args]) => args.includes('update-ref'));
+    expect(updateRef?.[1]).toEqual([
+      '-c',
+      `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
+      'update-ref',
+      'refs/remotes/origin/kaizen/issue-330-fix',
+      ''
+    ]);
+    expect(updateRef?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
+    expect(updateRef?.[2]?.env).toMatchObject({
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
+    });
   });
 
   it('refuses publication through unsupported origins', async () => {

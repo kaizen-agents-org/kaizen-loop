@@ -29,6 +29,11 @@ export async function doctorProject(options) {
         ? configDrift(localConfig, workspaceConfig, resolved.project)
         : undefined;
     await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, configPath).authStatus()));
+    await check(checks, 'publication auth', async () => {
+        if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+            throw new Error('set GH_TOKEN or GITHUB_TOKEN in the supervisor environment');
+        }
+    });
     await check(checks, 'github labels', async () => {
         const loaded = config;
         if (!loaded)

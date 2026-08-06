@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { envWithKaizenTemp } from './temp.js';
@@ -31,7 +31,7 @@ const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
-const INITIAL_GITHUB_TOKEN = captureInitialGitHubToken();
+const INITIAL_GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const PROCESS_TERMINATION_GRACE_MS = 250;
@@ -206,6 +206,9 @@ export function gitPublicationEnv(
   initialToken: string | undefined = INITIAL_GITHUB_TOKEN
 ): NodeJS.ProcessEnv {
   const token = source.GH_TOKEN || source.GITHUB_TOKEN || initialToken;
+  if (!token && !(process.env.NODE_ENV === 'test' && source === process.env)) {
+    throw new Error('HTTPS Git publication requires GH_TOKEN or GITHUB_TOKEN in the supervisor environment.');
+  }
   return buildAllowlistedEnv(
     source,
     [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST],
@@ -268,27 +271,13 @@ function resolveExecutable(
   return undefined;
 }
 
-function captureInitialGitHubToken(): string | undefined {
-  const environmentToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-  if (environmentToken || process.env.NODE_ENV === 'test') return environmentToken;
-  const ghExecutable = resolveTrustedExecutable('gh', process.env.PATH);
-  if (!ghExecutable) return undefined;
-  const result = spawnSync(ghExecutable, ['auth', 'token', '--hostname', 'github.com'], {
-    encoding: 'utf8',
-    env: githubCliEnv(),
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 10_000
-  });
-  return result.status === 0 ? result.stdout.trim() || undefined : undefined;
-}
-
 function isTrustedExecutablePath(executable: string): boolean {
   if (process.platform === 'win32') {
-    const normalized = `${path.resolve(executable).toLowerCase()}${path.sep}`;
-    return ['ProgramFiles', 'ProgramW6432', 'SystemRoot']
+    if (!fs.statSync(executable).isFile()) return false;
+    const trustedRoots = ['ProgramFiles', 'ProgramW6432', 'SystemRoot']
       .map((key) => process.env[key])
-      .filter((value): value is string => Boolean(value))
-      .some((root) => normalized.startsWith(`${path.resolve(root).toLowerCase()}${path.sep}`));
+      .filter((value): value is string => Boolean(value));
+    return isWindowsExecutablePathTrusted(executable, trustedRoots);
   }
 
   const uid = process.getuid?.();
@@ -304,6 +293,36 @@ function isTrustedExecutablePath(executable: string): boolean {
     const parent = path.dirname(current);
     if (parent === current) return true;
     current = parent;
+  }
+}
+
+export function isWindowsExecutablePathTrusted(
+  executable: string,
+  trustedRoots: string[],
+  canWrite: (candidate: string) => boolean = canCurrentUserWrite
+): boolean {
+  const resolved = path.win32.resolve(executable);
+  const normalized = `${resolved.toLowerCase()}${path.win32.sep}`;
+  if (!trustedRoots.some((root) => normalized.startsWith(`${path.win32.resolve(root).toLowerCase()}${path.win32.sep}`))) {
+    return false;
+  }
+
+  let current = resolved;
+  while (true) {
+    if (canWrite(current)) return false;
+    const parent = path.win32.dirname(current);
+    if (parent === current) return true;
+    current = parent;
+  }
+}
+
+function canCurrentUserWrite(candidate: string): boolean {
+  try {
+    fs.accessSync(candidate, fs.constants.W_OK);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'EACCES' && code !== 'EPERM';
   }
 }
 

@@ -186,6 +186,7 @@ kaizen run --project <slug> --scheduled --job issue-watch
 
 - `git` ≥ 2.30
 - `gh` CLI(`gh auth status` が通ること)
+- supervisor 環境の `GH_TOKEN` または `GITHUB_TOKEN`(`gh auth login` の保存済み認証だけでは publication に使わない)
 - `builder-agent`
 - `verifier`(`verifier.enabled: true` の場合)
 - Node.js ≥ 20

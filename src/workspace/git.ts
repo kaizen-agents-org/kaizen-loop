@@ -230,9 +230,23 @@ export class GitClient {
         env
       });
       const publishedSha = await this.revParse(ref);
-      await this.git(['update-ref', `refs/remotes/origin/${ref}`, publishedSha]);
-      await this.git(['config', `branch.${ref}.remote`, 'origin']);
-      await this.git(['config', `branch.${ref}.merge`, `refs/heads/${ref}`]);
+      const localMutationEnv = isolatedGitEnv();
+      const disabledHooksPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+      await this.run(this.publicationGitExecutable, [
+        '-c',
+        `core.hooksPath=${disabledHooksPath}`,
+        'update-ref',
+        `refs/remotes/origin/${ref}`,
+        publishedSha
+      ], { cwd: this.cwd, env: localMutationEnv });
+      await this.run(this.publicationGitExecutable, ['config', `branch.${ref}.remote`, 'origin'], {
+        cwd: this.cwd,
+        env: localMutationEnv
+      });
+      await this.run(this.publicationGitExecutable, ['config', `branch.${ref}.merge`, `refs/heads/${ref}`], {
+        cwd: this.cwd,
+        env: localMutationEnv
+      });
     } finally {
       await fs.rm(publicationDir, { recursive: true, force: true });
     }

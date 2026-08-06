@@ -107,6 +107,28 @@ describe('doctorProject', () => {
     await expect(fs.access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('reports a missing supervisor publication token during preflight', async () => {
+    const { repo } = await setupProject();
+    vi.stubEnv('GH_TOKEN', '');
+    vi.stubEnv('GITHUB_TOKEN', '');
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+        });
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
+
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: runner });
+
+    expect(output.ok).toBe(false);
+    expect(output.checks.find((item) => item.name === 'publication auth')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('GH_TOKEN or GITHUB_TOKEN')
+    });
+  });
+
   it('fails when the builder command exists but runtime smoke test cannot execute', async () => {
     const { repo } = await setupProject();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
@@ -184,6 +206,7 @@ async function setupProject(options: { createWorkspace?: boolean } = {}) {
     await fs.rm(workspace, { recursive: true, force: true });
   }
   vi.stubEnv('KAIZEN_HOME', home);
+  vi.stubEnv('GH_TOKEN', 'supervisor-publication-token');
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   const config = parse(defaultConfigYaml({ agent: 'claude', setup: null, verify: [] })) as Record<string, any>;
   config.safety.operationMode = 'dogfood';

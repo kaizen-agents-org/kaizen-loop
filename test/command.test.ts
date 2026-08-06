@@ -9,6 +9,7 @@ import {
   gitPublicationEnv,
   gitSshPublicationEnv,
   githubCliEnv,
+  isWindowsExecutablePathTrusted,
   isolatedGitEnv,
   runCommand,
   withRunDeadline,
@@ -111,7 +112,7 @@ describe('gitPublicationEnv', () => {
 
   it('falls back to GITHUB_TOKEN without requiring gh during publication', () => {
     expect(gitPublicationEnv({ GITHUB_TOKEN: 'github-token' }).KAIZEN_GIT_PASSWORD).toBe('github-token');
-    expect(gitPublicationEnv({}, undefined).KAIZEN_GIT_PASSWORD).toBeUndefined();
+    expect(() => gitPublicationEnv({}, '')).toThrow('GH_TOKEN or GITHUB_TOKEN');
   });
 });
 
@@ -123,6 +124,21 @@ describe('executableNames', () => {
       'git.EXE',
       'git.CMD'
     ]);
+  });
+
+  it('rejects Windows executables with a writable ancestor inside a protected root', () => {
+    const writable = new Set(['C:\\Program Files\\Git\\cmd']);
+
+    expect(isWindowsExecutablePathTrusted(
+      'C:\\Program Files\\Git\\cmd\\git.exe',
+      ['C:\\Program Files'],
+      (candidate) => writable.has(candidate)
+    )).toBe(false);
+    expect(isWindowsExecutablePathTrusted(
+      'C:\\Program Files\\Git\\cmd\\git.exe',
+      ['C:\\Program Files'],
+      () => false
+    )).toBe(true);
   });
 });
 

@@ -118,6 +118,13 @@ npm run dev -- run --dry-run --json
 
 For a target repository:
 
+Set `GH_TOKEN` or `GITHUB_TOKEN` in the supervisor environment before running
+Kaizen. Publication captures that token at startup and exposes it only to the
+validated HTTPS push; `gh auth login` alone is not a publication credential.
+Scheduled providers must inject the token without writing it into the repository
+or generated launcher files (for example, use `launchctl setenv GH_TOKEN ...` for
+a local launchd session or the provider's secret manager).
+
 ```sh
 kaizen init --agent codex --schedule 02:00
 kaizen scheduler sync
