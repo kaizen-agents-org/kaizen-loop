@@ -259,7 +259,11 @@ function isTrustedExecutablePath(executable) {
 export function gitSshPublicationEnv(source = process.env, sshExecutable = INITIAL_SSH_EXECUTABLE) {
     if (!sshExecutable)
         throw new Error('Could not resolve a trusted SSH executable before publication.');
-    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], { GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}'` });
+    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], {
+        GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}'`
+    });
 }
 export function withRunDeadline(runCommand, deadlineAt) {
     const deadlineCommand = async (command, args, options = {}) => {

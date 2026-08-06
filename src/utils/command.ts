@@ -315,7 +315,11 @@ export function gitSshPublicationEnv(
   return buildAllowlistedEnv(
     source,
     [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST],
-    { GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}'` }
+    {
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}'`
+    }
   );
 }
 
