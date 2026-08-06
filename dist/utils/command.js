@@ -26,6 +26,7 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
     'GITHUB_ENTERPRISE_TOKEN'
 ];
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
+const SUPERVISOR_CREDENTIAL_ENV = new Set([...GITHUB_CLI_AUTH_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
@@ -149,6 +150,12 @@ export function buildAllowlistedEnv(source, allowlist, extra = {}) {
         if (value !== undefined)
             env[key] = value;
     }
+    return env;
+}
+export function buildUntrustedEnv(source, allowlist, extra = {}) {
+    const env = buildAllowlistedEnv(source, allowlist, extra);
+    for (const key of SUPERVISOR_CREDENTIAL_ENV)
+        delete env[key];
     return env;
 }
 export function githubCliEnv(source = process.env) {

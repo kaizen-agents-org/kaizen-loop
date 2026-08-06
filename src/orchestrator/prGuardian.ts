@@ -3,7 +3,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubPullRequest } from '../github/types.js';
-import { buildAllowlistedEnv, githubCliEnv, type CommandRunner } from '../utils/command.js';
+import { buildUntrustedEnv, githubCliEnv, type CommandRunner } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
@@ -507,7 +507,7 @@ export async function runPrGuardianSkill(
           ],
           {
             cwd: req.workspaceDir,
-            env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
+            env: await envWithKaizenTemp(buildUntrustedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
             timeoutMs: boundedTimeoutMs(req.config.guardian.timeoutMinutes * 60_000, req.runDeadlineAt),
             rejectOnNonZero: false
           }
@@ -609,7 +609,7 @@ export async function isPrGuardianSkillRunnerAvailable(config: KaizenConfig, run
     await runCommand(config.guardian.command, ['--version'], {
       rejectOnNonZero: true,
       timeoutMs: 30_000,
-      env: buildAllowlistedEnv(process.env, config.safety.envAllowlist)
+      env: buildUntrustedEnv(process.env, config.safety.envAllowlist)
     });
     return true;
   } catch {

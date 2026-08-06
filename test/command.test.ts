@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildAllowlistedEnv,
+  buildUntrustedEnv,
   executableNames,
   gitCliEnv,
   gitPublicationEnv,
@@ -33,6 +34,20 @@ describe('buildAllowlistedEnv', () => {
       PATH: '/bin',
       KAIZEN_WORKSPACE_DIR: '/workspace'
     });
+  });
+});
+
+describe('buildUntrustedEnv', () => {
+  it('removes supervisor credentials even when explicitly allowlisted or added', () => {
+    expect(buildUntrustedEnv({
+      PATH: '/bin',
+      GH_TOKEN: 'publication-token',
+      GITHUB_TOKEN: 'github-token',
+      GH_CONFIG_DIR: '/supervisor-gh',
+      SSH_AUTH_SOCK: '/supervisor-agent'
+    }, ['PATH', 'GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'SSH_AUTH_SOCK'], {
+      GITHUB_ENTERPRISE_TOKEN: 'extra-token'
+    })).toEqual({ PATH: '/bin' });
   });
 });
 

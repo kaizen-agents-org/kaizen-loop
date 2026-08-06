@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
+import { buildUntrustedEnv, type CommandRunner } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import type { GoalEvaluation, GoalPlan } from './types.js';
@@ -122,7 +122,7 @@ export class GoalAgentAdapter {
     }
 
     const env = await envWithKaizenTemp(
-      buildAllowlistedEnv(process.env, this.options.envAllowlist, {
+      buildUntrustedEnv(process.env, this.options.envAllowlist, {
         KAIZEN_GOAL_RESULT_PATH: resultPath,
         KAIZEN_GOAL_MODE: mode
       }),

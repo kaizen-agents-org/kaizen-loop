@@ -1,13 +1,46 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
 import { disableScheduler, enableScheduler } from '../src/scheduler/scheduler.js';
 import type { RegistryProject } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
+beforeEach(() => {
+  vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/usr/local/bin/read-kaizen-github-token');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe('enableScheduler', () => {
+  it('rejects managed cron before writes when no secret command is configured', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '');
+    const runner = vi.fn<CommandRunner>();
+    const project: RegistryProject = {
+      repo: 'owner/repo',
+      localPath: '/repo',
+      workspacePath: '/workspace',
+      schedule: '02:00',
+      enabled: false,
+      createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableScheduler({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({ version: 1 }),
+      runCommand: runner,
+      platform: 'linux'
+    })).rejects.toMatchObject({ exitCode: 2 });
+    expect(runner).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(home, 'bin', 'run-scheduled.sh'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('creates the project state directory before installing a cron job', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('KAIZEN_HOME', home);
@@ -129,6 +162,8 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('45 4 * * 0 ');
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain("bin/run-scheduled.sh'");
+    expect(crontabInput).toContain(`GH_TOKEN="$('${process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND}')"`);
+    expect(crontabInput).not.toContain('publication-token');
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");
     expect(crontabInput).toContain("'owner-repo' 'issue-watch'");
     expect(crontabInput).toContain("'owner-repo' 'weekly-sandbox-smoke'");

@@ -1,5 +1,5 @@
 import { VerifierAgentAdapter } from './verifier.js';
-import { buildAllowlistedEnv } from '../utils/command.js';
+import { buildUntrustedEnv } from '../utils/command.js';
 export async function assertVerifierRuntimeFresh(config, runCommand, expectedCommitOverride) {
     const expectedCommit = expectedCommitOverride ?? await resolveExpectedVerifierCommit({ config, runCommand });
     const runtime = await new VerifierAgentAdapter(runCommand, {
@@ -26,7 +26,7 @@ export async function resolveExpectedVerifierCommit(options) {
     const result = await options.runCommand('git', ['ls-remote', '--exit-code', repository, ref], {
         timeoutMs: options.config.verifier.freshnessTimeoutSeconds * 1_000,
         rejectOnNonZero: false,
-        env: buildAllowlistedEnv(process.env, options.config.safety.envAllowlist)
+        env: buildUntrustedEnv(process.env, options.config.safety.envAllowlist)
     });
     if (result.exitCode !== 0) {
         throw new Error(`Could not resolve trusted verifier revision ${repository} ${ref}: ${result.stderr || result.stdout || `git exited with code ${result.exitCode}`}`);

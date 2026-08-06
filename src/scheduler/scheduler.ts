@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { KaizenConfig, RegistryProject, SchedulerJobConfig, SchedulerSchedule } from '../config/schema.js';
 import type { CommandRunner } from '../utils/command.js';
+import { ConfigError } from '../utils/errors.js';
 import { getKaizenHome, projectStateDir } from '../utils/paths.js';
 
 export async function enableScheduler(options: {
@@ -14,8 +15,10 @@ export async function enableScheduler(options: {
   platform?: NodeJS.Platform;
 }): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[] }> {
   const jobs = schedulerJobs(options.config);
+  const platform = options.platform ?? process.platform;
+  const cronTokenCommand = platform === 'darwin' || jobs.length === 0 ? undefined : requiredCronTokenCommand();
   await installScheduledLauncher();
-  if ((options.platform ?? process.platform) === 'darwin') {
+  if (platform === 'darwin') {
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
     const paths: string[] = [];
@@ -36,7 +39,7 @@ export async function enableScheduler(options: {
   for (const job of jobs) {
     lines.push(`# ${marker} ${job.name}`);
     for (const cronTime of cronTimes(job.config.schedule)) {
-      lines.push(`${cronTime} ${commandLine(options.slug, job)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+      lines.push(`${cronTime} ${commandLine(options.slug, job, cronTokenCommand)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
     }
   }
   await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
@@ -116,8 +119,19 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function commandLine(slug: string, job: SchedulerJob): string {
-  return `/bin/sh ${shQuote(scheduledLauncherPath())} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+function commandLine(slug: string, job: SchedulerJob, tokenCommand?: string): string {
+  const command = `/bin/sh ${shQuote(scheduledLauncherPath())} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+  return tokenCommand ? `GH_TOKEN="$(${shQuote(tokenCommand)})" ${command}` : command;
+}
+
+function requiredCronTokenCommand(): string {
+  const command = process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND;
+  if (!command || !path.isAbsolute(command)) {
+    throw new ConfigError(
+      'Managed cron requires KAIZEN_CRON_GITHUB_TOKEN_COMMAND to name an absolute, operator-managed secret command.'
+    );
+  }
+  return command;
 }
 
 async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Promise<string[]> {

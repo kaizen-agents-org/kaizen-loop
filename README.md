@@ -126,6 +126,9 @@ or generated launcher files (for example, use `launchctl setenv GH_TOKEN ...` fo
 a local launchd session or the provider's secret manager). Supervisor publication
 rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
+Managed cron additionally requires `KAIZEN_CRON_GITHUB_TOKEN_COMMAND` to contain
+the absolute path of an operator-managed command that prints the token at runtime;
+the generated crontab stores only that command path, never the token itself.
 
 ```sh
 kaizen init --agent codex --schedule 02:00
