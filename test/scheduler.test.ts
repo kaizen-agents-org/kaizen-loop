@@ -8,7 +8,7 @@ import type { RegistryProject } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 beforeEach(() => {
-  vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/usr/local/bin/read-kaizen-github-token');
+  vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/bin/echo');
 });
 
 afterEach(() => {
@@ -39,6 +39,32 @@ describe('enableScheduler', () => {
     })).rejects.toMatchObject({ exitCode: 2 });
     expect(runner).not.toHaveBeenCalled();
     await expect(fs.access(path.join(home, 'bin', 'run-scheduled.sh'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects a writable cron secret command before writes', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const tokenCommand = path.join(home, 'read-token');
+    await fs.writeFile(tokenCommand, '#!/bin/sh\necho token\n', { mode: 0o700 });
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', tokenCommand);
+    const runner = vi.fn<CommandRunner>();
+    const project: RegistryProject = {
+      repo: 'owner/repo',
+      localPath: '/repo',
+      workspacePath: '/workspace',
+      schedule: '02:00',
+      enabled: false,
+      createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableScheduler({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({ version: 1 }),
+      runCommand: runner,
+      platform: 'linux'
+    })).rejects.toThrow('immutable operator-managed secret command');
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it('creates the project state directory before installing a cron job', async () => {

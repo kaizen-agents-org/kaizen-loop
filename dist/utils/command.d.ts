@@ -26,6 +26,7 @@ export declare function isolatedGitEnv(source?: NodeJS.ProcessEnv): NodeJS.Proce
 export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv, initialToken?: string | undefined): NodeJS.ProcessEnv;
 export declare function publicationGitExecutable(command: CommandRunner): string | undefined;
 export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
+export declare function isTrustedExecutablePath(executable: string): boolean;
 export declare function isWindowsExecutablePathTrusted(executable: string, trustedRoots: string[], canWrite?: (candidate: string) => boolean): boolean;
 export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv, sshExecutable?: string | undefined): NodeJS.ProcessEnv;
 export declare function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner;

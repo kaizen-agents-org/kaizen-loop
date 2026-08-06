@@ -193,7 +193,9 @@ export function buildUntrustedEnv(
   extra: NodeJS.ProcessEnv = {}
 ): NodeJS.ProcessEnv {
   const env = buildAllowlistedEnv(source, allowlist, extra);
-  for (const key of SUPERVISOR_CREDENTIAL_ENV) delete env[key];
+  for (const key of Object.keys(env)) {
+    if (SUPERVISOR_CREDENTIAL_ENV.has(key.toUpperCase())) delete env[key];
+  }
   return env;
 }
 
@@ -282,7 +284,7 @@ function resolveExecutable(
   return undefined;
 }
 
-function isTrustedExecutablePath(executable: string): boolean {
+export function isTrustedExecutablePath(executable: string): boolean {
   if (process.platform === 'win32') {
     if (!fs.statSync(executable).isFile()) return false;
     const trustedRoots = ['ProgramFiles', 'ProgramW6432', 'SystemRoot']

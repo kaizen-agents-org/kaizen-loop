@@ -154,8 +154,10 @@ export function buildAllowlistedEnv(source, allowlist, extra = {}) {
 }
 export function buildUntrustedEnv(source, allowlist, extra = {}) {
     const env = buildAllowlistedEnv(source, allowlist, extra);
-    for (const key of SUPERVISOR_CREDENTIAL_ENV)
-        delete env[key];
+    for (const key of Object.keys(env)) {
+        if (SUPERVISOR_CREDENTIAL_ENV.has(key.toUpperCase()))
+            delete env[key];
+    }
     return env;
 }
 export function githubCliEnv(source = process.env) {
@@ -225,7 +227,7 @@ function resolveExecutable(command, searchPath, accept) {
     }
     return undefined;
 }
-function isTrustedExecutablePath(executable) {
+export function isTrustedExecutablePath(executable) {
     if (process.platform === 'win32') {
         if (!fs.statSync(executable).isFile())
             return false;

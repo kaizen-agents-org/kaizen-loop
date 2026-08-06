@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isTrustedExecutablePath } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { getKaizenHome, projectStateDir } from '../utils/paths.js';
 export async function enableScheduler(options) {
@@ -96,8 +97,17 @@ function commandLine(slug, job, tokenCommand) {
 }
 function requiredCronTokenCommand() {
     const command = process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND;
-    if (!command || !path.isAbsolute(command)) {
-        throw new ConfigError('Managed cron requires KAIZEN_CRON_GITHUB_TOKEN_COMMAND to name an absolute, operator-managed secret command.');
+    let trusted = false;
+    if (command && path.isAbsolute(command)) {
+        try {
+            trusted = isTrustedExecutablePath(command);
+        }
+        catch {
+            trusted = false;
+        }
+    }
+    if (!trusted) {
+        throw new ConfigError('Managed cron requires KAIZEN_CRON_GITHUB_TOKEN_COMMAND to name an absolute, immutable operator-managed secret command.');
     }
     return command;
 }

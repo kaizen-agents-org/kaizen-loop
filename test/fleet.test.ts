@@ -9,7 +9,7 @@ import { loadRegistry, saveRegistry, updateRegistry } from '../src/config/regist
 import type { CommandRunner } from '../src/utils/command.js';
 
 beforeEach(() => {
-  vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/usr/local/bin/read-kaizen-github-token');
+  vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/bin/echo');
 });
 
 afterEach(() => {

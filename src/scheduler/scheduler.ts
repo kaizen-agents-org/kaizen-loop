@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { KaizenConfig, RegistryProject, SchedulerJobConfig, SchedulerSchedule } from '../config/schema.js';
-import type { CommandRunner } from '../utils/command.js';
+import { isTrustedExecutablePath, type CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { getKaizenHome, projectStateDir } from '../utils/paths.js';
 
@@ -126,12 +126,20 @@ function commandLine(slug: string, job: SchedulerJob, tokenCommand?: string): st
 
 function requiredCronTokenCommand(): string {
   const command = process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND;
-  if (!command || !path.isAbsolute(command)) {
+  let trusted = false;
+  if (command && path.isAbsolute(command)) {
+    try {
+      trusted = isTrustedExecutablePath(command);
+    } catch {
+      trusted = false;
+    }
+  }
+  if (!trusted) {
     throw new ConfigError(
-      'Managed cron requires KAIZEN_CRON_GITHUB_TOKEN_COMMAND to name an absolute, operator-managed secret command.'
+      'Managed cron requires KAIZEN_CRON_GITHUB_TOKEN_COMMAND to name an absolute, immutable operator-managed secret command.'
     );
   }
-  return command;
+  return command!;
 }
 
 async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Promise<string[]> {

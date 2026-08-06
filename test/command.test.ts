@@ -44,9 +44,11 @@ describe('buildUntrustedEnv', () => {
       GH_TOKEN: 'publication-token',
       GITHUB_TOKEN: 'github-token',
       GH_CONFIG_DIR: '/supervisor-gh',
-      SSH_AUTH_SOCK: '/supervisor-agent'
-    }, ['PATH', 'GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'SSH_AUTH_SOCK'], {
-      GITHUB_ENTERPRISE_TOKEN: 'extra-token'
+      SSH_AUTH_SOCK: '/supervisor-agent',
+      gh_token: 'case-insensitive-publication-token',
+      github_token: 'case-insensitive-github-token'
+    }, ['PATH', 'GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'SSH_AUTH_SOCK', 'gh_token', 'github_token'], {
+      github_enterprise_token: 'extra-token'
     })).toEqual({ PATH: '/bin' });
   });
 });
