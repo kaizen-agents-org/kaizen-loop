@@ -24,7 +24,7 @@ export declare function gitCliEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv, initialToken?: string | undefined): NodeJS.ProcessEnv;
 export declare function publicationGitExecutable(command: CommandRunner): string | undefined;
 export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
-export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv, sshExecutable?: string | undefined): NodeJS.ProcessEnv;
 export declare function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner;
 export declare function throwIfShutdownRequested(): void;
 export declare function formatCommand(command: string, args: string[]): string;

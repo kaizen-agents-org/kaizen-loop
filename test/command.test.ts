@@ -116,10 +116,10 @@ describe('gitSshPublicationEnv', () => {
       PATH: '/bin',
       GH_TOKEN: 'gh-token',
       SSH_AUTH_SOCK: '/ssh-agent'
-    })).toEqual({
+    }, '/trusted/ssh')).toEqual({
       PATH: '/bin',
       SSH_AUTH_SOCK: '/ssh-agent',
-      GIT_SSH_COMMAND: 'ssh'
+      GIT_SSH_COMMAND: "'/trusted/ssh'"
     });
   });
 });

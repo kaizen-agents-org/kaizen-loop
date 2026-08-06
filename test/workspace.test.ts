@@ -108,9 +108,9 @@ describe('workspace branch handling', () => {
 
     const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
     expect(publicationPush?.[2]?.env).toMatchObject({
-      SSH_AUTH_SOCK: '/supervisor-agent',
-      GIT_SSH_COMMAND: 'ssh'
+      SSH_AUTH_SOCK: '/supervisor-agent'
     });
+    expect(publicationPush?.[2]?.env?.GIT_SSH_COMMAND).toMatch(/ssh(?:\.exe)?'$/i);
     expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
     expect(publicationPush?.[0]).toBe('/trusted/git');
   });

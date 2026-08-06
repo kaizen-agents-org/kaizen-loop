@@ -28,6 +28,7 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
+const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
 const INITIAL_GITHUB_TOKEN = captureInitialGitHubToken();
 const activeChildren = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
@@ -212,7 +213,7 @@ function captureInitialGitHubToken() {
     const environmentToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
     if (environmentToken || process.env.NODE_ENV === 'test')
         return environmentToken;
-    const ghExecutable = resolveExecutable('gh', process.env.PATH, () => true);
+    const ghExecutable = resolveTrustedExecutable('gh', process.env.PATH);
     if (!ghExecutable)
         return undefined;
     const result = spawnSync(ghExecutable, ['auth', 'token', '--hostname', 'github.com'], {
@@ -249,8 +250,10 @@ function isTrustedExecutablePath(executable) {
         current = parent;
     }
 }
-export function gitSshPublicationEnv(source = process.env) {
-    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], { GIT_SSH_COMMAND: source.GIT_SSH_COMMAND ?? 'ssh' });
+export function gitSshPublicationEnv(source = process.env, sshExecutable = INITIAL_SSH_EXECUTABLE) {
+    if (!sshExecutable)
+        throw new Error('Could not resolve a trusted SSH executable before publication.');
+    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], { GIT_SSH_COMMAND: `'${sshExecutable.replaceAll("'", "'\\''")}'` });
 }
 export function withRunDeadline(runCommand, deadlineAt) {
     const deadlineCommand = async (command, args, options = {}) => {
