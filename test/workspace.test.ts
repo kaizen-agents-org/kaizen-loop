@@ -10,6 +10,7 @@ import { CheckpointBranchDivergedError, CheckpointBranchMissingError, WorkspaceM
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('workspace branch handling', () => {
@@ -86,7 +87,7 @@ describe('workspace branch handling', () => {
       GIT_CONFIG_NOSYSTEM: '1'
     });
     const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
-    expect(publicationPush?.[1]).not.toContain('supervisor-token');
+    expect(publicationPush?.[1].join(' ')).not.toContain('supervisor-token');
     expect(publicationPush?.[2]?.cwd).not.toBe('/workspace');
     expect(publicationPush?.[2]?.env).toMatchObject({
       GIT_CONFIG_KEY_0: 'credential.helper',
@@ -107,7 +108,11 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'git@github.com:o/r.git\n' : '',
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'git@github.com:o/r.git\n'
+        : args[0] === 'rev-parse'
+          ? 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'
+          : '',
       stderr: '',
       durationMs: 1
     }));
@@ -126,7 +131,9 @@ describe('workspace branch handling', () => {
       GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1'
     });
-    expect(publicationPush?.[2]?.env?.GIT_SSH_COMMAND).toMatch(/ssh(?:\.exe)?' -F '(?:NUL|\/dev\/null)'$/i);
+    expect(publicationPush?.[2]?.env?.GIT_SSH_COMMAND).toMatch(
+      new RegExp(`ssh(?:\\.exe)?' -F '${process.platform === 'win32' ? 'NUL' : '/dev/null'}'$`, 'i')
+    );
     expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
     expect(publicationPush?.[0]).toBe('/trusted/git');
     const updateRef = runner.mock.calls.find(([, args]) => args.includes('update-ref'));
@@ -135,7 +142,7 @@ describe('workspace branch handling', () => {
       `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
       'update-ref',
       'refs/remotes/origin/kaizen/issue-330-fix',
-      ''
+      'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
     ]);
     expect(updateRef?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
     expect(updateRef?.[2]?.env).toMatchObject({
@@ -195,6 +202,48 @@ describe('workspace branch handling', () => {
       expectedRepo: 'o/r'
     })).rejects.toThrow('Git LFS pointer');
     expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
+  it('refuses to publish when Git LFS inspection fails', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: args[0] === 'grep' ? 2 : 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    })).rejects.toThrow('Could not inspect');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
+  it('preserves a publication failure when temporary cleanup also fails', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const cleanupError = new Error('cleanup failed');
+    vi.spyOn(fs, 'rm').mockRejectedValueOnce(cleanupError);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: args[0] === 'grep' ? 2 : 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const error = await new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining('Could not inspect'),
+      cause: cleanupError
+    });
   });
 
   it('can check out a branch even when another worktree has it checked out', async () => {

@@ -112,6 +112,7 @@ describe('gitPublicationEnv', () => {
 
   it('falls back to GITHUB_TOKEN without requiring gh during publication', () => {
     expect(gitPublicationEnv({ GITHUB_TOKEN: 'github-token' }).KAIZEN_GIT_PASSWORD).toBe('github-token');
+    expect(gitPublicationEnv({}, 'startup-token').KAIZEN_GIT_PASSWORD).toBe('startup-token');
     expect(() => gitPublicationEnv({}, '')).toThrow('GH_TOKEN or GITHUB_TOKEN');
   });
 });

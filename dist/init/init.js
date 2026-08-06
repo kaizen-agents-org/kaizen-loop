@@ -22,6 +22,9 @@ export async function initProject(options) {
         throw new ConfigError(`origin is not a GitHub remote: ${remoteUrl}`);
     const github = new GitHubClient(options.runCommand, repoDir);
     await github.authStatus();
+    if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+        throw new ConfigError('Set GH_TOKEN or GITHUB_TOKEN in the supervisor environment before initialization.');
+    }
     const agent = chooseAgent(options.agent);
     const commands = await detectCommands(repoDir);
     const configPath = path.join(repoDir, '.kaizen', 'config.yml');

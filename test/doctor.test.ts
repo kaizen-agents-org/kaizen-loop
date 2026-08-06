@@ -129,6 +129,24 @@ describe('doctorProject', () => {
     });
   });
 
+  it('accepts GITHUB_TOKEN as the supervisor publication token', async () => {
+    const { repo } = await setupProject();
+    vi.stubEnv('GH_TOKEN', '');
+    vi.stubEnv('GITHUB_TOKEN', 'github-publication-token');
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+        });
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
+
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: runner });
+
+    expect(output.checks.find((item) => item.name === 'publication auth')).toMatchObject({ ok: true });
+  });
+
   it('fails when the builder command exists but runtime smoke test cannot execute', async () => {
     const { repo } = await setupProject();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
