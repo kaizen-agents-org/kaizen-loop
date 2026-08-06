@@ -106,6 +106,12 @@ describe('workspace branch handling', () => {
 
     await new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
 
+    const publicationClone = runner.mock.calls.find(([, args]) => args[0] === 'clone');
+    expect(publicationClone?.[2]?.env).toMatchObject({
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
+    });
+    expect(publicationClone?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
     const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
     expect(publicationPush?.[2]?.env).toMatchObject({
       SSH_AUTH_SOCK: '/supervisor-agent'

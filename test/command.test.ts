@@ -9,6 +9,7 @@ import {
   gitPublicationEnv,
   gitSshPublicationEnv,
   githubCliEnv,
+  isolatedGitEnv,
   runCommand,
   withRunDeadline,
   type CommandRunner
@@ -69,6 +70,21 @@ describe('gitCliEnv', () => {
       PATH: '/bin',
       SSH_AUTH_SOCK: '/ssh-agent',
       GIT_SSH_COMMAND: 'ssh -i key'
+    });
+  });
+});
+
+describe('isolatedGitEnv', () => {
+  it('disables inherited Git config and omits SSH authentication', () => {
+    expect(isolatedGitEnv({
+      PATH: '/bin',
+      HOME: '/home/supervisor',
+      SSH_AUTH_SOCK: '/ssh-agent'
+    })).toEqual({
+      PATH: '/bin',
+      HOME: '/home/supervisor',
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
     });
   });
 });

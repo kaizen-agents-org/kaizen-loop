@@ -157,6 +157,12 @@ export function githubCliEnv(source = process.env) {
 export function gitCliEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 }
+export function isolatedGitEnv(source = process.env) {
+    return buildAllowlistedEnv(source, DEFAULT_ENV_ALLOWLIST, {
+        GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1'
+    });
+}
 export function gitPublicationEnv(source = process.env, initialToken = INITIAL_GITHUB_TOKEN) {
     const token = source.GH_TOKEN || source.GITHUB_TOKEN || initialToken;
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], {

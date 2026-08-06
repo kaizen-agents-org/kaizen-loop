@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, publicationGitExecutable as resolvePublicationGitExecutable } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
 export class GitClient {
     run;
@@ -179,7 +179,7 @@ export class GitClient {
                 throw new Error('Could not resolve a trusted Git executable before publication.');
             }
             await this.run(this.publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
-                env: gitCliEnv()
+                env: isolatedGitEnv()
             });
             const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
             const lease = options.forceWithLease

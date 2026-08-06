@@ -5,6 +5,7 @@ import {
   gitCliEnv,
   gitPublicationEnv,
   gitSshPublicationEnv,
+  isolatedGitEnv,
   publicationGitExecutable as resolvePublicationGitExecutable,
   type CommandRunner
 } from '../utils/command.js';
@@ -218,7 +219,7 @@ export class GitClient {
         throw new Error('Could not resolve a trusted Git executable before publication.');
       }
       await this.run(this.publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
-        env: gitCliEnv()
+        env: isolatedGitEnv()
       });
       const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
       const lease = options.forceWithLease

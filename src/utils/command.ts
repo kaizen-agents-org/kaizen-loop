@@ -194,6 +194,13 @@ export function gitCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Proce
   return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 }
 
+export function isolatedGitEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildAllowlistedEnv(source, DEFAULT_ENV_ALLOWLIST, {
+    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1'
+  });
+}
+
 export function gitPublicationEnv(
   source: NodeJS.ProcessEnv = process.env,
   initialToken: string | undefined = INITIAL_GITHUB_TOKEN
