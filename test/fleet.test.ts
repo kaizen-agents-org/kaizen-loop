@@ -2,11 +2,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fleetHasFailures, migrateLegacySchedulerConfig, refreshFleet, syncFleet, type FleetProjectResult } from '../src/commands/fleet.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { loadRegistry, saveRegistry, updateRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+
+beforeEach(() => {
+  vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/usr/local/bin/read-kaizen-github-token');
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
