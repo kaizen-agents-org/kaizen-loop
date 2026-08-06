@@ -41,7 +41,7 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: '',
+      stdout: args.join(' ') === 'remote get-url origin' ? 'https://github.com/o/r.git\n' : '',
       stderr: '',
       durationMs: 1
     }));
@@ -49,7 +49,7 @@ describe('workspace branch handling', () => {
 
     await git.push('kaizen/issue-12-retry-branch', { forceWithLease: true });
 
-    expect(runner.mock.calls[0][1]).toEqual([
+    expect(runner.mock.calls[1][1]).toEqual([
       'push',
       '--no-verify',
       '-u',
@@ -66,7 +66,7 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: '',
+      stdout: args.join(' ') === 'remote get-url origin' ? 'https://github.com/o/r.git\n' : '',
       stderr: '',
       durationMs: 1
     }));
@@ -76,14 +76,51 @@ describe('workspace branch handling', () => {
     await git.push('kaizen/issue-330-fix', { forceWithLease: true });
 
     expect(runner.mock.calls[0][2]?.env?.GH_TOKEN).toBeUndefined();
-    expect(runner.mock.calls[1][1]).not.toContain('supervisor-token');
-    expect(runner.mock.calls[1][2]?.env).toMatchObject({
+    expect(runner.mock.calls[2][1]).not.toContain('supervisor-token');
+    expect(runner.mock.calls[2][2]?.env).toMatchObject({
       GH_TOKEN: 'supervisor-token',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
       GIT_CONFIG_VALUE_1: '!gh auth git-credential'
     });
+  });
+
+  it('does not expose GitHub tokens to SSH publication transports', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    vi.stubEnv('SSH_AUTH_SOCK', '/supervisor-agent');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url origin' ? 'git@github.com:o/r.git\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await new GitClient(runner, '/workspace').push('kaizen/issue-330-fix');
+
+    expect(runner.mock.calls[1][2]?.env).toMatchObject({
+      SSH_AUTH_SOCK: '/supervisor-agent',
+      GIT_SSH_COMMAND: 'ssh'
+    });
+    expect(runner.mock.calls[1][2]?.env?.GH_TOKEN).toBeUndefined();
+  });
+
+  it('refuses publication through unsupported origins', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: 'ext::malicious-command\n',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(runner, '/workspace').push('main')).rejects.toThrow('unsupported origin');
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 
   it('can check out a branch even when another worktree has it checked out', async () => {

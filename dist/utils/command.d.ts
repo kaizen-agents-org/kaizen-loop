@@ -21,6 +21,7 @@ export declare function buildAllowlistedEnv(source: NodeJS.ProcessEnv, allowlist
 export declare function githubCliEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function gitCliEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner;
 export declare function throwIfShutdownRequested(): void;
 export declare function formatCommand(command: string, args: string[]): string;

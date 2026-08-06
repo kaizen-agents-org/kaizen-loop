@@ -159,6 +159,9 @@ export function gitPublicationEnv(source = process.env) {
         GIT_CONFIG_VALUE_1: '!gh auth git-credential'
     });
 }
+export function gitSshPublicationEnv(source = process.env) {
+    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], { GIT_SSH_COMMAND: source.GIT_SSH_COMMAND ?? 'ssh' });
+}
 export function withRunDeadline(runCommand, deadlineAt) {
     return async (command, args, options = {}) => {
         return runCommand(command, args, {

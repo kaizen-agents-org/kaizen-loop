@@ -6,6 +6,7 @@ import {
   buildAllowlistedEnv,
   gitCliEnv,
   gitPublicationEnv,
+  gitSshPublicationEnv,
   githubCliEnv,
   runCommand,
   withRunDeadline,
@@ -87,6 +88,20 @@ describe('gitPublicationEnv', () => {
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
       GIT_CONFIG_VALUE_1: '!gh auth git-credential'
+    });
+  });
+});
+
+describe('gitSshPublicationEnv', () => {
+  it('keeps GitHub tokens out and overrides repository-controlled SSH commands', () => {
+    expect(gitSshPublicationEnv({
+      PATH: '/bin',
+      GH_TOKEN: 'gh-token',
+      SSH_AUTH_SOCK: '/ssh-agent'
+    })).toEqual({
+      PATH: '/bin',
+      SSH_AUTH_SOCK: '/ssh-agent',
+      GIT_SSH_COMMAND: 'ssh'
     });
   });
 });

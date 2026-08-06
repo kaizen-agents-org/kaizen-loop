@@ -201,6 +201,14 @@ export function gitPublicationEnv(source: NodeJS.ProcessEnv = process.env): Node
   );
 }
 
+export function gitSshPublicationEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildAllowlistedEnv(
+    source,
+    [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST],
+    { GIT_SSH_COMMAND: source.GIT_SSH_COMMAND ?? 'ssh' }
+  );
+}
+
 export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner {
   return async (command, args, options = {}) => {
     return runCommand(command, args, {

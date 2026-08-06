@@ -1,4 +1,5 @@
-import { gitCliEnv, gitPublicationEnv, type CommandRunner } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, type CommandRunner } from '../utils/command.js';
+import { repoFromRemote } from '../utils/slug.js';
 
 export class GitClient {
   constructor(
@@ -189,9 +190,12 @@ export class GitClient {
   }
 
   async push(ref: string, options: { forceWithLease?: boolean } = {}): Promise<void> {
+    const remote = await this.remoteUrl('origin');
+    if (!repoFromRemote(remote)) throw new Error(`Refusing to publish to unsupported origin: ${remote}`);
+    const env = remote.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
     await this.git(
       ['push', '--no-verify', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref],
-      { env: gitPublicationEnv() }
+      { env }
     );
   }
 
