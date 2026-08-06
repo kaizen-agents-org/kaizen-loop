@@ -203,7 +203,7 @@ describe('reportIssueNow', () => {
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args[0] === 'ls-remote') return result(command, args, repo, 'b'.repeat(40) + '\trefs/heads/main\n');
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -365,7 +365,7 @@ case "$*" in
   'ls-remote --exit-code https://github.com/kaizen-agents-org/verifier.git refs/heads/main')
     printf '%s\\t%s\\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' 'refs/heads/main'
     ;;
-  'remote get-url origin')
+  'remote get-url origin'|'remote get-url --push --all origin')
     printf '%s\\n' 'https://github.com/o/r.git'
     ;;
   'diff --name-only origin/main...HEAD')

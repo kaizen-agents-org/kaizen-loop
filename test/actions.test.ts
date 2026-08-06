@@ -326,7 +326,7 @@ describe('GitHub Actions fix workflow', () => {
         }));
         return result(command, args, '');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) {
         return result(command, args, 'https://github.com/owner/repo.git\n');
       }
       if (command === 'git' && args[0] === 'push') return result(command, args, '');

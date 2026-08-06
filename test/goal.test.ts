@@ -536,7 +536,7 @@ function goalRunner(options: {
       return result(command, args, runOptions?.cwd, 'built');
     }
 
-    if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+    if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) {
       if (options.failRunPipeline) throw new Error('remote unavailable');
       return result(command, args, options.repo, 'https://github.com/o/r.git\n');
     }

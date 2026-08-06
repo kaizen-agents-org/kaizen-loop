@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, type CommandRunner } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
 
@@ -189,14 +192,39 @@ export class GitClient {
     return result.stdout;
   }
 
-  async push(ref: string, options: { forceWithLease?: boolean } = {}): Promise<void> {
-    const remote = await this.remoteUrl('origin');
-    if (!repoFromRemote(remote)) throw new Error(`Refusing to publish to unsupported origin: ${remote}`);
-    const env = remote.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
-    await this.git(
-      ['push', '--no-verify', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref],
-      { env }
-    );
+  async push(ref: string, options: { forceWithLease?: boolean; expectedRepo: string }): Promise<void> {
+    const pushUrlResult = await this.git(['remote', 'get-url', '--push', '--all', 'origin']);
+    const pushUrls = pushUrlResult.stdout.split('\n').map((url) => url.trim()).filter(Boolean);
+    if (pushUrls.length !== 1) throw new Error(`Refusing to publish through ${pushUrls.length} origin push URLs.`);
+    const pushUrl = pushUrls[0];
+    const pushRepo = repoFromRemote(pushUrl);
+    if (!pushRepo || pushRepo.toLowerCase() !== options.expectedRepo.toLowerCase()) {
+      throw new Error(`Refusing to publish ${options.expectedRepo} to origin ${pushUrl}`);
+    }
+
+    const expectedRemote = options.forceWithLease
+      ? await this.git(['rev-parse', '--verify', `refs/remotes/origin/${ref}`], { rejectOnNonZero: false })
+      : undefined;
+    const publicationDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-publication-'));
+    try {
+      await this.run('git', ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
+        env: gitCliEnv()
+      });
+      const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
+      const lease = options.forceWithLease
+        ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
+        : [];
+      await this.run('git', ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
+        cwd: publicationDir,
+        env
+      });
+      const publishedSha = await this.revParse(ref);
+      await this.git(['update-ref', `refs/remotes/origin/${ref}`, publishedSha]);
+      await this.git(['config', `branch.${ref}.remote`, 'origin']);
+      await this.git(['config', `branch.${ref}.merge`, `refs/heads/${ref}`]);
+    } finally {
+      await fs.rm(publicationDir, { recursive: true, force: true });
+    }
   }
 
   private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv }) {

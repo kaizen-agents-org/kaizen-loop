@@ -1327,6 +1327,7 @@ async function processIssue(options: {
     if (verifierResult?.status === 'open_pr' || verifierResult?.status === 'open_pr_with_warning') {
       const pr = await reflectPullRequest({
         workspace,
+        repo: options.project.repo,
         branch,
         issue: options.issue,
         config: options.config,
@@ -1353,6 +1354,7 @@ async function processIssue(options: {
     if (previousState?.pr) {
       const pr = await reflectPullRequest({
         workspace,
+        repo: options.project.repo,
         branch,
         issue: options.issue,
         config: options.config,
@@ -1371,6 +1373,7 @@ async function processIssue(options: {
     if (decision.action === 'direct' && options.forcePullRequest) {
       const pr = await reflectPullRequest({
         workspace,
+        repo: options.project.repo,
         branch,
         issue: options.issue,
         config: options.config,
@@ -1407,6 +1410,7 @@ async function processIssue(options: {
       if (directChoice === 'pr') {
         const pr = await reflectPullRequest({
           workspace,
+          repo: options.project.repo,
           branch,
           issue: options.issue,
           config: options.config,
@@ -1424,6 +1428,7 @@ async function processIssue(options: {
       }
       const direct = await reflectDirect({
         workspace,
+        repo: options.project.repo,
         branch,
         issue: options.issue,
         config: options.config,
@@ -1435,6 +1440,7 @@ async function processIssue(options: {
         await preparePrFallback(workspace, branch);
         return reflectPullRequest({
           workspace,
+          repo: options.project.repo,
           branch,
           issue: options.issue,
           config: options.config,
@@ -1497,6 +1503,7 @@ async function processIssue(options: {
 
     const pr = await reflectPullRequest({
       workspace,
+      repo: options.project.repo,
       branch,
       issue: options.issue,
       config: options.config,
@@ -1946,7 +1953,7 @@ async function finishFailed(
     github: GitHubClient;
     trigger: RunSummary['trigger'];
     stateDir: string;
-    project: { workspacePath: string };
+    project: { repo: string; workspacePath: string };
     runCommand: CommandRunner;
     branch: string;
   },
@@ -2017,7 +2024,7 @@ async function finishVerifierInfrastructureFailure(
     github: GitHubClient;
     trigger: RunSummary['trigger'];
     stateDir: string;
-    project: { workspacePath: string };
+    project: { repo: string; workspacePath: string };
     runCommand: CommandRunner;
     branch: string;
   },
@@ -2083,7 +2090,7 @@ async function publishDraftCheckpoint(
     issue: GitHubIssue;
     config: KaizenConfig;
     stateDir: string;
-    project: { repo?: string; workspacePath: string };
+    project: { repo: string; workspacePath: string };
     github: GitHubClient;
     runCommand: CommandRunner;
     branch: string;
@@ -2104,7 +2111,7 @@ async function publishDraftCheckpoint(
     const publicationBlocker = forbiddenCheckpointPublicationReason(diff.forbiddenFiles);
     if (publicationBlocker) return { skipped: publicationBlocker };
     if (diff.changedFiles === 0 && !current?.pr) return {};
-    await workspace.git().push(options.branch, { forceWithLease: true });
+    await workspace.git().push(options.branch, { forceWithLease: true, expectedRepo: options.project.repo });
     const title = `[WIP] kaizen: ${shortSummary(options.issue.title)} (#${options.issue.number})`;
     const body = buildDraftCheckpointBody(options.issue, options.branch, attempt, reason, verifyResults, diff);
     if (current?.pr && existing && (existing.state === 'OPEN' || existing.state === undefined)) {
@@ -2398,6 +2405,7 @@ async function reflectDirect(options: {
   verifyResults: Array<{ command: string; ok: boolean; output: string }>;
   diff: DiffStats;
   decision: ReflectionDecision;
+  repo: string;
 }): Promise<{ commit: string }> {
   const git = options.workspace.git();
   await git.fetch();
@@ -2411,7 +2419,7 @@ async function reflectDirect(options: {
   await git.resetHard(`origin/${options.config.git.defaultBranch}`);
   await git.mergeFfOnly(options.branch);
   const commit = await git.revParse('HEAD');
-  await git.push(options.config.git.defaultBranch);
+  await git.push(options.config.git.defaultBranch, { expectedRepo: options.repo });
   return { commit };
 }
 
@@ -2430,6 +2438,7 @@ async function reflectPullRequest(options: {
   attempt: number;
   reason: string;
   verifierResult?: VerifierResult;
+  repo: string;
 }): Promise<PullRequestReflection> {
   const title = `kaizen: ${shortSummary(options.agentResult.summary)} (#${options.issue.number})`;
   const body = buildPullRequestBody(options.issue, options.agentResult, options.verifyResults, options.diff, options.reason, options.verifierResult);
@@ -2439,7 +2448,7 @@ async function reflectPullRequest(options: {
     const updateError = checkpointPullRequestUpdateError(current, options.branch);
     if (updateError) throw new Error(updateError);
   }
-  await options.workspace.git().push(options.branch, { forceWithLease: true });
+  await options.workspace.git().push(options.branch, { forceWithLease: true, expectedRepo: options.repo });
   const headSha = await options.workspace.git().revParse('HEAD');
   if (checkpoint?.pr) {
     if (current && (current.state === 'OPEN' || current.state === undefined)) {

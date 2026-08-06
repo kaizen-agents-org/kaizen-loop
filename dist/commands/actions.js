@@ -196,7 +196,7 @@ export async function publishActionsFix(options) {
     await command('git', ['switch', '-c', branch], { cwd: options.cwd });
     await command('git', ['add', '-A', '--', ...artifact.files], { cwd: options.cwd });
     await command('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=github-actions[bot]', '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com', 'commit', '-m', `kaizen: ${summary} (#${artifact.issue.number})`], { cwd: options.cwd });
-    await git.push(branch);
+    await git.push(branch, { expectedRepo: context.repo });
     const body = buildPullRequestBody(artifact);
     const pr = await context.github.createPullRequest({
         base: context.config.git.defaultBranch,

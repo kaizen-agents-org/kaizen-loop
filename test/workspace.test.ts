@@ -41,21 +41,21 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: args.join(' ') === 'remote get-url origin' ? 'https://github.com/o/r.git\n' : '',
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
       stderr: '',
       durationMs: 1
     }));
     const git = new GitClient(runner, '/workspace');
 
-    await git.push('kaizen/issue-12-retry-branch', { forceWithLease: true });
+    await git.push('kaizen/issue-12-retry-branch', { forceWithLease: true, expectedRepo: 'o/r' });
 
-    expect(runner.mock.calls[1][1]).toEqual([
+    const push = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(push?.[1]).toEqual([
       'push',
       '--no-verify',
-      '-u',
-      '--force-with-lease',
-      'origin',
-      'kaizen/issue-12-retry-branch'
+      '--force-with-lease=refs/heads/kaizen/issue-12-retry-branch:',
+      'https://github.com/o/r.git',
+      'kaizen/issue-12-retry-branch:refs/heads/kaizen/issue-12-retry-branch'
     ]);
   });
 
@@ -66,18 +66,20 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: args.join(' ') === 'remote get-url origin' ? 'https://github.com/o/r.git\n' : '',
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
       stderr: '',
       durationMs: 1
     }));
     const git = new GitClient(runner, '/workspace');
 
     await git.statusPorcelain();
-    await git.push('kaizen/issue-330-fix', { forceWithLease: true });
+    await git.push('kaizen/issue-330-fix', { forceWithLease: true, expectedRepo: 'o/r' });
 
     expect(runner.mock.calls[0][2]?.env?.GH_TOKEN).toBeUndefined();
-    expect(runner.mock.calls[2][1]).not.toContain('supervisor-token');
-    expect(runner.mock.calls[2][2]?.env).toMatchObject({
+    const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(publicationPush?.[1]).not.toContain('supervisor-token');
+    expect(publicationPush?.[2]?.cwd).not.toBe('/workspace');
+    expect(publicationPush?.[2]?.env).toMatchObject({
       GH_TOKEN: 'supervisor-token',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
@@ -94,18 +96,19 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: args.join(' ') === 'remote get-url origin' ? 'git@github.com:o/r.git\n' : '',
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'git@github.com:o/r.git\n' : '',
       stderr: '',
       durationMs: 1
     }));
 
-    await new GitClient(runner, '/workspace').push('kaizen/issue-330-fix');
+    await new GitClient(runner, '/workspace').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
 
-    expect(runner.mock.calls[1][2]?.env).toMatchObject({
+    const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(publicationPush?.[2]?.env).toMatchObject({
       SSH_AUTH_SOCK: '/supervisor-agent',
       GIT_SSH_COMMAND: 'ssh'
     });
-    expect(runner.mock.calls[1][2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
   });
 
   it('refuses publication through unsupported origins', async () => {
@@ -119,7 +122,23 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace').push('main')).rejects.toThrow('unsupported origin');
+    await expect(new GitClient(runner, '/workspace').push('main', { expectedRepo: 'o/r' })).rejects.toThrow('Refusing to publish');
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a valid GitHub push URL for a different repository', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: 'https://github.com/o/other.git\n',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(runner, '/workspace').push('main', { expectedRepo: 'o/r' }))
+      .rejects.toThrow('Refusing to publish o/r');
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
