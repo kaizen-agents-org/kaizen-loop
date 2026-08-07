@@ -118,8 +118,8 @@ npm run dev -- run --dry-run --json
 
 For a target repository:
 
-Set `GH_TOKEN` or `GITHUB_TOKEN` only for the credential-separated `actions
-publish` command. Builder-capable commands reject ambient token variables
+Set `GH_TOKEN` or `GITHUB_TOKEN` only for credential-only `init`, `actions
+prepare`, and `actions publish` phases. Builder-capable commands reject ambient token variables
 because same-UID child processes can recover the original environment through
 procfs even after Node deletes `process.env` entries. Local scheduled runs must
 use a separately authenticated broker or credential-free mode. Supervisor publication

@@ -298,14 +298,12 @@ jobs:
 
       - name: Verify patch with kaizen fix
         env:
-          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
           env -i \
             PATH="$RUNNER_TEMP/kaizen-bin:$PATH" \
             HOME="$HOME" \
             LANG=C.UTF-8 \
-            GH_TOKEN="$GH_TOKEN" \
             KAIZEN_HOME="$RUNNER_TEMP/kaizen-home" \
             node "$RUNNER_TEMP/kaizen-runtime/dist/cli.js" fix "$ISSUE_NUMBER" \
             --actions-patch "$RUNNER_TEMP/kaizen-provider/change.patch" \

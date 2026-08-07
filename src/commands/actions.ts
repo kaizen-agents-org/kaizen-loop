@@ -11,7 +11,7 @@ import { loadConfig } from '../config/config.js';
 import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import type { GitHubIssue } from '../github/types.js';
-import { runCommand, type CommandRunner } from '../utils/command.js';
+import { githubCliExecutable, runCommand, trustedGithubCliEnv, type CommandRunner } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
@@ -243,7 +243,12 @@ async function loadActionsContext(cwd: string, issueNumber: number, command: Com
   const config = await loadConfig(cwd);
   if (config.safety.operationMode !== 'external') throw new Error('GitHub Actions execution requires safety.operationMode: external.');
   if (config.policy.mode !== 'pr-only') throw new Error('GitHub Actions execution requires policy.mode: pr-only.');
-  const repoResult = await command('gh', ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], { cwd });
+  const gh = githubCliExecutable(command);
+  if (!gh) throw new Error('Could not resolve a trusted GitHub CLI executable.');
+  const repoResult = await command(gh, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], {
+    cwd,
+    env: trustedGithubCliEnv()
+  });
   const repo = repoResult.stdout.trim();
   if (!/^[^/]+\/[^/]+$/.test(repo)) throw new Error(`Could not resolve GitHub repository: ${repo}`);
   const github = new GitHubClient(command, cwd);

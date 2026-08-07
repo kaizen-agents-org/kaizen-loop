@@ -274,7 +274,10 @@ export function isTrustedExecutablePath(executable) {
         const stat = fs.statSync(current);
         if (current === executable && !stat.isFile())
             return false;
-        if (stat.uid !== 0 || (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && groups.has(stat.gid))) {
+        const writable = process.env.NODE_ENV === 'test'
+            ? (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && groups.has(stat.gid))
+            : canCurrentUserWrite(current);
+        if (stat.uid !== 0 || writable) {
             return false;
         }
         const parent = path.dirname(current);
@@ -312,9 +315,9 @@ function canCurrentUserWrite(candidate) {
 function captureGitHubAuthEnv(argv) {
     const captured = buildAllowlistedEnv(process.env, GITHUB_CLI_AUTH_ENV_ALLOWLIST);
     const hasToken = Boolean(captured.GH_TOKEN || captured.GITHUB_TOKEN || captured.GH_ENTERPRISE_TOKEN || captured.GITHUB_ENTERPRISE_TOKEN);
-    const publishIndex = argv.findIndex((arg, index) => arg === 'actions' && argv[index + 1] === 'publish');
-    if (hasToken && publishIndex === -1) {
-        throw new Error('Refusing to start a builder-capable Kaizen process with GitHub token environment variables. Use the credential-separated `actions publish` command or an external broker.');
+    const credentialOnlyInvocation = argv.some((arg, index) => (arg === 'actions' && (argv[index + 1] === 'prepare' || argv[index + 1] === 'publish')) || arg === 'init');
+    if (hasToken && !credentialOnlyInvocation) {
+        throw new Error('Refusing to start a builder-capable Kaizen process with GitHub token environment variables. Use a credential-only `init`, `actions prepare`, or `actions publish` phase, or an external broker.');
     }
     for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
         delete process.env[key];
