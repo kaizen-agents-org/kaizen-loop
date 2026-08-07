@@ -84,6 +84,33 @@ describe('GitHubClient', () => {
     ]);
   });
 
+  it('retries while a newly applied authorization event is not yet observable', async () => {
+    let eventReads = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue') {
+        return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));
+      }
+      if (args.at(-1)?.endsWith('/events')) {
+        eventReads += 1;
+        return ghResult(command, args, JSON.stringify(eventReads < 3 ? [] : [
+          [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' } }]
+        ]));
+      }
+      return ghResult(command, args, JSON.stringify({ role_name: 'triage' }));
+    });
+
+    const decision = await new GitHubClient(runner, '/repo').checkExecutionAuthorization({
+      repo: 'o/r',
+      issue: 1,
+      label: 'kaizen:authorized',
+      minimumPermission: 'triage',
+      eventRetry: { attempts: 3, baseDelayMs: 0 }
+    });
+
+    expect(decision).toMatchObject({ authorized: true, actor: 'maintainer', permission: 'triage' });
+    expect(eventReads).toBe(3);
+  });
+
   it('fails closed when the latest authorization transition is removal', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'issue') return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));

@@ -91,6 +91,10 @@ export interface RunOptions {
   assumeYes?: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
   existingLock?: RunLock;
+  authorizationEventRetry?: {
+    attempts: number;
+    baseDelayMs: number;
+  };
   runCommand: CommandRunner;
 }
 
@@ -188,7 +192,13 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       reason: 'intake already_resolved: prior intake decision already recorded'
     })));
     const authorizedSelection = config.safety.operationMode === 'external'
-      ? await applyExecutionAuthorizationGate({ selection, config, repo: resolved.project.repo, github })
+      ? await applyExecutionAuthorizationGate({
+        selection,
+        config,
+        repo: resolved.project.repo,
+        github,
+        eventRetry: options.authorizationEventRetry
+      })
       : selection;
     const budgetedSelection = config.safety.operationMode === 'external'
       ? applyImplementationBudget({ ...authorizedSelection, openPullRequests }, maxIssues)
@@ -712,6 +722,10 @@ async function applyExecutionAuthorizationGate(options: {
   config: KaizenConfig;
   repo: string;
   github: GitHubClient;
+  eventRetry?: {
+    attempts: number;
+    baseDelayMs: number;
+  };
 }): Promise<IssueSelection> {
   const selected: GitHubIssue[] = [];
   const skipped = [...options.selection.skipped];
@@ -727,7 +741,8 @@ async function applyExecutionAuthorizationGate(options: {
         repo: options.repo,
         issue: issue.number,
         label: authorization.label,
-        minimumPermission: authorization.minimumPermission
+        minimumPermission: authorization.minimumPermission,
+        eventRetry: options.eventRetry
       });
       if (decision.authorized) selected.push(issue);
       else skipped.push({ number: issue.number, reason: decision.reason });

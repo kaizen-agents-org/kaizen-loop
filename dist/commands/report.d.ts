@@ -20,6 +20,10 @@ export interface ReportIssueNowOptions extends ReportIssueOptions {
     scheduled?: boolean;
     job?: string;
     existingLock?: RunLock;
+    authorizationEventRetry?: {
+        attempts: number;
+        baseDelayMs: number;
+    };
     confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<'direct' | 'pr' | 'reject'>;
 }
 export declare function reportIssue(options: ReportIssueOptions): Promise<import("../index.js").GitHubIssue>;

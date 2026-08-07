@@ -47,6 +47,7 @@ export async function reportIssueNow(options) {
         assumeYes: Boolean(options.assumeYes),
         confirmDirectCommit: options.confirmDirectCommit,
         existingLock: options.existingLock,
+        authorizationEventRetry: options.authorizationEventRetry,
         runCommand: options.runCommand
     });
     return { issue, fix };

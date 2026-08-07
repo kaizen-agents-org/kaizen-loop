@@ -128,6 +128,33 @@ describe('runSandboxSmoke', () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it('fails without writing a success artifact when the smoke issue is skipped', async () => {
+    const { repo, home } = await setupProject({ operationMode: 'external' });
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+        return result(command, args, repo, 'https://github.com/o/r/issues/16\n');
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') {
+        return result(command, args, repo, JSON.stringify(issue(16, 'Skipped smoke', true)));
+      }
+      if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
+        return result(command, args, repo, JSON.stringify([]));
+      }
+      if (command === 'gh') return result(command, args, repo, '');
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(runSandboxSmoke({
+      cwd: repo,
+      project: 'o-r',
+      json: true,
+      assumeYes: true,
+      runCommand: runner
+    })).rejects.toThrow('Smoke issue #16 was not processed: qualifying authorization label event not found: kaizen:authorized');
+
+    expect(await fileExists(path.join(home, 'projects', 'o-r', 'smoke-runs'))).toBe(false);
+  });
+
   it('records the async guardian job path in the smoke artifact', async () => {
     const { repo, workspace, home } = await setupProject({ guardianMode: 'async' });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
@@ -197,7 +224,11 @@ describe('runSandboxSmoke', () => {
   });
 });
 
-async function setupProject(options: { guardianMode?: 'sync' | 'async'; smokeJob?: boolean } = {}) {
+async function setupProject(options: {
+  guardianMode?: 'sync' | 'async';
+  smokeJob?: boolean;
+  operationMode?: 'external' | 'dogfood';
+} = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -205,7 +236,9 @@ async function setupProject(options: { guardianMode?: 'sync' | 'async'; smokeJob
   await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
   await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
   let config = defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] });
-  config = config.replace('operationMode: external', 'operationMode: dogfood');
+  if (options.operationMode !== 'external') {
+    config = config.replace('operationMode: external', 'operationMode: dogfood');
+  }
   if (options.smokeJob) {
     config = config.replace(
       'commands:\n',
@@ -236,12 +269,15 @@ async function setupProject(options: { guardianMode?: 'sync' | 'async'; smokeJob
   return { home, repo, workspace };
 }
 
-function issue(number: number, title: string) {
+function issue(number: number, title: string, authorized = false) {
   return {
     number,
     title,
     body: '',
-    labels: [{ name: 'kaizen' }],
+    labels: [
+      { name: 'kaizen' },
+      ...(authorized ? [{ name: 'kaizen:ready' }, { name: 'kaizen:authorized' }] : [])
+    ],
     createdAt: '2026-06-12T00:00:00Z',
     comments: [],
     url: `https://github.com/o/r/issues/${number}`

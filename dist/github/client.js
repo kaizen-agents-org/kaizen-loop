@@ -90,18 +90,25 @@ export class GitHubClient {
         if (!currentIssue.labels.some((label) => label.name.toLowerCase() === normalizedLabel)) {
             return { authorized: false, reason: `execution authorization label is not active: ${options.label}` };
         }
-        const eventsResult = await this.gh([
-            'api',
-            '--paginate',
-            '--slurp',
-            `repos/${options.repo}/issues/${options.issue}/events`
-        ]);
-        const pages = JSON.parse(eventsResult.stdout || '[]');
-        const transition = pages
-            .flat()
-            .filter((item) => (item.event === 'labeled' || item.event === 'unlabeled')
-            && item.label?.name?.toLowerCase() === normalizedLabel)
-            .at(-1);
+        const attempts = Math.max(1, options.eventRetry?.attempts ?? 1);
+        let transition;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            const eventsResult = await this.gh([
+                'api',
+                '--paginate',
+                '--slurp',
+                `repos/${options.repo}/issues/${options.issue}/events`
+            ]);
+            const pages = JSON.parse(eventsResult.stdout || '[]');
+            transition = pages
+                .flat()
+                .filter((item) => (item.event === 'labeled' || item.event === 'unlabeled')
+                && item.label?.name?.toLowerCase() === normalizedLabel)
+                .at(-1);
+            if (transition || attempt === attempts)
+                break;
+            await sleep((options.eventRetry?.baseDelayMs ?? 0) * 2 ** (attempt - 1));
+        }
         const actor = transition?.actor?.login;
         if (transition?.event !== 'labeled' || !actor) {
             return { authorized: false, reason: `qualifying authorization label event not found: ${options.label}` };

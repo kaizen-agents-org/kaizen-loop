@@ -22,6 +22,10 @@ export declare class GitHubClient {
         issue: number;
         label: string;
         minimumPermission: Exclude<RepositoryPermission, 'none' | 'read'>;
+        eventRetry?: {
+            attempts: number;
+            baseDelayMs: number;
+        };
     }): Promise<ExecutionAuthorization>;
     listOpenPullRequests(limit?: number): Promise<GitHubPullRequest[]>;
     listAllOpenPullRequests(): Promise<GitHubPullRequest[]>;
