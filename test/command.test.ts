@@ -93,7 +93,7 @@ describe('githubCliEnv', () => {
     `;
     const stdout = execFileSync(
       process.execPath,
-      ['--import', 'tsx', '--input-type=module', '-e', script],
+      ['--import', 'tsx', '--input-type=module', '-e', script, 'actions', 'publish'],
       {
         cwd: path.resolve(import.meta.dirname, '..'),
         env: { ...process.env, GH_TOKEN: 'startup-token' },
@@ -115,13 +115,26 @@ describe('githubCliEnv', () => {
         trusted: trustedGithubCliEnv().GH_TOKEN
       }));
     `;
-    const stdout = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+    const stdout = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, 'actions', 'publish'], {
       cwd: path.resolve(import.meta.dirname, '..'),
       env: { ...process.env, GH_TOKEN: 'startup-token' },
       encoding: 'utf8'
     });
 
     expect(JSON.parse(stdout)).toEqual({ trusted: 'startup-token' });
+  });
+
+  it('rejects startup tokens in builder-capable processes', () => {
+    expect(() => execFileSync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '-e', "await import('./src/utils/command.ts')", 'run'],
+      {
+        cwd: path.resolve(import.meta.dirname, '..'),
+        env: { ...process.env, GH_TOKEN: 'startup-token' },
+        encoding: 'utf8',
+        stdio: 'pipe'
+      }
+    )).toThrow('Refusing to start a builder-capable Kaizen process');
   });
 });
 

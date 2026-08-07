@@ -33,7 +33,7 @@ const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
-const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv();
+const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv);
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
 
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -206,10 +206,21 @@ export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Pr
 }
 
 export function trustedGithubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!INITIAL_GITHUB_CLI_EXECUTABLE && process.env.NODE_ENV !== 'test') {
+    throw new Error('Could not resolve a trusted GitHub CLI executable.');
+  }
   return buildAllowlistedEnv(
     source,
     [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST],
-    INITIAL_GITHUB_AUTH_ENV
+    {
+      ...INITIAL_GITHUB_AUTH_ENV,
+      ...(process.env.NODE_ENV !== 'test' && INITIAL_GITHUB_CLI_EXECUTABLE ? {
+        PATH: [...new Set([
+          path.dirname(INITIAL_GITHUB_CLI_EXECUTABLE),
+          ...(INITIAL_GIT_EXECUTABLE ? [path.dirname(INITIAL_GIT_EXECUTABLE)] : [])
+        ])].join(path.delimiter)
+      } : {})
+    }
   );
 }
 
@@ -365,8 +376,15 @@ function canCurrentUserWrite(candidate: string): boolean {
   }
 }
 
-function captureGitHubAuthEnv(): NodeJS.ProcessEnv {
+function captureGitHubAuthEnv(argv: string[]): NodeJS.ProcessEnv {
   const captured = buildAllowlistedEnv(process.env, GITHUB_CLI_AUTH_ENV_ALLOWLIST);
+  const hasToken = Boolean(captured.GH_TOKEN || captured.GITHUB_TOKEN || captured.GH_ENTERPRISE_TOKEN || captured.GITHUB_ENTERPRISE_TOKEN);
+  const publishIndex = argv.findIndex((arg, index) => arg === 'actions' && argv[index + 1] === 'publish');
+  if (hasToken && publishIndex === -1) {
+    throw new Error(
+      'Refusing to start a builder-capable Kaizen process with GitHub token environment variables. Use the credential-separated `actions publish` command or an external broker.'
+    );
+  }
   for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
     delete process.env[key];
   }

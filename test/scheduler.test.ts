@@ -17,10 +17,10 @@ afterEach(() => {
 });
 
 describe('enableScheduler', () => {
-  it('rejects managed cron before writes when no secret command is configured', async () => {
+  it('rejects managed cron before writes when no trusted launcher is configured', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('KAIZEN_HOME', home);
-    vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '');
+    vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', '');
     const runner = vi.fn<CommandRunner>();
     const project: RegistryProject = {
       repo: 'owner/repo',
@@ -42,12 +42,12 @@ describe('enableScheduler', () => {
     await expect(fs.access(path.join(home, 'bin', 'run-scheduled.sh'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('rejects a writable cron secret command before writes', async () => {
+  it('rejects a writable scheduled launcher before writes', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
-    const tokenCommand = path.join(home, 'read-token');
-    await fs.writeFile(tokenCommand, '#!/bin/sh\necho token\n', { mode: 0o700 });
+    const tokenCommand = path.join(home, 'run-scheduled.sh');
+    await fs.writeFile(tokenCommand, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     vi.stubEnv('KAIZEN_HOME', home);
-    vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', tokenCommand);
+    vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', tokenCommand);
     const runner = vi.fn<CommandRunner>();
     const project: RegistryProject = {
       repo: 'owner/repo',
@@ -64,7 +64,7 @@ describe('enableScheduler', () => {
       config: configSchema.parse({ version: 1 }),
       runCommand: runner,
       platform: 'linux'
-    })).rejects.toThrow('immutable operator-managed secret command');
+    })).rejects.toThrow('immutable operator-managed run-scheduled.sh');
     expect(runner).not.toHaveBeenCalled();
   });
 
@@ -208,9 +208,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('45 4 * * 0 ');
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain(`'${await fs.realpath(process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER!)}'`);
-    expect(crontabInput).toContain(
-      `GH_TOKEN="$('${await fs.realpath(process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND!)}')"`
-    );
+    expect(crontabInput).not.toContain('GH_TOKEN=');
     expect(crontabInput).not.toContain('publication-token');
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");
     expect(crontabInput).toContain("'owner-repo' 'issue-watch'");
@@ -351,7 +349,7 @@ describe('enableScheduler', () => {
     expect(plist).toContain('<key>StartInterval</key><integer>300</integer>');
     expect(plist).toContain('<string>/bin/sh</string>');
     expect(plist).toContain('<string>issue-watch</string>');
-    expect(plist).toContain('bin/run-scheduled.sh</string>');
+    expect(plist).not.toContain('bin/run-scheduled.sh</string>');
   });
 
   it('installs configured maintenance launchd job with StartCalendarInterval', async () => {

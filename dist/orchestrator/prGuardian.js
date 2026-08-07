@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { buildUntrustedEnv, githubCliEnv } from '../utils/command.js';
+import { buildUntrustedEnv, trustedGithubCliEnv as githubCliEnv } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
