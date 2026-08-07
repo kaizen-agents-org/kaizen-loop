@@ -205,6 +205,14 @@ export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Pr
   return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
 }
 
+export function trustedGithubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildAllowlistedEnv(
+    source,
+    [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST],
+    INITIAL_GITHUB_AUTH_ENV
+  );
+}
+
 export function hasSupervisorGitHubToken(source: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(
     source.GH_TOKEN ||

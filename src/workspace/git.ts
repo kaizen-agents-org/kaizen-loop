@@ -322,10 +322,11 @@ export class GitClient {
 
 export function isGitLfsPointer(content: string): boolean {
   const lines = content.replace(/\r\n/g, '\n').trimEnd().split('\n');
-  return lines.length === 3
-    && lines[0] === 'version https://git-lfs.github.com/spec/v1'
-    && /^oid sha256:[0-9a-f]{64}$/.test(lines[1])
-    && /^size [0-9]+$/.test(lines[2]);
+  if (lines.length < 3 || lines[0] !== 'version https://git-lfs.github.com/spec/v1') return false;
+  const oidIndex = lines.length - 2;
+  return lines.slice(1, oidIndex).every((line) => /^ext-[0-9]+-[A-Za-z0-9][A-Za-z0-9._-]* .+$/.test(line))
+    && /^oid sha256:[0-9a-f]{64}$/.test(lines[oidIndex])
+    && /^size [0-9]+$/.test(lines[oidIndex + 1]);
 }
 
 function parseWorktreeList(output: string): Array<{ path: string; branch?: string }> {

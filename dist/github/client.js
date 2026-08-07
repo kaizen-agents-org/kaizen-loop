@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { githubCliEnv, githubCliExecutable as resolveGitHubCliExecutable } from '../utils/command.js';
+import { trustedGithubCliEnv, githubCliExecutable as resolveGitHubCliExecutable } from '../utils/command.js';
 import { buildDiscoveredIssueFingerprint, extractEvidence, hasDiscoveredIssueFingerprint, hasDiscoveredIssueMarker, parseFailureClass } from '../discovered-issue-fingerprint.js';
 export const KAIZEN_LABELS = [
     'kaizen',
@@ -401,7 +401,7 @@ export class GitHubClient {
         const attempts = options.noRetry ? 1 : 3;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
             try {
-                return await this.run(this.githubCliExecutable, args, { cwd: this.cwd, env: githubCliEnv() });
+                return await this.run(this.githubCliExecutable, args, { cwd: this.cwd, env: trustedGithubCliEnv() });
             }
             catch (error) {
                 const message = String(error);

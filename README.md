@@ -119,8 +119,9 @@ npm run dev -- run --dry-run --json
 For a target repository:
 
 Set `GH_TOKEN` or `GITHUB_TOKEN` in the supervisor environment before running
-Kaizen. Publication captures that token at startup and exposes it only to the
-validated HTTPS push; `gh auth login` alone is not a publication credential.
+Kaizen. The supervisor captures that token at startup, removes it from its
+ambient environment, and restores it only for pinned `gh` calls and validated
+HTTPS pushes; `gh auth login` alone is not a publication credential.
 Scheduled providers must inject the token without writing it into the repository
 or generated launcher files (for example, use `launchctl setenv GH_TOKEN ...` for
 a local launchd session or the provider's secret manager). Supervisor publication
@@ -129,6 +130,10 @@ pre-push hooks or upload LFS objects with a separate trusted credential path.
 Managed cron additionally requires `KAIZEN_CRON_GITHUB_TOKEN_COMMAND` to contain
 the absolute path of an immutable, operator-managed command that prints the token at runtime;
 the generated crontab stores only that command path, never the token itself.
+`KAIZEN_CRON_SCHEDULED_LAUNCHER` must likewise name an absolute,
+operator-managed `run-scheduled.sh` whose file and ancestor directories are not
+writable by the runtime user. This prevents a scheduled builder from replacing
+the launcher that receives the token on the next cron invocation.
 
 ```sh
 kaizen init --agent codex --schedule 02:00

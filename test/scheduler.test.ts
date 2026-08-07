@@ -9,6 +9,7 @@ import type { CommandRunner } from '../src/utils/command.js';
 
 beforeEach(() => {
   vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/bin/echo');
+  vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', '/bin/sh');
 });
 
 afterEach(() => {
@@ -64,6 +65,25 @@ describe('enableScheduler', () => {
       runCommand: runner,
       platform: 'linux'
     })).rejects.toThrow('immutable operator-managed secret command');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('rejects a writable cron launcher before installing jobs', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const launcher = path.join(home, 'run-scheduled.sh');
+    await fs.writeFile(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', launcher);
+    const runner = vi.fn<CommandRunner>();
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableScheduler({
+      slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
+      runCommand: runner, platform: 'linux'
+    })).rejects.toThrow('immutable operator-managed run-scheduled.sh');
     expect(runner).not.toHaveBeenCalled();
   });
 
@@ -187,7 +207,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('*/5 * * * * ');
     expect(crontabInput).toContain('45 4 * * 0 ');
     expect(crontabInput).toContain("/bin/sh '");
-    expect(crontabInput).toContain("bin/run-scheduled.sh'");
+    expect(crontabInput).toContain(`'${await fs.realpath(process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER!)}'`);
     expect(crontabInput).toContain(
       `GH_TOKEN="$('${await fs.realpath(process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND!)}')"`
     );
@@ -198,12 +218,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) maintenance');
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) issue-watch');
     expect(crontabInput).toContain('# KAIZEN-LOOP owner-repo (managed by kaizen-loop; do not edit) weekly-sandbox-smoke');
-    const launcher = await fs.readFile(path.join(home, 'bin', 'run-scheduled.sh'), 'utf8');
-    expect(launcher).toContain('exec "$operator_launcher" run');
-    const operatorLauncher = await fs.readFile(path.join(home, 'bin', 'kaizen'), 'utf8');
-    expect(operatorLauncher).toContain('"+refs/heads/$runtime_ref:refs/remotes/origin/$runtime_ref"');
-    expect(operatorLauncher).toContain('runtime_ref=${KAIZEN_RUNTIME_REF:-main}');
-    expect(operatorLauncher).toContain('exec "$node_bin" "$runtime_dir/dist/cli.js" "$@"');
+    await expect(fs.access(path.join(home, 'bin', 'run-scheduled.sh'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('installs scheduler jobs with anchored hourly cron schedules', async () => {

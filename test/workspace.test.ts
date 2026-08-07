@@ -208,6 +208,26 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
   });
 
+  it('refuses to publish valid Git LFS pointers with extensions', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command, args, cwd: '/workspace', exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'https://github.com/o/r.git\n'
+        : args[0] === 'grep'
+          ? 'kaizen/issue-330-fix:assets/model.bin\n'
+          : args[0] === 'show'
+            ? `version https://git-lfs.github.com/spec/v1\next-0-example payload\noid sha256:${'a'.repeat(64)}\nsize 123\n`
+            : '',
+      stderr: '', durationMs: 1
+    }));
+
+    await expect(new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    })).rejects.toThrow('Git LFS pointer');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
   it('publishes ordinary files that only mention the LFS specification version', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({

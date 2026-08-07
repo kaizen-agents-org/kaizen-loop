@@ -11,6 +11,7 @@ import {
   gitPublicationEnv,
   gitSshPublicationEnv,
   githubCliEnv,
+  trustedGithubCliEnv,
   githubCliExecutable,
   isTrustedExecutablePath,
   isWindowsExecutablePathTrusted,
@@ -104,6 +105,23 @@ describe('githubCliEnv', () => {
       publicationToken: 'startup-token',
       hasToken: true
     });
+  });
+
+  it('restores startup authentication only for the trusted GitHub CLI boundary', () => {
+    const script = `
+      import { githubCliEnv, trustedGithubCliEnv } from './src/utils/command.ts';
+      process.stdout.write(JSON.stringify({
+        ordinary: githubCliEnv().GH_TOKEN,
+        trusted: trustedGithubCliEnv().GH_TOKEN
+      }));
+    `;
+    const stdout = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+      cwd: path.resolve(import.meta.dirname, '..'),
+      env: { ...process.env, GH_TOKEN: 'startup-token' },
+      encoding: 'utf8'
+    });
+
+    expect(JSON.parse(stdout)).toEqual({ trusted: 'startup-token' });
   });
 });
 

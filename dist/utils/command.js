@@ -165,6 +165,9 @@ export function buildUntrustedEnv(source, allowlist, extra = {}) {
 export function githubCliEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
 }
+export function trustedGithubCliEnv(source = process.env) {
+    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST], INITIAL_GITHUB_AUTH_ENV);
+}
 export function hasSupervisorGitHubToken(source = process.env) {
     return Boolean(source.GH_TOKEN ||
         source.GITHUB_TOKEN ||

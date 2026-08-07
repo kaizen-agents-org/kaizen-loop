@@ -10,8 +10,9 @@ export async function enableScheduler(options) {
     const jobs = schedulerJobs(options.config);
     const platform = options.platform ?? process.platform;
     const cronTokenCommand = platform === 'darwin' || jobs.length === 0 ? undefined : requiredCronTokenCommand();
-    await installScheduledLauncher();
+    const cronLauncher = platform === 'darwin' || jobs.length === 0 ? undefined : requiredCronLauncher();
     if (platform === 'darwin') {
+        await installScheduledLauncher();
         await fs.mkdir(projectStateDir(options.slug), { recursive: true });
         await removeLaunchdPlists(options.slug, options.runCommand);
         const paths = [];
@@ -31,7 +32,7 @@ export async function enableScheduler(options) {
     for (const job of jobs) {
         lines.push(`# ${marker} ${job.name}`);
         for (const cronTime of cronTimes(job.config.schedule)) {
-            lines.push(`${cronTime} ${commandLine(options.slug, job, cronTokenCommand)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+            lines.push(`${cronTime} ${commandLine(options.slug, job, cronTokenCommand, cronLauncher)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
         }
     }
     await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
@@ -92,9 +93,27 @@ ${schedule}
 function cronMarker(slug) {
     return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
-function commandLine(slug, job, tokenCommand) {
-    const command = `/bin/sh ${shQuote(scheduledLauncherPath())} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+function commandLine(slug, job, tokenCommand, launcher = scheduledLauncherPath()) {
+    const command = `/bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
     return tokenCommand ? `GH_TOKEN="$(${shQuote(tokenCommand)})" ${command}` : command;
+}
+function requiredCronLauncher() {
+    const launcher = process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER;
+    let resolvedLauncher;
+    let trusted = false;
+    if (launcher && path.isAbsolute(launcher)) {
+        try {
+            resolvedLauncher = fsSync.realpathSync(launcher);
+            trusted = isTrustedExecutablePath(resolvedLauncher);
+        }
+        catch {
+            trusted = false;
+        }
+    }
+    if (!trusted) {
+        throw new ConfigError('Managed cron requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh.');
+    }
+    return resolvedLauncher;
 }
 function requiredCronTokenCommand() {
     const command = process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND;
