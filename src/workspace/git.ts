@@ -227,6 +227,7 @@ export class GitClient {
       : undefined;
     const publicationDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-publication-'));
     let publicationError: unknown;
+    let cleanupError: unknown;
     try {
       await this.run(publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
         env: publicationLocalEnv
@@ -294,18 +295,20 @@ export class GitClient {
       });
     } catch (error) {
       publicationError = error;
-      throw error;
     } finally {
       try {
         await fs.rm(publicationDir, { recursive: true, force: true });
-      } catch (cleanupError) {
-        if (publicationError instanceof Error && publicationError.cause === undefined) {
-          publicationError.cause = cleanupError;
-        } else if (publicationError === undefined) {
-          throw cleanupError;
-        }
+      } catch (error) {
+        cleanupError = error;
       }
     }
+    if (publicationError !== undefined) {
+      if (publicationError instanceof Error && publicationError.cause === undefined && cleanupError !== undefined) {
+        publicationError.cause = cleanupError;
+      }
+      throw publicationError;
+    }
+    if (cleanupError !== undefined) throw cleanupError;
   }
 
   private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv }) {

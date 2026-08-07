@@ -11,9 +11,11 @@ import {
   gitPublicationEnv,
   gitSshPublicationEnv,
   githubCliEnv,
+  githubCliExecutable,
   isTrustedExecutablePath,
   isWindowsExecutablePathTrusted,
   isolatedGitEnv,
+  publicationGitExecutable,
   runCommand,
   withRunDeadline,
   type CommandRunner
@@ -80,10 +82,11 @@ describe('githubCliEnv', () => {
 
   it('removes startup tokens from the supervisor process environment while retaining privileged access', () => {
     const script = `
-      import { githubCliEnv, hasSupervisorGitHubToken } from './src/utils/command.ts';
+      import { gitPublicationEnv, githubCliEnv, hasSupervisorGitHubToken } from './src/utils/command.ts';
       process.stdout.write(JSON.stringify({
         parentToken: process.env.GH_TOKEN,
         privilegedToken: githubCliEnv().GH_TOKEN,
+        publicationToken: gitPublicationEnv().KAIZEN_GIT_PASSWORD,
         hasToken: hasSupervisorGitHubToken()
       }));
     `;
@@ -98,7 +101,7 @@ describe('githubCliEnv', () => {
     );
 
     expect(JSON.parse(stdout)).toEqual({
-      privilegedToken: 'startup-token',
+      publicationToken: 'startup-token',
       hasToken: true
     });
   });
@@ -184,6 +187,21 @@ describe('executableNames', () => {
       ['C:\\Program Files'],
       () => false
     )).toBe(true);
+  });
+});
+
+describe('privileged executable resolution', () => {
+  it('fails closed for unmarked production command runners', () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const unmarkedRunner = vi.fn<CommandRunner>();
+      expect(githubCliExecutable(unmarkedRunner)).toBeUndefined();
+      expect(publicationGitExecutable(unmarkedRunner)).toBeUndefined();
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 });
 

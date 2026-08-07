@@ -202,10 +202,7 @@ export function buildUntrustedEnv(
 }
 
 export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const current = buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
-  return source === process.env
-    ? buildAllowlistedEnv(INITIAL_GITHUB_AUTH_ENV, GITHUB_CLI_AUTH_ENV_ALLOWLIST, current)
-    : current;
+  return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
 }
 
 export function hasSupervisorGitHubToken(source: NodeJS.ProcessEnv = process.env): boolean {
@@ -253,17 +250,17 @@ export function gitPublicationEnv(
 }
 
 export function publicationGitExecutable(command: CommandRunner): string | undefined {
-  if (process.env.NODE_ENV === 'test' && process.env.KAIZEN_TEST_GIT_EXECUTABLE === '1') return 'git';
+  if (process.env.NODE_ENV === 'test') return 'git';
   return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: boolean })[TRUSTED_COMMAND_RUNNER]
     ? INITIAL_GIT_EXECUTABLE
-    : 'git';
+    : undefined;
 }
 
 export function githubCliExecutable(command: CommandRunner): string | undefined {
-  if (process.env.NODE_ENV === 'test' && process.env.KAIZEN_TEST_GH_EXECUTABLE === '1') return 'gh';
+  if (process.env.NODE_ENV === 'test') return 'gh';
   return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: boolean })[TRUSTED_COMMAND_RUNNER]
     ? INITIAL_GITHUB_CLI_EXECUTABLE
-    : 'gh';
+    : undefined;
 }
 
 export function executableNames(

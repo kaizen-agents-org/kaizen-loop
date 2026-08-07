@@ -163,10 +163,7 @@ export function buildUntrustedEnv(source, allowlist, extra = {}) {
     return env;
 }
 export function githubCliEnv(source = process.env) {
-    const current = buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
-    return source === process.env
-        ? buildAllowlistedEnv(INITIAL_GITHUB_AUTH_ENV, GITHUB_CLI_AUTH_ENV_ALLOWLIST, current)
-        : current;
+    return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
 }
 export function hasSupervisorGitHubToken(source = process.env) {
     return Boolean(source.GH_TOKEN ||
@@ -200,18 +197,18 @@ export function gitPublicationEnv(source = process.env, initialToken = INITIAL_G
     });
 }
 export function publicationGitExecutable(command) {
-    if (process.env.NODE_ENV === 'test' && process.env.KAIZEN_TEST_GIT_EXECUTABLE === '1')
+    if (process.env.NODE_ENV === 'test')
         return 'git';
     return command[TRUSTED_COMMAND_RUNNER]
         ? INITIAL_GIT_EXECUTABLE
-        : 'git';
+        : undefined;
 }
 export function githubCliExecutable(command) {
-    if (process.env.NODE_ENV === 'test' && process.env.KAIZEN_TEST_GH_EXECUTABLE === '1')
+    if (process.env.NODE_ENV === 'test')
         return 'gh';
     return command[TRUSTED_COMMAND_RUNNER]
         ? INITIAL_GITHUB_CLI_EXECUTABLE
-        : 'gh';
+        : undefined;
 }
 export function executableNames(command, platform = process.platform, pathExt = process.env.PATHEXT) {
     if (platform !== 'win32' || path.extname(command))
