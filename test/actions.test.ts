@@ -8,10 +8,12 @@ import { defaultConfigYaml, loadConfig } from '../src/config/config.js';
 import { runCommand, type CommandResult, type CommandRunner } from '../src/utils/command.js';
 import { WorkspaceManager } from '../src/workspace/manager.js';
 import { parse, stringify } from 'yaml';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -45,13 +47,19 @@ describe('GitHub Actions fix workflow', () => {
     });
 
     const outputDir = path.join(cwd, 'prepared');
-    const prepared = await prepareActionsFix({ cwd, issue: 199, outputDir, runCommand: fakeRun });
+    const prepared = await prepareActionsFix({ cwd, issue: 199, outputDir, runCommand: trustedRunner(fakeRun) });
 
     expect(prepared).toMatchObject({ repo: 'owner/repo', issue: 199, baseSha: 'a'.repeat(40) });
     const prompt = await fs.readFile(path.join(outputDir, 'prompt.md'), 'utf8');
+    const context = JSON.parse(await fs.readFile(path.join(outputDir, 'context.json'), 'utf8'));
     expect(prompt).toContain('# Issue #199: Add Actions workflow');
     expect(prompt).toContain('Do not run repository setup or verification commands in this provider job');
     expect(prompt).not.toContain('npm test');
+    expect(context).toMatchObject({
+      repo: 'owner/repo',
+      issue: { number: 199, title: 'Add Actions workflow' },
+      authorization: { authorized: true, actor: 'maintainer', permission: 'write' }
+    });
     expect(calls.some((call) => call.includes('collaborators/maintainer/permission'))).toBe(true);
     expect(calls).toContain('verifier --version --json');
     expect(calls.some((call) => call.startsWith('git ls-remote '))).toBe(false);
@@ -66,7 +74,7 @@ describe('GitHub Actions fix workflow', () => {
       throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
     };
 
-    await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
+    await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: trustedRunner(fakeRun) }))
       .rejects.toThrow('Missing execution authorization label');
   });
 
@@ -78,7 +86,7 @@ describe('GitHub Actions fix workflow', () => {
       throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
     };
 
-    await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
+    await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: trustedRunner(fakeRun) }))
       .rejects.toThrow('Missing Kaizen eligibility label');
   });
 
@@ -96,7 +104,7 @@ describe('GitHub Actions fix workflow', () => {
         throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
       };
 
-      await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: fakeRun }))
+      await expect(prepareActionsFix({ cwd, issue: 199, outputDir: path.join(cwd, 'out'), runCommand: trustedRunner(fakeRun) }))
         .rejects.toThrow('Missing execution selection label: kaizen:ready');
     }
   });
@@ -130,7 +138,7 @@ describe('GitHub Actions fix workflow', () => {
     }));
     const command = vi.fn<CommandRunner>();
 
-    await expect(publishActionsFix({ cwd, artifactDir, runCommand: command })).rejects.toThrow('patch hash');
+    await expect(publishActionsFix({ cwd, artifactDir, runCommand: trustedRunner(command) })).rejects.toThrow('patch hash');
     expect(command).not.toHaveBeenCalled();
   });
 
@@ -174,7 +182,7 @@ describe('GitHub Actions fix workflow', () => {
       return runCommand(command, args, options);
     };
 
-    await expect(publishActionsFix({ cwd, artifactDir, runCommand: fakeRun }))
+    await expect(publishActionsFix({ cwd, artifactDir, runCommand: trustedRunner(fakeRun) }))
       .rejects.toThrow('Default branch advanced from verified base');
     expect((await fs.readFile(path.join(cwd, 'README.md'), 'utf8'))).toBe('before\n');
   });
@@ -202,6 +210,7 @@ describe('GitHub Actions fix workflow', () => {
     await runCommand('git', ['init', '-b', 'main'], { cwd });
     await runCommand('git', ['add', '.'], { cwd });
     await runCommand('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'base'], { cwd });
+    const baseSha = (await runCommand('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim();
     await fs.writeFile(path.join(cwd, 'secret.pem'), 'secret\n');
     await runCommand('git', ['add', '-N', 'secret.pem'], { cwd });
     const patch = (await runCommand('git', ['diff', '--binary', 'HEAD'], { cwd })).stdout;
@@ -209,6 +218,7 @@ describe('GitHub Actions fix workflow', () => {
     await fs.rm(path.join(cwd, 'secret.pem'));
     const patchPath = path.join(cwd, 'change.patch');
     const providerPath = path.join(cwd, 'provider.json');
+    const contextPath = await writePreparedContext(cwd, baseSha);
     await fs.writeFile(patchPath, patch);
     await fs.writeFile(providerPath, encodeProviderResult('codex', JSON.stringify({
       status: 'fixed', summary: 'Add secret', notes: '', discoveredIssues: []
@@ -228,8 +238,9 @@ describe('GitHub Actions fix workflow', () => {
       issue: 199,
       patchPath,
       providerResultPath: providerPath,
+      contextPath,
       outputDir: path.join(cwd, 'verified'),
-      runCommand: fakeRun
+      runCommand: trustedRunner(fakeRun)
     })).rejects.toThrow('Patch changes forbidden paths: secret.pem');
     await expect(fs.access(path.join(cwd, 'setup-ran'))).rejects.toThrow();
   });
@@ -243,6 +254,7 @@ describe('GitHub Actions fix workflow', () => {
       expectedRef: 'refs/heads/release'
     };
     await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), stringify(config));
+    const contextPath = await writePreparedContext(cwd, 'a'.repeat(40));
     const fakeRun: CommandRunner = async (command, args) => {
       if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'issue') {
@@ -264,9 +276,27 @@ describe('GitHub Actions fix workflow', () => {
       issue: 199,
       patchPath: path.join(cwd, 'unused.patch'),
       providerResultPath: path.join(cwd, 'unused-provider.json'),
+      contextPath,
       outputDir: path.join(cwd, 'verified'),
-      runCommand: fakeRun
+      runCommand: trustedRunner(fakeRun)
     })).rejects.toThrow('custom verifier trust roots require a corresponding trusted workflow checkout');
+  });
+
+  it('rejects a prepared context for a different issue before running commands', async () => {
+    const cwd = await configuredRepo();
+    const contextPath = await writePreparedContext(cwd, 'a'.repeat(40), 200);
+    const command = vi.fn<CommandRunner>();
+
+    await expect(verifyActionsFix({
+      cwd,
+      issue: 199,
+      patchPath: path.join(cwd, 'unused.patch'),
+      providerResultPath: path.join(cwd, 'unused-provider.json'),
+      contextPath,
+      outputDir: path.join(cwd, 'verified'),
+      runCommand: trustedRunner(command)
+    })).rejects.toThrow('Prepared issue #200 does not match requested issue #199');
+    expect(command).not.toHaveBeenCalled();
   });
 
   it('verifies and publishes the exact authorized patch without executing publish hooks', async () => {
@@ -282,6 +312,7 @@ describe('GitHub Actions fix workflow', () => {
     const patchPath = path.join(cwd, 'change.patch');
     const providerPath = path.join(cwd, 'provider.json');
     const artifactDir = path.join(cwd, 'verified');
+    const contextPath = await writePreparedContext(cwd, baseSha);
     await fs.writeFile(patchPath, patch);
     await fs.writeFile(providerPath, encodeProviderResult('codex', JSON.stringify({
       status: 'fixed', summary: 'Update README', notes: '', discoveredIssues: []
@@ -289,7 +320,9 @@ describe('GitHub Actions fix workflow', () => {
     let authorizationChecks = 0;
     let liveBaseChecks = 0;
     let verifierFreshnessChecks = 0;
+    let allowGithub = false;
     const fakeRun: CommandRunner = async (command, args, options) => {
+      if (command === 'gh' && !allowGithub) throw new Error('verify must not invoke GitHub');
       if (command === 'gh' && args[0] === 'repo' && args.includes('nameWithOwner')) return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'repo') return result(command, args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
       if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
@@ -333,15 +366,26 @@ describe('GitHub Actions fix workflow', () => {
       return runCommand(command, args, options);
     };
 
-    const artifact = await verifyActionsFix({ cwd, issue: 199, patchPath, providerResultPath: providerPath, outputDir: artifactDir, runCommand: fakeRun });
+    const artifact = await verifyActionsFix({
+      cwd,
+      issue: 199,
+      patchPath,
+      providerResultPath: providerPath,
+      contextPath,
+      outputDir: artifactDir,
+      runCommand: trustedRunner(fakeRun)
+    });
     expect(artifact.baseSha).toBe(baseSha);
     expect(artifact.files).toEqual(['README.md']);
+    expect(authorizationChecks).toBe(0);
     await runCommand('git', ['reset', '--hard', 'HEAD'], { cwd });
 
-    const published = await publishActionsFix({ cwd, artifactDir, runCommand: fakeRun });
+    allowGithub = true;
+    vi.stubEnv('GH_TOKEN', 'publication-token');
+    const published = await publishActionsFix({ cwd, artifactDir, runCommand: trustedRunner(fakeRun) });
     expect(published.url).toBe('https://github.com/owner/repo/pull/7');
     expect(published.body).toContain('Closes #199');
-    expect(authorizationChecks).toBe(2);
+    expect(authorizationChecks).toBe(1);
     expect(liveBaseChecks).toBe(1);
     expect(verifierFreshnessChecks).toBe(1);
     expect((await runCommand('git', ['show', 'HEAD:README.md'], { cwd })).stdout).toBe('after\n');
@@ -354,7 +398,7 @@ describe('GitHub Actions fix workflow', () => {
 
     expect(workflow.jobs.codex.permissions).toEqual({ contents: 'read' });
     expect(workflow.jobs.claude.permissions).toEqual({ contents: 'read' });
-    expect(workflow.jobs.verify.permissions).toEqual({ contents: 'read', issues: 'read' });
+    expect(workflow.jobs.verify.permissions).toEqual({ contents: 'read' });
     expect(workflow.jobs.publish.permissions).toEqual({ contents: 'write', issues: 'read', 'pull-requests': 'write' });
     expect(raw).toContain('openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56');
     expect(raw).toContain('anthropics/claude-code-action@273fe825408ddced56cb02b228a74c72bed8241e');
@@ -370,6 +414,8 @@ describe('GitHub Actions fix workflow', () => {
     expect(raw).not.toContain('Fail Codex attempt without a patch');
     expect(raw).not.toContain('Fail Claude attempt without a patch');
     expect(JSON.stringify(workflow.jobs.verify)).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+    expect(JSON.stringify(workflow.jobs.verify)).toContain('kaizen-provider-prompt');
+    expect(JSON.stringify(workflow.jobs.verify)).toContain('--actions-context');
     expect(JSON.stringify(workflow.jobs.publish)).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY/);
   });
 });
@@ -380,6 +426,23 @@ async function configuredRepo(): Promise<string> {
   await fs.mkdir(path.join(cwd, '.kaizen'));
   await fs.writeFile(path.join(cwd, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'codex', setup: null, verify: [] }));
   return cwd;
+}
+
+async function writePreparedContext(cwd: string, baseSha: string, issueNumber = 199): Promise<string> {
+  const contextPath = path.join(cwd, `prepared-${baseSha.slice(0, 8)}.json`);
+  await fs.writeFile(contextPath, JSON.stringify({
+    version: 1,
+    repo: 'owner/repo',
+    issue: { ...issue(['kaizen', 'kaizen:ready', 'kaizen:authorized']), number: issueNumber },
+    baseSha,
+    authorization: {
+      authorized: true,
+      actor: 'maintainer',
+      permission: 'write',
+      reason: 'authorized by maintainer (write)'
+    }
+  }));
+  return contextPath;
 }
 
 function issue(labels: string[]) {

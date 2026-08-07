@@ -9,6 +9,7 @@ import type { GitHubIssue } from '../../src/github/types.js';
 import { applyImplementationBudget, runKaizen as runKaizenCore } from '../../src/orchestrator/run.js';
 import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../../src/utils/command.js';
+import { trustedRunner } from '../helpers/trustedRunner.js';
 
 const testVerifierCommit = 'b'.repeat(40);
 
@@ -44,7 +45,7 @@ async function runKaizen(options: Parameters<typeof runKaizenCore>[0]) {
       runtime: { commit: testVerifierCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
     }));
   };
-  return runKaizenCore({ ...options, runCommand });
+  return runKaizenCore({ ...options, runCommand: trustedRunner(runCommand) });
 }
 
 describe('runKaizen dry-run', () => {

@@ -30,6 +30,12 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 const SUPERVISOR_CREDENTIAL_ENV = new Set([...GITHUB_CLI_AUTH_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
+export interface TrustedExecutables {
+  git?: string;
+  githubCli?: string;
+  ssh?: string;
+  githubToken?: string;
+}
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
@@ -64,6 +70,13 @@ export type CommandRunner = (
   args: string[],
   options?: RunCommandOptions
 ) => Promise<CommandResult>;
+
+export const COMMAND_RUNNER_INJECTION = Symbol.for('kaizen.commandRunnerInjection');
+
+export function processCommandRunner(defaultRunner: CommandRunner): CommandRunner {
+  return (globalThis as typeof globalThis & { [COMMAND_RUNNER_INJECTION]?: CommandRunner })[COMMAND_RUNNER_INJECTION]
+    ?? defaultRunner;
+}
 
 export const runCommand: CommandRunner = async (command, args, options = {}) => {
   throwIfShutdownRequested();
@@ -171,7 +184,14 @@ export const runCommand: CommandRunner = async (command, args, options = {}) => 
     child.stdin.end();
   });
 };
-Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, { value: true });
+Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
+  value: Object.freeze({
+    git: INITIAL_GIT_EXECUTABLE,
+    githubCli: INITIAL_GITHUB_CLI_EXECUTABLE,
+    ssh: INITIAL_SSH_EXECUTABLE,
+    githubToken: INITIAL_GITHUB_TOKEN
+  })
+});
 
 export function buildAllowlistedEnv(
   source: NodeJS.ProcessEnv,
@@ -205,8 +225,12 @@ export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Pr
   return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
 }
 
-export function trustedGithubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  if (!INITIAL_GITHUB_CLI_EXECUTABLE && process.env.NODE_ENV !== 'test') {
+export function trustedGithubCliEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  githubCliExecutable: string | undefined = INITIAL_GITHUB_CLI_EXECUTABLE,
+  gitExecutable: string | undefined = INITIAL_GIT_EXECUTABLE
+): NodeJS.ProcessEnv {
+  if (!githubCliExecutable) {
     throw new Error('Could not resolve a trusted GitHub CLI executable.');
   }
   return buildAllowlistedEnv(
@@ -214,12 +238,10 @@ export function trustedGithubCliEnv(source: NodeJS.ProcessEnv = process.env): No
     [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST],
     {
       ...INITIAL_GITHUB_AUTH_ENV,
-      ...(process.env.NODE_ENV !== 'test' && INITIAL_GITHUB_CLI_EXECUTABLE ? {
-        PATH: [...new Set([
-          path.dirname(INITIAL_GITHUB_CLI_EXECUTABLE),
-          ...(INITIAL_GIT_EXECUTABLE ? [path.dirname(INITIAL_GIT_EXECUTABLE)] : [])
-        ])].join(path.delimiter)
-      } : {})
+      PATH: [...new Set([
+        path.dirname(githubCliExecutable),
+        ...(gitExecutable ? [path.dirname(gitExecutable)] : [])
+      ])].join(path.delimiter)
     }
   );
 }
@@ -249,7 +271,7 @@ export function gitPublicationEnv(
   initialToken: string | undefined = INITIAL_GITHUB_TOKEN
 ): NodeJS.ProcessEnv {
   const token = source.GH_TOKEN || source.GITHUB_TOKEN || initialToken;
-  if (!token && !(process.env.NODE_ENV === 'test' && source === process.env)) {
+  if (!token) {
     throw new Error('HTTPS Git publication requires GH_TOKEN or GITHUB_TOKEN in the supervisor environment.');
   }
   return buildAllowlistedEnv(
@@ -269,17 +291,25 @@ export function gitPublicationEnv(
 }
 
 export function publicationGitExecutable(command: CommandRunner): string | undefined {
-  if (process.env.NODE_ENV === 'test') return 'git';
-  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: boolean })[TRUSTED_COMMAND_RUNNER]
-    ? INITIAL_GIT_EXECUTABLE
-    : undefined;
+  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.git;
 }
 
 export function githubCliExecutable(command: CommandRunner): string | undefined {
-  if (process.env.NODE_ENV === 'test') return 'gh';
-  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: boolean })[TRUSTED_COMMAND_RUNNER]
-    ? INITIAL_GITHUB_CLI_EXECUTABLE
-    : undefined;
+  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.githubCli;
+}
+
+export function publicationSshExecutable(command: CommandRunner): string | undefined {
+  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.ssh;
+}
+
+export function publicationGithubToken(command: CommandRunner): string | undefined {
+  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.githubToken;
+}
+
+export function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner {
+  const trustedCommand: CommandRunner = (executable, args, options) => command(executable, args, options);
+  Object.defineProperty(trustedCommand, TRUSTED_COMMAND_RUNNER, { value: Object.freeze({ ...executables }) });
+  return trustedCommand;
 }
 
 export function executableNames(
@@ -321,26 +351,25 @@ function resolveExecutable(
   return undefined;
 }
 
-export function isTrustedExecutablePath(executable: string): boolean {
+export function isTrustedExecutablePath(
+  executable: string,
+  canWrite: (candidate: string) => boolean = canCurrentUserWrite
+): boolean {
   if (process.platform === 'win32') {
     if (!fs.statSync(executable).isFile()) return false;
     const trustedRoots = ['ProgramFiles', 'ProgramW6432', 'SystemRoot']
       .map((key) => process.env[key])
       .filter((value): value is string => Boolean(value));
-    return isWindowsExecutablePathTrusted(executable, trustedRoots);
+    return isWindowsExecutablePathTrusted(executable, trustedRoots, canWrite);
   }
 
   const uid = process.getuid?.();
   if (uid === undefined || uid === 0) return false;
-  const groups = new Set([process.getgid?.(), ...(process.getgroups?.() ?? [])]);
   let current = executable;
   while (true) {
     const stat = fs.statSync(current);
     if (current === executable && !stat.isFile()) return false;
-    const writable = process.env.NODE_ENV === 'test'
-      ? (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && groups.has(stat.gid))
-      : canCurrentUserWrite(current);
-    if (stat.uid !== 0 || writable) {
+    if (stat.uid !== 0 || canWrite(current)) {
       return false;
     }
     const parent = path.dirname(current);
@@ -375,7 +404,7 @@ function canCurrentUserWrite(candidate: string): boolean {
     return true;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    return code !== 'EACCES' && code !== 'EPERM';
+    return code !== 'EACCES' && code !== 'EPERM' && code !== 'EROFS';
   }
 }
 
@@ -444,8 +473,9 @@ export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): 
       timeoutMs: timeoutWithinDeadline(options.timeoutMs, deadlineAt)
     });
   };
-  if ((runCommand as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: boolean })[TRUSTED_COMMAND_RUNNER]) {
-    Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, { value: true });
+  const trustedExecutables = (runCommand as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER];
+  if (trustedExecutables) {
+    Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, { value: trustedExecutables });
   }
   return deadlineCommand;
 }

@@ -239,7 +239,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: read
     steps:
       - name: Checkout target repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -261,6 +260,12 @@ jobs:
         with:
           name: kaizen-provider-claude
           path: ${{ runner.temp }}/kaizen-provider
+
+      - name: Download authorized prepare context
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: kaizen-provider-prompt
+          path: ${{ runner.temp }}/kaizen-prepared
 
       - name: Checkout Kaizen runtime
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -308,6 +313,7 @@ jobs:
             node "$RUNNER_TEMP/kaizen-runtime/dist/cli.js" fix "$ISSUE_NUMBER" \
             --actions-patch "$RUNNER_TEMP/kaizen-provider/change.patch" \
             --provider-result "$RUNNER_TEMP/kaizen-provider/provider-result.json" \
+            --actions-context "$RUNNER_TEMP/kaizen-prepared/context.json" \
             --artifact-dir "$RUNNER_TEMP/kaizen-verified" \
             --json
 

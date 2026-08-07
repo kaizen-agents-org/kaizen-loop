@@ -37,6 +37,11 @@ const activeChildren = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal;
+export const COMMAND_RUNNER_INJECTION = Symbol.for('kaizen.commandRunnerInjection');
+export function processCommandRunner(defaultRunner) {
+    return globalThis[COMMAND_RUNNER_INJECTION]
+        ?? defaultRunner;
+}
 export const runCommand = async (command, args, options = {}) => {
     throwIfShutdownRequested();
     const started = Date.now();
@@ -140,7 +145,14 @@ export const runCommand = async (command, args, options = {}) => {
         child.stdin.end();
     });
 };
-Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, { value: true });
+Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
+    value: Object.freeze({
+        git: INITIAL_GIT_EXECUTABLE,
+        githubCli: INITIAL_GITHUB_CLI_EXECUTABLE,
+        ssh: INITIAL_SSH_EXECUTABLE,
+        githubToken: INITIAL_GITHUB_TOKEN
+    })
+});
 export function buildAllowlistedEnv(source, allowlist, extra = {}) {
     const env = {};
     for (const key of allowlist) {
@@ -165,18 +177,16 @@ export function buildUntrustedEnv(source, allowlist, extra = {}) {
 export function githubCliEnv(source = process.env) {
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
 }
-export function trustedGithubCliEnv(source = process.env) {
-    if (!INITIAL_GITHUB_CLI_EXECUTABLE && process.env.NODE_ENV !== 'test') {
+export function trustedGithubCliEnv(source = process.env, githubCliExecutable = INITIAL_GITHUB_CLI_EXECUTABLE, gitExecutable = INITIAL_GIT_EXECUTABLE) {
+    if (!githubCliExecutable) {
         throw new Error('Could not resolve a trusted GitHub CLI executable.');
     }
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST], {
         ...INITIAL_GITHUB_AUTH_ENV,
-        ...(process.env.NODE_ENV !== 'test' && INITIAL_GITHUB_CLI_EXECUTABLE ? {
-            PATH: [...new Set([
-                    path.dirname(INITIAL_GITHUB_CLI_EXECUTABLE),
-                    ...(INITIAL_GIT_EXECUTABLE ? [path.dirname(INITIAL_GIT_EXECUTABLE)] : [])
-                ])].join(path.delimiter)
-        } : {})
+        PATH: [...new Set([
+                path.dirname(githubCliExecutable),
+                ...(gitExecutable ? [path.dirname(gitExecutable)] : [])
+            ])].join(path.delimiter)
     });
 }
 export function hasSupervisorGitHubToken(source = process.env) {
@@ -196,7 +206,7 @@ export function isolatedGitEnv(source = process.env) {
 }
 export function gitPublicationEnv(source = process.env, initialToken = INITIAL_GITHUB_TOKEN) {
     const token = source.GH_TOKEN || source.GITHUB_TOKEN || initialToken;
-    if (!token && !(process.env.NODE_ENV === 'test' && source === process.env)) {
+    if (!token) {
         throw new Error('HTTPS Git publication requires GH_TOKEN or GITHUB_TOKEN in the supervisor environment.');
     }
     return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST], {
@@ -211,18 +221,21 @@ export function gitPublicationEnv(source = process.env, initialToken = INITIAL_G
     });
 }
 export function publicationGitExecutable(command) {
-    if (process.env.NODE_ENV === 'test')
-        return 'git';
-    return command[TRUSTED_COMMAND_RUNNER]
-        ? INITIAL_GIT_EXECUTABLE
-        : undefined;
+    return command[TRUSTED_COMMAND_RUNNER]?.git;
 }
 export function githubCliExecutable(command) {
-    if (process.env.NODE_ENV === 'test')
-        return 'gh';
-    return command[TRUSTED_COMMAND_RUNNER]
-        ? INITIAL_GITHUB_CLI_EXECUTABLE
-        : undefined;
+    return command[TRUSTED_COMMAND_RUNNER]?.githubCli;
+}
+export function publicationSshExecutable(command) {
+    return command[TRUSTED_COMMAND_RUNNER]?.ssh;
+}
+export function publicationGithubToken(command) {
+    return command[TRUSTED_COMMAND_RUNNER]?.githubToken;
+}
+export function withTrustedExecutables(command, executables) {
+    const trustedCommand = (executable, args, options) => command(executable, args, options);
+    Object.defineProperty(trustedCommand, TRUSTED_COMMAND_RUNNER, { value: Object.freeze({ ...executables }) });
+    return trustedCommand;
 }
 export function executableNames(command, platform = process.platform, pathExt = process.env.PATHEXT) {
     if (platform !== 'win32' || path.extname(command))
@@ -256,28 +269,24 @@ function resolveExecutable(command, searchPath, accept) {
     }
     return undefined;
 }
-export function isTrustedExecutablePath(executable) {
+export function isTrustedExecutablePath(executable, canWrite = canCurrentUserWrite) {
     if (process.platform === 'win32') {
         if (!fs.statSync(executable).isFile())
             return false;
         const trustedRoots = ['ProgramFiles', 'ProgramW6432', 'SystemRoot']
             .map((key) => process.env[key])
             .filter((value) => Boolean(value));
-        return isWindowsExecutablePathTrusted(executable, trustedRoots);
+        return isWindowsExecutablePathTrusted(executable, trustedRoots, canWrite);
     }
     const uid = process.getuid?.();
     if (uid === undefined || uid === 0)
         return false;
-    const groups = new Set([process.getgid?.(), ...(process.getgroups?.() ?? [])]);
     let current = executable;
     while (true) {
         const stat = fs.statSync(current);
         if (current === executable && !stat.isFile())
             return false;
-        const writable = process.env.NODE_ENV === 'test'
-            ? (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && groups.has(stat.gid))
-            : canCurrentUserWrite(current);
-        if (stat.uid !== 0 || writable) {
+        if (stat.uid !== 0 || canWrite(current)) {
             return false;
         }
         const parent = path.dirname(current);
@@ -309,7 +318,7 @@ function canCurrentUserWrite(candidate) {
     }
     catch (error) {
         const code = error.code;
-        return code !== 'EACCES' && code !== 'EPERM';
+        return code !== 'EACCES' && code !== 'EPERM' && code !== 'EROFS';
     }
 }
 function captureGitHubAuthEnv(argv) {
@@ -367,8 +376,9 @@ export function withRunDeadline(runCommand, deadlineAt) {
             timeoutMs: timeoutWithinDeadline(options.timeoutMs, deadlineAt)
         });
     };
-    if (runCommand[TRUSTED_COMMAND_RUNNER]) {
-        Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, { value: true });
+    const trustedExecutables = runCommand[TRUSTED_COMMAND_RUNNER];
+    if (trustedExecutables) {
+        Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, { value: trustedExecutables });
     }
     return deadlineCommand;
 }

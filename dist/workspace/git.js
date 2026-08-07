@@ -1,16 +1,20 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable, publicationSshExecutable as resolvePublicationSshExecutable, publicationGithubToken as resolvePublicationGithubToken } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
 export class GitClient {
     run;
     cwd;
     publicationGitExecutable;
-    constructor(run, cwd, publicationGitExecutable = resolvePublicationGitExecutable(run)) {
+    publicationSshExecutable;
+    publicationGithubToken;
+    constructor(run, cwd, publicationGitExecutable = resolvePublicationGitExecutable(run), publicationSshExecutable = resolvePublicationSshExecutable(run), publicationGithubToken = resolvePublicationGithubToken(run)) {
         this.run = run;
         this.cwd = cwd;
         this.publicationGitExecutable = publicationGitExecutable;
+        this.publicationSshExecutable = publicationSshExecutable;
+        this.publicationGithubToken = publicationGithubToken;
     }
     async root() {
         const result = await this.git(['rev-parse', '--show-toplevel']);
@@ -226,7 +230,9 @@ export class GitClient {
             if (verifiedLfsPointers.length > 0) {
                 throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${verifiedLfsPointers.join(', ')}`);
             }
-            const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
+            const env = pushUrl.startsWith('https://')
+                ? gitPublicationEnv(process.env, this.publicationGithubToken)
+                : gitSshPublicationEnv(process.env, this.publicationSshExecutable);
             const lease = options.forceWithLease
                 ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
                 : [];

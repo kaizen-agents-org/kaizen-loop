@@ -8,7 +8,7 @@ import { initProject } from './init/init.js';
 import { type DirectCommitConfirmation, runKaizen } from './orchestrator/run.js';
 import { loadRegistry, resolveProject, updateRegistry } from './config/registry.js';
 import { loadConfig } from './config/config.js';
-import { runCommand } from './utils/command.js';
+import { processCommandRunner, runCommand as defaultRunCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
 import { reportIssue, reportIssueNow } from './commands/report.js';
 import { listQueuedIssues, queueIssues, unqueueIssues } from './commands/queue.js';
@@ -26,6 +26,7 @@ import { disableScheduler, enableScheduler, schedulerJobs } from './scheduler/sc
 import type { SchedulerRun, SchedulerSchedule } from './config/schema.js';
 
 const program = new Command();
+const runCommand = processCommandRunner(defaultRunCommand);
 
 program
   .name('kaizen')
@@ -373,21 +374,23 @@ program
   .option('--yes', 'skip direct commit confirmation', false)
   .option('--actions-patch <path>', 'verify an Actions-generated patch without publishing')
   .option('--provider-result <path>', 'Actions provider result JSON used with --actions-patch')
+  .option('--actions-context <path>', 'authorized Actions prepare context used with --actions-patch')
   .option('--artifact-dir <path>', 'verified Actions artifact output directory')
   .option('--json', 'print machine-readable output')
   .action(async (issue, options) => {
     const globals = program.opts<{ project?: string; json?: boolean }>();
     const json = Boolean(options.json ?? globals.json);
     const assumeYes = Boolean(options.yes);
-    if (options.actionsPatch || options.providerResult || options.artifactDir) {
-      if (!options.actionsPatch || !options.providerResult || !options.artifactDir) {
-        throw new KaizenError('--actions-patch, --provider-result, and --artifact-dir must be used together', 2);
+    if (options.actionsPatch || options.providerResult || options.actionsContext || options.artifactDir) {
+      if (!options.actionsPatch || !options.providerResult || !options.actionsContext || !options.artifactDir) {
+        throw new KaizenError('--actions-patch, --provider-result, --actions-context, and --artifact-dir must be used together', 2);
       }
       const result = await verifyActionsFix({
         cwd: process.cwd(),
         issue: Number(issue),
         patchPath: path.resolve(options.actionsPatch),
         providerResultPath: path.resolve(options.providerResult),
+        contextPath: path.resolve(options.actionsContext),
         outputDir: path.resolve(options.artifactDir),
         runCommand
       });

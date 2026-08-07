@@ -129,7 +129,7 @@ kaizen fix <Issue番号> [--project <slug>] [--agent claude|codex] [--yes] [--js
 GitHub Actions の reusable workflow は、credential-free verification job で次の deferred-publish 形式を使う。
 
 ```sh
-kaizen fix <Issue番号> --actions-patch <patch> --provider-result <json> --artifact-dir <dir> --json
+kaizen fix <Issue番号> --actions-patch <patch> --provider-result <json> --actions-context <context.json> --artifact-dir <dir> --json
 kaizen actions publish --artifact-dir <dir> --json
 ```
 

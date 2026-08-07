@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { initProject } from '../src/init/init.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -32,7 +33,7 @@ describe('initProject', () => {
       cwd: repo,
       schedule: '02:00',
       yes: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     }).catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({ exitCode: 2 });

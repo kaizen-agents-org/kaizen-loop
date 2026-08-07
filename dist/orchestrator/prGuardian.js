@@ -1,12 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { buildUntrustedEnv, trustedGithubCliEnv as githubCliEnv } from '../utils/command.js';
+import { buildUntrustedEnv, githubCliExecutable, publicationGitExecutable, trustedGithubCliEnv } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
 import { isSyncPullRequest } from './wipLimit.js';
 export const MANAGED_PR_GUARDIAN_MARKER = '<!-- kaizen-pr-guardian:managed -->';
+function githubCliEnv(command) {
+    return trustedGithubCliEnv(process.env, githubCliExecutable(command), publicationGitExecutable(command));
+}
 export function guardianJobsDir(stateDir) {
     return path.join(stateDir, 'guardian', 'jobs');
 }
@@ -544,7 +547,7 @@ async function listUnresolvedReviewThreads(runCommand, req) {
             args.push('-F', `cursor=${cursor}`);
         const result = await runCommand('gh', args, {
             cwd: req.workspaceDir,
-            env: githubCliEnv(),
+            env: githubCliEnv(runCommand),
             timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
             rejectOnNonZero: false
         });
@@ -623,7 +626,7 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -647,7 +650,7 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
                 '--slurp'
             ], {
                 cwd: req.workspaceDir,
-                env: githubCliEnv(),
+                env: githubCliEnv(runCommand),
                 timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
                 rejectOnNonZero: false
             });
@@ -679,7 +682,7 @@ async function inspectPullRequestTerminalState(runCommand, req) {
         'state,baseRefName,closingIssuesReferences'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -700,7 +703,7 @@ async function inspectPullRequest(runCommand, req) {
             'state,isDraft,mergeStateStatus,mergeable,reviewDecision,reviewRequests,headRefOid,statusCheckRollup'
         ], {
             cwd: req.workspaceDir,
-            env: githubCliEnv(),
+            env: githubCliEnv(runCommand),
             timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
             rejectOnNonZero: false
         }),
@@ -803,7 +806,7 @@ async function listRequiredChecks(runCommand, req) {
         'name,state,bucket,workflow'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -828,7 +831,7 @@ async function listPullRequestReviews(runCommand, req) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -848,7 +851,7 @@ async function listPullRequestReviewComments(runCommand, req) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -878,7 +881,7 @@ async function listPullRequestIssueComments(runCommand, req) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });

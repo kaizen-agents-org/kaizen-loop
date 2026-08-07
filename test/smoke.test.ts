@@ -7,6 +7,7 @@ import { executeRun } from '../src/commands/run.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -66,7 +67,7 @@ describe('runSandboxSmoke', () => {
       job: 'weekly-sandbox-smoke',
       dryRun: false,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     if (!('kind' in artifact)) throw new Error('expected sandbox smoke artifact');
@@ -122,7 +123,7 @@ describe('runSandboxSmoke', () => {
       job: 'weekly-sandbox-smoke',
       dryRun: false,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     })).rejects.toThrow('Kaizen run is already active');
 
     expect(runner).not.toHaveBeenCalled();
@@ -182,7 +183,7 @@ describe('runSandboxSmoke', () => {
       priority: 'P2',
       json: true,
       assumeYes: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(artifact.guardian).toMatchObject({

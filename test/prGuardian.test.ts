@@ -13,6 +13,7 @@ import {
 } from '../src/orchestrator/prGuardian.js';
 import { loadImplementationState, saveImplementationState } from '../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 const sleepMock = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('node:timers/promises', () => ({ setTimeout: sleepMock }));
@@ -35,7 +36,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -79,7 +80,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -113,7 +114,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -143,7 +144,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -180,7 +181,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -218,7 +219,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -250,7 +251,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -318,7 +319,7 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -389,7 +390,7 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -428,7 +429,7 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -466,7 +467,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -503,7 +504,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -541,7 +542,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -588,7 +589,7 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -636,7 +637,7 @@ describe('runPrGuardianSkill', () => {
     });
 
     try {
-      const result = await runPrGuardianSkill(runner, {
+      const result = await runPrGuardianSkill(trustedRunner(runner), {
         config,
         workspaceDir: '/tmp/workspace',
         repo: 'o/r',
@@ -671,7 +672,7 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -703,7 +704,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -738,7 +739,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -778,7 +779,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -827,7 +828,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -874,7 +875,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -912,7 +913,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -964,7 +965,7 @@ describe('runPrGuardianSkill', () => {
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1014,7 +1015,7 @@ describe('runPrGuardianSkill', () => {
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1065,7 +1066,7 @@ describe('runPrGuardianSkill', () => {
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout, stderr: '', durationMs: 1 };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1131,7 +1132,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1180,7 +1181,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1227,7 +1228,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1275,7 +1276,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1323,7 +1324,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1372,7 +1373,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1405,7 +1406,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1451,7 +1452,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1503,7 +1504,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1550,7 +1551,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1598,7 +1599,7 @@ describe('runPrGuardianSkill', () => {
       };
     });
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1641,7 +1642,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1681,7 +1682,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(runner, {
+    const result = await runPrGuardianSkill(trustedRunner(runner), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -1741,7 +1742,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
     expect(first[0].status).toBe('success');
@@ -1751,7 +1752,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -1764,7 +1765,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -1825,7 +1826,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
     expect(first[0].status).toBe('success');
@@ -1835,7 +1836,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -1890,7 +1891,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
     expect(first[0].status).toBe('success');
@@ -1900,7 +1901,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -1913,7 +1914,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -1971,7 +1972,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -2026,7 +2027,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
     expect(first[0]).toMatchObject({ status: 'success', headSha: 'old-head' });
@@ -2037,7 +2038,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -2091,7 +2092,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
     expect(first[0]).toMatchObject({ status: 'success', headSha: 'new-head' });
@@ -2137,7 +2138,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -2149,7 +2150,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner,
+      runCommand: trustedRunner(runner),
       isolateWorktree: false
     });
 
@@ -2463,7 +2464,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(jobs).toHaveLength(1);
@@ -2517,7 +2518,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(jobs).toHaveLength(1);
@@ -2565,7 +2566,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
     const storedJobs = await listPrGuardianJobs(stateDir);
 
@@ -2629,7 +2630,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(jobs).toHaveLength(1);
@@ -2684,7 +2685,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(jobs).toEqual([]);
@@ -2732,7 +2733,7 @@ describe('runPrGuardianSkill', () => {
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(jobs).toEqual([]);

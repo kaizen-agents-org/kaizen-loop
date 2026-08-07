@@ -119,7 +119,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
+    await new GitClient(runner, '/workspace', '/trusted/git', '/trusted/ssh').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
 
     const publicationClone = runner.mock.calls.find(([, args]) => args[0] === 'clone');
     expect(publicationClone?.[2]?.env).toMatchObject({
@@ -164,7 +164,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace').push('main', { expectedRepo: 'o/r' })).rejects.toThrow('Refusing to publish');
+    await expect(new GitClient(runner, '/workspace', '/trusted/bin/git').push('main', { expectedRepo: 'o/r' })).rejects.toThrow('Refusing to publish');
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
@@ -179,7 +179,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace').push('main', { expectedRepo: 'o/r' }))
+    await expect(new GitClient(runner, '/workspace', '/trusted/bin/git').push('main', { expectedRepo: 'o/r' }))
       .rejects.toThrow('Refusing to publish o/r');
     expect(runner).toHaveBeenCalledTimes(1);
   });
@@ -307,7 +307,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace');
+    const git = new GitClient(runner, '/workspace', '/trusted/bin/git');
 
     await git.checkout('main', { ignoreOtherWorktrees: true });
 
@@ -524,7 +524,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace');
+    const git = new GitClient(runner, '/workspace', '/trusted/bin/git');
 
     await git.abortRebase();
 

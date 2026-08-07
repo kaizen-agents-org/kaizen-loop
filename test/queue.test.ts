@@ -6,6 +6,7 @@ import { listQueuedIssues, queueIssues, unqueueIssues } from '../src/commands/qu
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -20,7 +21,7 @@ describe('queueIssues', () => {
       cwd: repo,
       project: 'o-r',
       issues: [3, 3, 4],
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output).toEqual({ queued: [3, 4], labels: ['kaizen', 'kaizen:trusted', 'kaizen:ready'] });
@@ -43,7 +44,7 @@ describe('unqueueIssues', () => {
       cwd: repo,
       project: 'o-r',
       issues: [8],
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output).toEqual({ unqueued: [8], label: 'kaizen:ready' });
@@ -69,7 +70,7 @@ describe('listQueuedIssues', () => {
     const output = await listQueuedIssues({
       cwd: repo,
       project: 'o-r',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.label).toBe('kaizen:ready');
@@ -94,7 +95,7 @@ describe('listQueuedIssues', () => {
     const output = await listQueuedIssues({
       cwd: repo,
       project: 'o-r',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.issues.map((item) => item.number)).toEqual([1]);

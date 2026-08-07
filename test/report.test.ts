@@ -8,6 +8,7 @@ import { reportIssue, reportIssueNow } from '../src/commands/report.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 const execFileAsync = promisify(execFile);
 const CLI_TEST_TIMEOUT_MS = 20_000;
@@ -135,7 +136,7 @@ describe('reportIssue', () => {
       prOnly: false,
       agent: 'codex',
       extraLabels: ['customer-impact'],
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(created.number).toBe(14);
@@ -167,7 +168,7 @@ describe('reportIssue', () => {
       prOnly: false,
       queue: true,
       extraLabels: [],
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     const labelCreates = runner.mock.calls.filter(([, args]) => args.join(' ').startsWith('label create'));
@@ -221,7 +222,7 @@ describe('reportIssueNow', () => {
       prOnly: false,
       extraLabels: [],
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.issue.number).toBe(14);
@@ -286,13 +287,12 @@ async function runCli(options: { cwd: string; binDir: string; args: string[] }) 
   try {
     return await execFileAsync(
       process.execPath,
-      [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
+      [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'test', 'fixtures', 'trusted-cli.ts'), ...options.args],
       {
         cwd: options.cwd,
         env: {
           ...process.env,
-          KAIZEN_TEST_GIT_EXECUTABLE: '1',
-          KAIZEN_TEST_GH_EXECUTABLE: '1',
+          KAIZEN_TEST_TRUSTED_BIN: options.binDir,
           KAIZEN_TMPDIR: tmpDir,
           PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`,
           TMPDIR: ipcTmpDir,

@@ -6,6 +6,7 @@ import { listProjects, statusProject } from '../src/commands/status.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -159,7 +160,7 @@ describe('statusProject', () => {
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
     });
 
-    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: trustedRunner(runner) });
 
     expect(maximumActive).toBe(4);
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'view')).toHaveLength(6);
@@ -200,7 +201,7 @@ describe('statusProject', () => {
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
     });
 
-    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: trustedRunner(runner) });
 
     expect(output.issues.open).toBe(1);
     expect(output.queue).toBeUndefined();
@@ -241,7 +242,7 @@ describe('statusProject', () => {
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
     });
 
-    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: trustedRunner(runner) });
 
     expect(output.issues.selectionMode).toBe('opt-in');
     expect(output.pullRequestReconciliation).toEqual({ merged: [12], unknown: [] });
@@ -285,7 +286,7 @@ describe('statusProject', () => {
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
     });
 
-    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: trustedRunner(runner) });
 
     expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
     expect(output.guardian).toMatchObject({ blocked: 1, success: 0 });
@@ -315,7 +316,7 @@ describe('statusProject', () => {
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
     });
 
-    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: runner });
+    const output = await statusProject({ cwd: repo, project: 'o-r', runCommand: trustedRunner(runner) });
 
     expect(output.pullRequestReconciliation).toEqual({ merged: [], unknown: [] });
     expect(output.guardian).toMatchObject({ blocked: 1, success: 0 });
@@ -391,7 +392,7 @@ describe('statusProject', () => {
     const output = await statusProject({
       cwd: repo,
       project: 'o-r',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.pullRequests.open).toBe(2);
@@ -444,7 +445,7 @@ describe('statusProject', () => {
     const output = await statusProject({
       cwd: repo,
       project: 'o-r',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.branchHygiene.checked).toBe(false);
@@ -665,7 +666,7 @@ describe('statusProject', () => {
       cwd: repo,
       project: 'o-r',
       metrics: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.metrics).toMatchObject({

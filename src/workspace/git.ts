@@ -7,6 +7,8 @@ import {
   gitSshPublicationEnv,
   isolatedGitEnv,
   publicationGitExecutable as resolvePublicationGitExecutable,
+  publicationSshExecutable as resolvePublicationSshExecutable,
+  publicationGithubToken as resolvePublicationGithubToken,
   type CommandRunner
 } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
@@ -15,7 +17,9 @@ export class GitClient {
   constructor(
     private readonly run: CommandRunner,
     private readonly cwd: string,
-    private readonly publicationGitExecutable: string | undefined = resolvePublicationGitExecutable(run)
+    private readonly publicationGitExecutable: string | undefined = resolvePublicationGitExecutable(run),
+    private readonly publicationSshExecutable: string | undefined = resolvePublicationSshExecutable(run),
+    private readonly publicationGithubToken: string | undefined = resolvePublicationGithubToken(run)
   ) {}
 
   async root(): Promise<string> {
@@ -265,7 +269,9 @@ export class GitClient {
       if (verifiedLfsPointers.length > 0) {
         throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${verifiedLfsPointers.join(', ')}`);
       }
-      const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
+      const env = pushUrl.startsWith('https://')
+        ? gitPublicationEnv(process.env, this.publicationGithubToken)
+        : gitSshPublicationEnv(process.env, this.publicationSshExecutable);
       const lease = options.forceWithLease
         ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
         : [];

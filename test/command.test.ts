@@ -114,7 +114,7 @@ describe('githubCliEnv', () => {
       const { githubCliEnv, trustedGithubCliEnv } = await import('./src/utils/command.ts');
       process.stdout.write(JSON.stringify({
         ordinary: githubCliEnv().GH_TOKEN,
-        trusted: trustedGithubCliEnv().GH_TOKEN
+        trusted: trustedGithubCliEnv(process.env, '/trusted/bin/gh', '/trusted/bin/git').GH_TOKEN
       }));
     `;
     const stdout = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, 'actions', 'publish'], {
@@ -251,17 +251,12 @@ describe('executableNames', () => {
 });
 
 describe('privileged executable resolution', () => {
-  it('fails closed for unmarked production command runners', () => {
-    const previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    try {
-      const unmarkedRunner = vi.fn<CommandRunner>();
-      expect(githubCliExecutable(unmarkedRunner)).toBeUndefined();
-      expect(publicationGitExecutable(unmarkedRunner)).toBeUndefined();
-    } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previousNodeEnv;
-    }
+  it('fails closed for unmarked command runners even under NODE_ENV=test', () => {
+    const unmarkedRunner = vi.fn<CommandRunner>();
+    expect(process.env.NODE_ENV).toBe('test');
+    expect(githubCliExecutable(unmarkedRunner)).toBeUndefined();
+    expect(publicationGitExecutable(unmarkedRunner)).toBeUndefined();
+    expect(trustedGithubCliEnv(process.env, '/trusted/bin/gh', '/trusted/bin/git').PATH).toBe('/trusted/bin');
   });
 });
 

@@ -7,6 +7,7 @@ import { fleetHasFailures, migrateLegacySchedulerConfig, refreshFleet, syncFleet
 import { defaultConfigYaml } from '../src/config/config.js';
 import { loadRegistry, saveRegistry, updateRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 beforeEach(() => {
   vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/bin/echo');
@@ -121,7 +122,7 @@ describe('syncFleet', () => {
       verify: false,
       prune: false,
       dryRun: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.runtime).toEqual({ commit: 'fleet-commit', directory: '/runtime/kaizen-loop' });
@@ -172,7 +173,7 @@ describe('syncFleet', () => {
       verify: false,
       prune: true,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     })).rejects.toThrow('--prune requires --manifest or an explicit --repo expected set');
 
     await expect(fs.readFile(registryPath, 'utf8')).resolves.toBe(before);
@@ -201,7 +202,7 @@ describe('syncFleet', () => {
       verify: false,
       prune: true,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     })).rejects.toThrow('requested repositories were not discovered: kaizen-agents-org/verifier');
 
     await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(before);
@@ -235,7 +236,7 @@ describe('syncFleet', () => {
       verify: true,
       prune: true,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(fleetHasFailures(output)).toBe(true);
@@ -323,7 +324,7 @@ describe('syncFleet', () => {
       verify: true,
       prune: true,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
     await started;
     try {
@@ -373,7 +374,7 @@ describe('syncFleet', () => {
       verify: false,
       prune: true,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.pruned).toEqual(['stale']);
@@ -517,7 +518,7 @@ describe('syncFleet', () => {
       verify: true,
       prune: true,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.pruned).toEqual(['stale']);
@@ -588,7 +589,7 @@ describe('syncFleet', () => {
       verify: false,
       prune: false,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.projects.find((project) => project.slug === 'kaizen-agents-org-builder-agent')).toMatchObject({
@@ -685,7 +686,7 @@ describe('syncFleet', () => {
       verify: true,
       prune: true,
       dryRun: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     const failed = output.projects.find((project) => project.slug === 'kaizen-agents-org-verifier');
@@ -725,7 +726,7 @@ describe('refreshFleet', () => {
     const output = await refreshFleet({
       cwd: first.repo,
       sync: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(true);
@@ -752,7 +753,7 @@ describe('refreshFleet', () => {
     const output = await refreshFleet({
       cwd: project.repo,
       project: 'o-r',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(false);
@@ -773,7 +774,7 @@ describe('refreshFleet', () => {
 
     const output = await refreshFleet({
       cwd: project.repo,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(true);
@@ -801,7 +802,7 @@ describe('refreshFleet', () => {
       cwd: project.repo,
       project: 'o-r',
       sync: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
@@ -823,7 +824,7 @@ describe('refreshFleet', () => {
       cwd: project.repo,
       project: 'o-r',
       sync: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
@@ -841,7 +842,7 @@ describe('refreshFleet', () => {
       cwd: project.repo,
       project: 'o-r',
       sync: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(false);
@@ -884,7 +885,7 @@ describe('refreshFleet', () => {
       cwd: project.repo,
       project: 'o-r',
       sync: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(false);
@@ -920,7 +921,7 @@ describe('refreshFleet', () => {
     const output = await refreshFleet({
       cwd: project.repo,
       project: 'o-r',
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(false);

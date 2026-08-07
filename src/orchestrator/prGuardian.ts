@@ -3,13 +3,23 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubPullRequest } from '../github/types.js';
-import { buildUntrustedEnv, trustedGithubCliEnv as githubCliEnv, type CommandRunner } from '../utils/command.js';
+import {
+  buildUntrustedEnv,
+  githubCliExecutable,
+  publicationGitExecutable,
+  trustedGithubCliEnv,
+  type CommandRunner
+} from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
 import { isSyncPullRequest } from './wipLimit.js';
 
 export const MANAGED_PR_GUARDIAN_MARKER = '<!-- kaizen-pr-guardian:managed -->';
+
+function githubCliEnv(command: CommandRunner): NodeJS.ProcessEnv {
+  return trustedGithubCliEnv(process.env, githubCliExecutable(command), publicationGitExecutable(command));
+}
 
 export interface PrGuardianSkillRequest {
   config: KaizenConfig;
@@ -793,7 +803,7 @@ async function listUnresolvedReviewThreads(
     if (cursor) args.push('-F', `cursor=${cursor}`);
     const result = await runCommand('gh', args, {
       cwd: req.workspaceDir,
-      env: githubCliEnv(),
+      env: githubCliEnv(runCommand),
       timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
       rejectOnNonZero: false
     });
@@ -880,7 +890,7 @@ async function listCheckAnnotations(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(),
+    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -908,7 +918,7 @@ async function listCheckAnnotations(
         '--slurp'
       ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
       });
@@ -949,7 +959,7 @@ async function inspectPullRequestTerminalState(
     'state,baseRefName,closingIssuesReferences'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(),
+    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -974,7 +984,7 @@ async function inspectPullRequest(
       'state,isDraft,mergeStateStatus,mergeable,reviewDecision,reviewRequests,headRefOid,statusCheckRollup'
     ], {
       cwd: req.workspaceDir,
-      env: githubCliEnv(),
+      env: githubCliEnv(runCommand),
       timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
       rejectOnNonZero: false
     }),
@@ -1081,7 +1091,7 @@ async function listRequiredChecks(runCommand: CommandRunner, req: PrGuardianSkil
     'name,state,bucket,workflow'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(),
+    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -1108,7 +1118,7 @@ async function listPullRequestReviews(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(),
+    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -1132,7 +1142,7 @@ async function listPullRequestReviewComments(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(),
+    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -1168,7 +1178,7 @@ async function listPullRequestIssueComments(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(),
+    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });

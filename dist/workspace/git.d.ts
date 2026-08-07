@@ -3,7 +3,9 @@ export declare class GitClient {
     private readonly run;
     private readonly cwd;
     private readonly publicationGitExecutable;
-    constructor(run: CommandRunner, cwd: string, publicationGitExecutable?: string | undefined);
+    private readonly publicationSshExecutable;
+    private readonly publicationGithubToken;
+    constructor(run: CommandRunner, cwd: string, publicationGitExecutable?: string | undefined, publicationSshExecutable?: string | undefined, publicationGithubToken?: string | undefined);
     root(): Promise<string>;
     remoteUrl(name?: string): Promise<string>;
     currentBranch(): Promise<string>;

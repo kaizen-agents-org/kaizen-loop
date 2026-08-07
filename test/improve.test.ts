@@ -6,6 +6,7 @@ import { planImprove, runImprove } from '../src/commands/improve.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -31,7 +32,7 @@ describe('planImprove', () => {
       dryRun: true,
       maxIssues: 2,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(plan.selected.map((item) => item.number)).toEqual([1, 2]);
@@ -53,7 +54,7 @@ describe('planImprove', () => {
       issueNumbers: [4, 5],
       dryRun: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(plan.selected.map((item) => item.number)).toEqual([4, 5]);
@@ -80,7 +81,7 @@ describe('planImprove', () => {
       issueNumbers: [4, 5],
       dryRun: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(plan.selected.map((item) => item.number)).toEqual([4]);
@@ -104,7 +105,7 @@ describe('runImprove', () => {
       issueNumbers: [7],
       dryRun: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect('selected' in output && output.selected[0].number).toBe(7);
@@ -142,7 +143,7 @@ describe('runImprove', () => {
       issueNumbers: [8],
       dryRun: false,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect('issues' in output && output.issues[0].outcome).toBe('pr-created');
