@@ -2,11 +2,10 @@ import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { KaizenConfig, RegistryProject, SchedulerJobConfig, SchedulerSchedule } from '../config/schema.js';
 import { isTrustedExecutablePath, type CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
-import { getKaizenHome, projectStateDir } from '../utils/paths.js';
+import { projectStateDir } from '../utils/paths.js';
 
 export async function enableScheduler(options: {
   slug: string;
@@ -14,10 +13,11 @@ export async function enableScheduler(options: {
   config: KaizenConfig;
   runCommand: CommandRunner;
   platform?: NodeJS.Platform;
+  launcherTrust?: (launcher: string) => boolean;
 }): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[] }> {
   const jobs = schedulerJobs(options.config);
   const platform = options.platform ?? process.platform;
-  const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher();
+  const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher(options.launcherTrust);
   if (platform === 'darwin') {
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
@@ -39,7 +39,7 @@ export async function enableScheduler(options: {
   for (const job of jobs) {
     lines.push(`# ${marker} ${job.name}`);
     for (const cronTime of cronTimes(job.config.schedule)) {
-      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
     }
   }
   await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
@@ -119,19 +119,19 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function commandLine(slug: string, job: SchedulerJob, launcher = scheduledLauncherPath()): string {
+function commandLine(slug: string, job: SchedulerJob, launcher: string): string {
   const command = `/bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
   return command;
 }
 
-function requiredScheduledLauncher(): string {
+function requiredScheduledLauncher(trust = isTrustedExecutablePath): string {
   const launcher = process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER;
   let resolvedLauncher: string | undefined;
   let trusted = false;
-  if (launcher && path.isAbsolute(launcher)) {
+  if (launcher && path.isAbsolute(launcher) && path.basename(launcher) === 'run-scheduled.sh') {
     try {
       resolvedLauncher = fsSync.realpathSync(launcher);
-      trusted = isTrustedExecutablePath(resolvedLauncher);
+      trusted = resolvedLauncher === path.resolve(launcher) && trust(resolvedLauncher);
     } catch {
       trusted = false;
     }
@@ -300,26 +300,6 @@ function launchdDay(day: 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU'): string
 
 function cliPath(): string {
   return process.argv[1] ?? 'kaizen';
-}
-
-function scheduledLauncherPath(): string {
-  return path.join(getKaizenHome(), 'bin', 'run-scheduled.sh');
-}
-
-async function installScheduledLauncher(): Promise<void> {
-  const scriptsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
-  const binDir = path.dirname(scheduledLauncherPath());
-  await fs.mkdir(binDir, { recursive: true });
-  for (const [sourceName, destinationName] of [
-    ['run-scheduled.sh', 'run-scheduled.sh'],
-    ['kaizen-runtime.sh', 'kaizen']
-  ]) {
-    const destination = path.join(binDir, destinationName);
-    const temporary = `${destination}.${process.pid}.tmp`;
-    await fs.copyFile(path.join(scriptsDir, sourceName), temporary);
-    await fs.chmod(temporary, 0o755);
-    await fs.rename(temporary, destination);
-  }
 }
 
 function escapeXml(value: string): string {

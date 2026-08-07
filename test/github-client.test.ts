@@ -2,8 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { CreatedPullRequestValidationError, GitHubClient, KAIZEN_LABELS } from '../src/github/client.js';
 import { buildDiscoveredIssueFingerprint } from '../src/discovered-issue-fingerprint.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 describe('GitHubClient', () => {
+  it('rejects an untrusted command runner before invoking GitHub CLI', async () => {
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(new GitHubClient(runner, '/repo').authStatus())
+      .rejects.toThrow('Trusted GitHub CLI executable was not found');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('uses a pinned GitHub CLI executable for authenticated calls', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
       command,
@@ -15,9 +24,9 @@ describe('GitHubClient', () => {
       durationMs: 1
     }));
 
-    await new GitHubClient(runner, '/repo', '/trusted/gh').authStatus();
+    await new GitHubClient(trustedRunner(runner), '/repo').authStatus();
 
-    expect(runner).toHaveBeenCalledWith('/trusted/gh', ['auth', 'status'], expect.objectContaining({ cwd: '/repo' }));
+    expect(runner).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.objectContaining({ cwd: '/repo' }));
   });
 
   it('includes the roadmap classification in the default label set', () => {
@@ -27,7 +36,7 @@ describe('GitHubClient', () => {
   it('passes every requested issue label to GitHub before applying the result limit', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, '[]'));
 
-    await new GitHubClient(runner, '/repo', '/trusted/bin/gh').listIssues(['kaizen:ready', 'kaizen:authorized'], 25);
+    await new GitHubClient(trustedRunner(runner), '/repo').listIssues(['kaizen:ready', 'kaizen:authorized'], 25);
 
     expect(runner.mock.calls[0][1]).toEqual([
       'issue',
@@ -59,7 +68,7 @@ describe('GitHubClient', () => {
       [{ event: 'unlabeled', label: { name: 'kaizen:needs-human' }, created_at: '2026-07-16T00:01:00Z' }]
     ])));
 
-    await expect(new GitHubClient(runner, '/repo', '/trusted/bin/gh').getIssueLabelEvents(
+    await expect(new GitHubClient(trustedRunner(runner), '/repo').getIssueLabelEvents(
       'o/r', 1, 'kaizen:needs-human'
     )).resolves.toEqual([
       {
@@ -90,7 +99,7 @@ describe('GitHubClient', () => {
       return ghResult(command, args, JSON.stringify({ role_name: 'triage' }));
     });
 
-    const decision = await new GitHubClient(runner, '/repo', '/trusted/bin/gh').checkExecutionAuthorization({
+    const decision = await new GitHubClient(trustedRunner(runner), '/repo').checkExecutionAuthorization({
       repo: 'o/r', issue: 1, label: 'kaizen:authorized', minimumPermission: 'triage'
     });
 
@@ -109,7 +118,7 @@ describe('GitHubClient', () => {
       ]));
     });
 
-    const decision = await new GitHubClient(runner, '/repo', '/trusted/bin/gh').checkExecutionAuthorization({
+    const decision = await new GitHubClient(trustedRunner(runner), '/repo').checkExecutionAuthorization({
       repo: 'o/r', issue: 1, label: 'kaizen:authorized', minimumPermission: 'triage'
     });
 
@@ -128,7 +137,7 @@ describe('GitHubClient', () => {
       return ghResult(command, args, JSON.stringify({ permission: 'read' }));
     });
 
-    const decision = await new GitHubClient(runner, '/repo', '/trusted/bin/gh').checkExecutionAuthorization({
+    const decision = await new GitHubClient(trustedRunner(runner), '/repo').checkExecutionAuthorization({
       repo: 'o/r', issue: 1, label: 'kaizen:authorized', minimumPermission: 'triage'
     });
 
@@ -155,7 +164,7 @@ describe('GitHubClient', () => {
       }
       return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const pr = await client.createPullRequest({
       base: 'main',
@@ -197,7 +206,7 @@ describe('GitHubClient', () => {
       }
       return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(
       client.createPullRequest({
@@ -230,7 +239,7 @@ describe('GitHubClient', () => {
       }
       return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(
       client.createPullRequest({
@@ -257,7 +266,7 @@ describe('GitHubClient', () => {
       }
       return ghResult(command, args, args[1] === 'create' ? 'https://github.com/o/r/pull/7\n' : '');
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await client.createPullRequest({
       base: 'main',
@@ -295,7 +304,7 @@ describe('GitHubClient', () => {
       }
       return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const create = client.createPullRequest({
         base: 'main',
@@ -328,7 +337,7 @@ describe('GitHubClient', () => {
       return ghResult(command, args, 'https://github.com/o/r/pull/7\n');
     });
 
-    const pr = await new GitHubClient(runner, '/repo', '/trusted/bin/gh').createPullRequest({
+    const pr = await new GitHubClient(trustedRunner(runner), '/repo').createPullRequest({
       base: 'main',
       head: 'kaizen/issue-1-x',
       title: 'title',
@@ -363,7 +372,7 @@ describe('GitHubClient', () => {
       durationMs: 1
     }));
     try {
-      const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+      const client = new GitHubClient(trustedRunner(runner), '/repo');
 
       const prs = await client.listOpenPullRequests(3);
 
@@ -411,7 +420,7 @@ describe('GitHubClient', () => {
       ghResult(command, args, JSON.stringify([firstPage, [managed]]))
     );
 
-    const pullRequests = await new GitHubClient(runner, '/repo', '/trusted/bin/gh').listAllOpenPullRequests();
+    const pullRequests = await new GitHubClient(trustedRunner(runner), '/repo').listAllOpenPullRequests();
 
     expect(pullRequests).toHaveLength(101);
     expect(pullRequests[100]).toMatchObject({
@@ -455,7 +464,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const prs = await client.searchOpenPullRequestsForOwner('o', 5);
 
@@ -520,7 +529,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const prs = await client.searchMergedPullRequestsForOwner('o', '2026-07-01', 5);
 
@@ -605,7 +614,7 @@ describe('GitHubClient', () => {
       }));
     });
 
-    const [pullRequest] = await new GitHubClient(runner, '/repo', '/trusted/bin/gh')
+    const [pullRequest] = await new GitHubClient(trustedRunner(runner), '/repo')
       .searchMergedPullRequestsForOwner('o', '2026-07-01', 5);
 
     expect(pullRequest.commitCount).toBe(101);
@@ -646,7 +655,7 @@ describe('GitHubClient', () => {
         durationMs: 1
       };
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.createIssue({
       repo: 'kaizen-agents-org/verifier',
@@ -671,7 +680,7 @@ describe('GitHubClient', () => {
       const runner = vi.fn<CommandRunner>(async () => {
         throw new Error(`could not add label: '${missingLabel}' not found`);
       });
-      const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+      const client = new GitHubClient(trustedRunner(runner), '/repo');
 
       await expect(client.createIssue({
         repo: 'kaizen-agents-org/verifier',
@@ -694,7 +703,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await client.updateIssueBody({
       repo: 'kaizen-agents-org/verifier',
@@ -703,7 +712,7 @@ describe('GitHubClient', () => {
     });
 
     expect(runner).toHaveBeenCalledWith(
-      '/trusted/bin/gh',
+      'gh',
       ['issue', 'edit', '77', '--body', 'updated details', '--repo', 'kaizen-agents-org/verifier'],
       expect.any(Object)
     );
@@ -724,7 +733,7 @@ describe('GitHubClient', () => {
         durationMs: 1
       };
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.createIssue({
       repo: 'kaizen-agents-org/verifier',
@@ -749,7 +758,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByBodyMarker(marker)).resolves.toMatchObject({ number: 9 });
     expect(runner.mock.calls[0][1]).toContain('goal-123 in:body');
@@ -771,7 +780,7 @@ describe('GitHubClient', () => {
         durationMs: 1
       };
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.createIssue({
       repo: 'o/r',
@@ -809,7 +818,7 @@ describe('GitHubClient', () => {
         durationMs: 1
       };
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/kaizen-loop',
@@ -842,7 +851,7 @@ describe('GitHubClient', () => {
       const search = String(args.at(args.indexOf('--search') + 1));
       return ghResult(command, args, search.includes('kaizen-loop:discovered-issue:v1') ? JSON.stringify([existingIssue]) : '[]');
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/verifier',
@@ -872,7 +881,7 @@ describe('GitHubClient', () => {
             labels: [], createdAt: '2026-07-12T00:00:00Z', comments: []
           }])
         : '[]'));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/verifier', title: 'Host executable missing',
@@ -894,7 +903,7 @@ describe('GitHubClient', () => {
     const runner = vi.fn<CommandRunner>(async (command, args) =>
       ghResult(command, args, args.includes('--search') ? '[]' : JSON.stringify([existingIssue]))
     );
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByTitle(target)).resolves.toEqual(existingIssue);
   });
@@ -905,7 +914,7 @@ describe('GitHubClient', () => {
       if (args.includes('--search')) markerSearches.push(String(args.at(args.indexOf('--search') + 1)));
       return ghResult(command, args, '[]');
     });
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
     const base = { repo: 'kaizen-agents-org/verifier', title: 'Provider failed', failureClass: 'timeout' };
 
     await client.findOpenIssueByTitle({ ...base, evidence: 'request 42\r\n  timed out at https://api.example.test/jobs/42' });
@@ -936,7 +945,7 @@ describe('GitHubClient', () => {
     const runner = vi.fn<CommandRunner>(async (command, args) =>
       ghResult(command, args, args.includes('--search') ? '[]' : JSON.stringify([legacyIssue]))
     );
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/verifier', title: 'Host executable missing',
@@ -958,7 +967,7 @@ describe('GitHubClient', () => {
           body: `## Evidence\nprovider=codex path=/opt/codex-host exit=127\n\n${legacyClass}`,
           labels: [], createdAt: '2026-07-12T00:00:00Z', comments: []
         }])));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/verifier', title: 'Host executable missing', evidence, failureClass
@@ -973,7 +982,7 @@ describe('GitHubClient', () => {
           body: '## Evidence\nprovider=codex path=/opt/codex-host exit=127\n\n## Expected\nfailureClass=command_missing',
           labels: [], createdAt: '2026-07-12T00:00:00Z', comments: []
         }])));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/verifier', title: 'Host executable missing',
@@ -993,7 +1002,7 @@ describe('GitHubClient', () => {
       url: 'https://github.com/o/r/issues/77'
     };
     const runner = vi.fn<CommandRunner>(async (command, args) => ghResult(command, args, JSON.stringify([existingIssue])));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     await expect(client.findOpenIssueByBodyMarker(marker)).resolves.toEqual(existingIssue);
     expect(runner.mock.calls[0][1]).toContain('goal-1 in:body');
@@ -1017,7 +1026,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.findOpenIssueByTitle({ repo: 'kaizen-agents-org/verifier', title: 'follow-up' });
 
@@ -1053,7 +1062,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/kaizen-loop',
@@ -1081,7 +1090,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/kaizen-loop',
@@ -1112,7 +1121,7 @@ describe('GitHubClient', () => {
       stderr: '',
       durationMs: 1
     }));
-    const client = new GitHubClient(runner, '/repo', '/trusted/bin/gh');
+    const client = new GitHubClient(trustedRunner(runner), '/repo');
 
     const issue = await client.findOpenIssueByTitle({
       repo: 'kaizen-agents-org/kaizen-loop',

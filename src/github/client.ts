@@ -57,8 +57,7 @@ export interface ExecutionAuthorization {
 export class GitHubClient {
   constructor(
     private readonly run: CommandRunner,
-    private readonly cwd: string,
-    private readonly githubCliExecutable: string | undefined = resolveGitHubCliExecutable(run)
+    private readonly cwd: string
   ) {}
 
   async authStatus(): Promise<void> {
@@ -502,16 +501,17 @@ export class GitHubClient {
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
-    if (!this.githubCliExecutable) {
+    const githubCliExecutable = resolveGitHubCliExecutable(this.run);
+    if (!githubCliExecutable) {
       throw new Error('Trusted GitHub CLI executable was not found before untrusted work.');
     }
     let lastError: unknown;
     const attempts = options.noRetry ? 1 : 3;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        return await this.run(this.githubCliExecutable, args, {
+        return await this.run(githubCliExecutable, args, {
           cwd: this.cwd,
-          env: trustedGithubCliEnv(process.env, this.githubCliExecutable, resolvePublicationGitExecutable(this.run))
+          env: trustedGithubCliEnv(process.env, githubCliExecutable, resolvePublicationGitExecutable(this.run))
         });
       } catch (error) {
         const message = String(error);

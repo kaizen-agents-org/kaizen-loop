@@ -3,13 +3,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
-import { disableScheduler, enableScheduler } from '../src/scheduler/scheduler.js';
+import { disableScheduler, enableScheduler as enableSchedulerImpl } from '../src/scheduler/scheduler.js';
 import type { RegistryProject } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
+const enableScheduler: typeof enableSchedulerImpl = (options) => enableSchedulerImpl({
+  ...options,
+  launcherTrust: options.launcherTrust ?? (() => true)
+});
+
 beforeEach(() => {
   vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/bin/echo');
-  vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', '/bin/sh');
+  vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', path.resolve('scripts/run-scheduled.sh'));
 });
 
 afterEach(() => {
@@ -31,7 +36,7 @@ describe('enableScheduler', () => {
       createdAt: '2026-06-13T00:00:00Z'
     };
 
-    await expect(enableScheduler({
+    await expect(enableSchedulerImpl({
       slug: 'owner-repo',
       project,
       config: configSchema.parse({ version: 1 }),
@@ -58,7 +63,7 @@ describe('enableScheduler', () => {
       createdAt: '2026-06-13T00:00:00Z'
     };
 
-    await expect(enableScheduler({
+    await expect(enableSchedulerImpl({
       slug: 'owner-repo',
       project,
       config: configSchema.parse({ version: 1 }),
@@ -80,9 +85,42 @@ describe('enableScheduler', () => {
       schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
     };
 
-    await expect(enableScheduler({
+    await expect(enableSchedulerImpl({
       slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
       runCommand: runner, platform: 'linux'
+    })).rejects.toThrow('immutable operator-managed run-scheduled.sh');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('rejects a trusted generic executable masquerading as the scheduled launcher', async () => {
+    vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', '/bin/sh');
+    const runner = vi.fn<CommandRunner>();
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableSchedulerImpl({
+      slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
+      runCommand: runner, platform: 'linux', launcherTrust: () => true
+    })).rejects.toThrow('immutable operator-managed run-scheduled.sh');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('rejects a symlink even when its target is a trusted scheduled launcher', async () => {
+    const linkDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-launcher-link-'));
+    const link = path.join(linkDir, 'run-scheduled.sh');
+    await fs.symlink(path.resolve('scripts/run-scheduled.sh'), link);
+    vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', link);
+    const runner = vi.fn<CommandRunner>();
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableSchedulerImpl({
+      slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
+      runCommand: runner, platform: 'linux', launcherTrust: () => true
     })).rejects.toThrow('immutable operator-managed run-scheduled.sh');
     expect(runner).not.toHaveBeenCalled();
   });

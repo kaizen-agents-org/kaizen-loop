@@ -2,10 +2,7 @@ import { type CommandRunner } from '../utils/command.js';
 export declare class GitClient {
     private readonly run;
     private readonly cwd;
-    private readonly publicationGitExecutable;
-    private readonly publicationSshExecutable;
-    private readonly publicationGithubToken;
-    constructor(run: CommandRunner, cwd: string, publicationGitExecutable?: string | undefined, publicationSshExecutable?: string | undefined, publicationGithubToken?: string | undefined);
+    constructor(run: CommandRunner, cwd: string);
     root(): Promise<string>;
     remoteUrl(name?: string): Promise<string>;
     currentBranch(): Promise<string>;
@@ -64,6 +61,7 @@ export declare class GitClient {
         forceWithLease?: boolean;
         expectedRepo: string;
     }): Promise<void>;
+    private publicationToken;
     private git;
 }
 export declare function isGitLfsPointer(content: string): boolean;

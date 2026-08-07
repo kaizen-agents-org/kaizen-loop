@@ -118,19 +118,24 @@ npm run dev -- run --dry-run --json
 
 For a target repository:
 
-Set `GH_TOKEN` or `GITHUB_TOKEN` only for credential-only `init`, `actions
-prepare`, and `actions publish` phases. Builder-capable commands reject ambient token variables
-because same-UID child processes can recover the original environment through
-procfs even after Node deletes `process.env` entries. Local scheduled runs must
-use a separately authenticated broker or credential-free mode. Supervisor publication
+Set `GH_TOKEN` or `GITHUB_TOKEN` only for credential-only `init`, `actions prepare`,
+and `actions publish` phases. Builder-capable commands reject ambient token variables
+because same-UID child processes can recover the original environment through procfs.
+For local HTTPS publication, set `KAIZEN_GITHUB_TOKEN_COMMAND` to an absolute,
+immutable, operator-managed executable. Kaizen captures only its canonical path at
+startup and invokes it with no arguments after builder and verifier processes exit,
+immediately before the validated push. It must print exactly one token line. Publication
 rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
 `KAIZEN_CRON_SCHEDULED_LAUNCHER` must name an absolute,
 operator-managed `run-scheduled.sh` whose file and ancestor directories are not
-writable by the runtime user. This prevents a scheduled builder from replacing
-the launcher that receives the token on the next cron invocation.
+writable by the runtime user. Provision this wrapper outside `KAIZEN_HOME`;
+`scheduler sync` installs only job definitions and never creates or refreshes it.
 
 ```sh
+sudo install -d -o root -m 0755 /usr/local/libexec/kaizen-loop
+sudo install -o root -m 0755 scripts/run-scheduled.sh /usr/local/libexec/kaizen-loop/run-scheduled.sh
+export KAIZEN_CRON_SCHEDULED_LAUNCHER=/usr/local/libexec/kaizen-loop/run-scheduled.sh
 kaizen init --agent codex --schedule 02:00
 kaizen scheduler sync
 export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"
@@ -143,10 +148,10 @@ kaizen goal create "Improve onboarding reliability" --success "npm test and npm 
 kaizen goal run <goal-id> --yes --json
 ```
 
-After upgrading from a release without the stable operator launcher, run
-`npm run build && node dist/cli.js scheduler sync` once from the upgraded
-kaizen-loop checkout for each registered project. Subsequent invocations atomically
-refresh both installed launchers from the self-updating runtime checkout.
+After upgrading from a release that self-installed the scheduled launcher,
+provision the operator-managed launcher above and rerun `kaizen scheduler sync`
+for each registered project. Scheduler synchronization never writes or replaces
+`KAIZEN_CRON_SCHEDULED_LAUNCHER`.
 
 For a third-party installation, start with the [third-party adopter guide](./docs/15-third-party-adopter-guide.md). Its recommended GitHub Actions path adds `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs. The lower-level workflow contract is documented in [docs/14-github-actions.md](./docs/14-github-actions.md).
 

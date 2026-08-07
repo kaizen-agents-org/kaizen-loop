@@ -10,6 +10,12 @@ export const MANAGED_PR_GUARDIAN_MARKER = '<!-- kaizen-pr-guardian:managed -->';
 function githubCliEnv(command) {
     return trustedGithubCliEnv(process.env, githubCliExecutable(command), publicationGitExecutable(command));
 }
+function runGitHubCli(command, args, options = {}) {
+    const executable = githubCliExecutable(command);
+    if (!executable)
+        throw new Error('Could not resolve a trusted GitHub CLI executable.');
+    return command(executable, args, { ...options, env: githubCliEnv(command) });
+}
 export function guardianJobsDir(stateDir) {
     return path.join(stateDir, 'guardian', 'jobs');
 }
@@ -545,9 +551,8 @@ async function listUnresolvedReviewThreads(runCommand, req) {
         ];
         if (cursor)
             args.push('-F', `cursor=${cursor}`);
-        const result = await runCommand('gh', args, {
+        const result = await runGitHubCli(runCommand, args, {
             cwd: req.workspaceDir,
-            env: githubCliEnv(runCommand),
             timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
             rejectOnNonZero: false
         });
@@ -619,7 +624,7 @@ async function inspectPrGate(runCommand, req) {
     };
 }
 async function listCheckAnnotations(runCommand, req, headRefOid) {
-    const runsResult = await runCommand('gh', [
+    const runsResult = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/commits/${headRefOid}/check-runs?per_page=100`,
         '--paginate',
@@ -643,7 +648,7 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
     const annotations = [];
     for (let index = 0; index < annotatedRuns.length; index += 4) {
         const batch = await Promise.all(annotatedRuns.slice(index, index + 4).map(async (checkRun) => {
-            const result = await runCommand('gh', [
+            const result = await runGitHubCli(runCommand, [
                 'api',
                 `repos/${req.repo}/check-runs/${checkRun.id}/annotations?per_page=100`,
                 '--paginate',
@@ -672,7 +677,7 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
     return annotations;
 }
 async function inspectPullRequestTerminalState(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'pr',
         'view',
         String(req.prNumber),
@@ -693,7 +698,7 @@ async function inspectPullRequestTerminalState(runCommand, req) {
 }
 async function inspectPullRequest(runCommand, req) {
     const [result, reviews, reviewComments, issueComments, requiredChecks] = await Promise.all([
-        runCommand('gh', [
+        runGitHubCli(runCommand, [
             'pr',
             'view',
             String(req.prNumber),
@@ -795,7 +800,7 @@ function isExpectedBotReview(review) {
     return isExpectedBotLogin(normalizeReviewerLogin(review.user?.login));
 }
 async function listRequiredChecks(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'pr',
         'checks',
         String(req.prNumber),
@@ -824,7 +829,7 @@ async function listRequiredChecks(runCommand, req) {
     }));
 }
 async function listPullRequestReviews(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/pulls/${req.prNumber}/reviews?per_page=100`,
         '--paginate',
@@ -844,7 +849,7 @@ async function listPullRequestReviews(runCommand, req) {
         : pages;
 }
 async function listPullRequestReviewComments(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/pulls/${req.prNumber}/comments?per_page=100`,
         '--paginate',
@@ -874,7 +879,7 @@ async function listPullRequestReviewComments(runCommand, req) {
     return comments;
 }
 async function listPullRequestIssueComments(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/issues/${req.prNumber}/comments?per_page=100`,
         '--paginate',

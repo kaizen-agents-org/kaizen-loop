@@ -6,6 +6,7 @@ export declare function enableScheduler(options: {
     config: KaizenConfig;
     runCommand: CommandRunner;
     platform?: NodeJS.Platform;
+    launcherTrust?: (launcher: string) => boolean;
 }): Promise<{
     type: 'launchd' | 'cron';
     path?: string;

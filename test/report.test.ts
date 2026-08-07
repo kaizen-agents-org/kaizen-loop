@@ -284,6 +284,22 @@ async function setupFakeBins() {
 async function runCli(options: { cwd: string; binDir: string; args: string[] }) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-cli-'));
   const ipcTmpDir = cliIpcTmpDir();
+  const childEnv = { ...process.env };
+  for (const key of [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+    'GH_CONFIG_DIR',
+    'SSH_AUTH_SOCK',
+    'SSH_ASKPASS',
+    'GIT_ASKPASS',
+    'GIT_CONFIG_GLOBAL',
+    'GIT_CONFIG_SYSTEM',
+    'GIT_CONFIG_COUNT',
+    'GIT_SSH_COMMAND',
+    'GIT_TERMINAL_PROMPT'
+  ]) delete childEnv[key];
   try {
     return await execFileAsync(
       process.execPath,
@@ -291,7 +307,7 @@ async function runCli(options: { cwd: string; binDir: string; args: string[] }) 
       {
         cwd: options.cwd,
         env: {
-          ...process.env,
+          ...childEnv,
           KAIZEN_TEST_TRUSTED_BIN: options.binDir,
           KAIZEN_TMPDIR: tmpDir,
           PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`,

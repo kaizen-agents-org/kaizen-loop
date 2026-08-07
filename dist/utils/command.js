@@ -33,6 +33,7 @@ export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', proc
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
 const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv.slice(2));
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
+const INITIAL_GITHUB_TOKEN_COMMAND = resolveConfiguredTrustedExecutable('KAIZEN_GITHUB_TOKEN_COMMAND', process.env.KAIZEN_GITHUB_TOKEN_COMMAND);
 const activeChildren = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
@@ -150,7 +151,8 @@ Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
         git: INITIAL_GIT_EXECUTABLE,
         githubCli: INITIAL_GITHUB_CLI_EXECUTABLE,
         ssh: INITIAL_SSH_EXECUTABLE,
-        githubToken: INITIAL_GITHUB_TOKEN
+        githubToken: INITIAL_GITHUB_TOKEN,
+        githubTokenCommand: INITIAL_GITHUB_TOKEN_COMMAND
     })
 });
 export function buildAllowlistedEnv(source, allowlist, extra = {}) {
@@ -232,6 +234,9 @@ export function publicationSshExecutable(command) {
 export function publicationGithubToken(command) {
     return command[TRUSTED_COMMAND_RUNNER]?.githubToken;
 }
+export function publicationGithubTokenCommand(command) {
+    return command[TRUSTED_COMMAND_RUNNER]?.githubTokenCommand;
+}
 export function withTrustedExecutables(command, executables) {
     const trustedCommand = (executable, args, options) => command(executable, args, options);
     Object.defineProperty(trustedCommand, TRUSTED_COMMAND_RUNNER, { value: Object.freeze({ ...executables }) });
@@ -249,6 +254,24 @@ export function executableNames(command, platform = process.platform, pathExt = 
 }
 function resolveTrustedExecutable(command, searchPath) {
     return resolveExecutable(command, searchPath, isTrustedExecutablePath);
+}
+function resolveConfiguredTrustedExecutable(name, executable) {
+    if (!executable)
+        return undefined;
+    if (!path.isAbsolute(executable))
+        throw new Error(`${name} must be an absolute path.`);
+    let resolved;
+    try {
+        resolved = fs.realpathSync(executable);
+        fs.accessSync(resolved, fs.constants.X_OK);
+    }
+    catch {
+        throw new Error(`${name} does not resolve to an executable file.`);
+    }
+    if (!isTrustedExecutablePath(resolved)) {
+        throw new Error(`${name} must resolve to an immutable operator-managed executable.`);
+    }
+    return resolved;
 }
 function resolveExecutable(command, searchPath, accept) {
     for (const directory of searchPath?.split(path.delimiter) ?? []) {
@@ -286,7 +309,7 @@ export function isTrustedExecutablePath(executable, canWrite = canCurrentUserWri
         const stat = fs.statSync(current);
         if (current === executable && !stat.isFile())
             return false;
-        if (stat.uid !== 0 || canWrite(current)) {
+        if (stat.uid !== 0 || (stat.mode & 0o022) !== 0 || canWrite(current)) {
             return false;
         }
         const parent = path.dirname(current);

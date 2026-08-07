@@ -25,11 +25,9 @@ export const KAIZEN_LABELS = [
 export class GitHubClient {
     run;
     cwd;
-    githubCliExecutable;
-    constructor(run, cwd, githubCliExecutable = resolveGitHubCliExecutable(run)) {
+    constructor(run, cwd) {
         this.run = run;
         this.cwd = cwd;
-        this.githubCliExecutable = githubCliExecutable;
     }
     async authStatus() {
         await this.gh(['auth', 'status']);
@@ -394,16 +392,17 @@ export class GitHubClient {
         await this.gh(['pr', 'ready', String(number), '--undo']);
     }
     async gh(args, options = {}) {
-        if (!this.githubCliExecutable) {
+        const githubCliExecutable = resolveGitHubCliExecutable(this.run);
+        if (!githubCliExecutable) {
             throw new Error('Trusted GitHub CLI executable was not found before untrusted work.');
         }
         let lastError;
         const attempts = options.noRetry ? 1 : 3;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
             try {
-                return await this.run(this.githubCliExecutable, args, {
+                return await this.run(githubCliExecutable, args, {
                     cwd: this.cwd,
-                    env: trustedGithubCliEnv(process.env, this.githubCliExecutable, resolvePublicationGitExecutable(this.run))
+                    env: trustedGithubCliEnv(process.env, githubCliExecutable, resolvePublicationGitExecutable(this.run))
                 });
             }
             catch (error) {

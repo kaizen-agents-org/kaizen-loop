@@ -1,20 +1,14 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable, publicationSshExecutable as resolvePublicationSshExecutable, publicationGithubToken as resolvePublicationGithubToken } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable, publicationSshExecutable as resolvePublicationSshExecutable, publicationGithubToken as resolvePublicationGithubToken, publicationGithubTokenCommand as resolvePublicationGithubTokenCommand, buildAllowlistedEnv, DEFAULT_ENV_ALLOWLIST } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
 export class GitClient {
     run;
     cwd;
-    publicationGitExecutable;
-    publicationSshExecutable;
-    publicationGithubToken;
-    constructor(run, cwd, publicationGitExecutable = resolvePublicationGitExecutable(run), publicationSshExecutable = resolvePublicationSshExecutable(run), publicationGithubToken = resolvePublicationGithubToken(run)) {
+    constructor(run, cwd) {
         this.run = run;
         this.cwd = cwd;
-        this.publicationGitExecutable = publicationGitExecutable;
-        this.publicationSshExecutable = publicationSshExecutable;
-        this.publicationGithubToken = publicationGithubToken;
     }
     async root() {
         const result = await this.git(['rev-parse', '--show-toplevel']);
@@ -165,10 +159,10 @@ export class GitClient {
         return result.stdout;
     }
     async push(ref, options) {
-        if (!this.publicationGitExecutable) {
+        const publicationGitExecutable = resolvePublicationGitExecutable(this.run);
+        if (!publicationGitExecutable) {
             throw new Error('Could not resolve a trusted Git executable before publication.');
         }
-        const publicationGitExecutable = this.publicationGitExecutable;
         const publicationLocalEnv = isolatedGitEnv();
         const pushUrlResult = await this.run(publicationGitExecutable, ['remote', 'get-url', '--push', '--all', 'origin'], {
             cwd: this.cwd,
@@ -231,8 +225,8 @@ export class GitClient {
                 throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${verifiedLfsPointers.join(', ')}`);
             }
             const env = pushUrl.startsWith('https://')
-                ? gitPublicationEnv(process.env, this.publicationGithubToken)
-                : gitSshPublicationEnv(process.env, this.publicationSshExecutable);
+                ? gitPublicationEnv(process.env, await this.publicationToken())
+                : gitSshPublicationEnv(process.env, resolvePublicationSshExecutable(this.run));
             const lease = options.forceWithLease
                 ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
                 : [];
@@ -280,6 +274,36 @@ export class GitClient {
         }
         if (cleanupError !== undefined)
             throw cleanupError;
+    }
+    async publicationToken() {
+        const captured = resolvePublicationGithubToken(this.run);
+        if (captured)
+            return captured;
+        const tokenCommand = resolvePublicationGithubTokenCommand(this.run);
+        if (!tokenCommand) {
+            throw new Error('HTTPS Git publication requires a credential-only token or KAIZEN_GITHUB_TOKEN_COMMAND.');
+        }
+        try {
+            const result = await this.run(tokenCommand, [], {
+                cwd: path.dirname(tokenCommand),
+                env: buildAllowlistedEnv(process.env, DEFAULT_ENV_ALLOWLIST, {
+                    PATH: path.dirname(tokenCommand)
+                }),
+                timeoutMs: 10_000,
+                rejectOnNonZero: false
+            });
+            const lines = result.stdout.replace(/\r\n/g, '\n').split('\n');
+            if (result.exitCode !== 0 || lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
+                throw new Error('invalid broker result');
+            }
+            const token = lines[0]?.trim();
+            if (!token || token.length > 8_192)
+                throw new Error('invalid broker result');
+            return token;
+        }
+        catch {
+            throw new Error('GitHub credential broker failed to return one non-empty token line.');
+        }
     }
     git(args, options) {
         return this.run('git', args, {

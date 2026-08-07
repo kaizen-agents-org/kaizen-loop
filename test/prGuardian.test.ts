@@ -36,7 +36,7 @@ describe('runPrGuardianSkill', () => {
       durationMs: 1
     }));
 
-    const result = await runPrGuardianSkill(trustedRunner(runner), {
+    const result = await runPrGuardianSkill(trustedRunner(runner, { githubToken: false }), {
       config,
       workspaceDir: '/tmp/workspace',
       repo: 'o/r',
@@ -61,6 +61,11 @@ describe('runPrGuardianSkill', () => {
     expect(prompt).toContain('unresolved/skipped feedback with reasons');
     expect(prompt).toContain('If GitHub reports state=MERGED');
     expect(prompt).toContain('stop all watches immediately and exit successfully');
+    for (const [command, , options] of runner.mock.calls.filter(([command]) => command === 'gh')) {
+      expect(command).toBe('gh');
+      expect(options?.env).not.toHaveProperty('GH_TOKEN');
+      expect(options?.env).not.toHaveProperty('GITHUB_TOKEN');
+    }
   });
 
   it('reruns while unresolved review threads remain and fails after the retry budget', async () => {

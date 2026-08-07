@@ -7,6 +7,7 @@ import type { CommandRunner } from '../src/utils/command.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 import { GitClient } from '../src/workspace/git.js';
 import { CheckpointBranchDivergedError, CheckpointBranchMissingError, WorkspaceManager } from '../src/workspace/manager.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -49,7 +50,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace', '/trusted/git');
+    const git = new GitClient(trustedRunner(runner), '/workspace');
 
     await git.push('kaizen/issue-12-retry-branch', { forceWithLease: true, expectedRepo: 'o/r' });
 
@@ -75,14 +76,14 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace', '/trusted/git');
+    const git = new GitClient(trustedRunner(runner), '/workspace');
 
     await git.statusPorcelain();
     await git.push('kaizen/issue-330-fix', { forceWithLease: true, expectedRepo: 'o/r' });
 
     expect(runner.mock.calls[0][2]?.env?.GH_TOKEN).toBeUndefined();
     const publicationValidation = runner.mock.calls.find(([, args]) => args[0] === 'remote' && args[1] === 'get-url');
-    expect(publicationValidation?.[0]).toBe('/trusted/git');
+    expect(publicationValidation?.[0]).toBe('git');
     expect(publicationValidation?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
     expect(publicationValidation?.[2]?.env).toMatchObject({
       GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
@@ -99,7 +100,62 @@ describe('workspace branch handling', () => {
       KAIZEN_GIT_PASSWORD: 'supervisor-token'
     });
     expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
-    expect(publicationPush?.[0]).toBe('/trusted/git');
+    expect(publicationPush?.[0]).toBe('git');
+  });
+
+  it('obtains HTTPS credentials from the trusted broker only after publication validation', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: command === 'github-token'
+        ? 'broker-secret\n'
+        : args.join(' ') === 'remote get-url --push --all origin'
+          ? 'https://github.com/o/r.git\n'
+          : args[0] === 'rev-parse'
+            ? 'deadbeef\n'
+            : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await new GitClient(trustedRunner(runner, { githubToken: false }), '/workspace')
+      .push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
+
+    const brokerIndex = runner.mock.calls.findIndex(([command]) => command === 'github-token');
+    const cloneIndex = runner.mock.calls.findIndex(([, args]) => args[0] === 'clone');
+    const inspectionIndex = runner.mock.calls.findIndex(([, args]) => args[0] === 'grep');
+    const pushIndex = runner.mock.calls.findIndex(([, args]) => args[0] === 'push');
+    expect(brokerIndex).toBeGreaterThan(cloneIndex);
+    expect(brokerIndex).toBeGreaterThan(inspectionIndex);
+    expect(pushIndex).toBeGreaterThan(brokerIndex);
+    expect(runner.mock.calls[brokerIndex][2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(runner.mock.calls[pushIndex][2]?.env?.KAIZEN_GIT_PASSWORD).toBe('broker-secret');
+  });
+
+  it('rejects malformed broker output without exposing it', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: command === 'github-token'
+        ? 'secret-one\nsecret-two\n'
+        : args.join(' ') === 'remote get-url --push --all origin'
+          ? 'https://github.com/o/r.git\n'
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const error = await new GitClient(trustedRunner(runner, { githubToken: false }), '/workspace')
+      .push('kaizen/issue-330-fix', { expectedRepo: 'o/r' })
+      .catch((caught: unknown) => caught);
+
+    expect(String(error)).toContain('credential broker failed');
+    expect(String(error)).not.toContain('secret-one');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
   });
 
   it('does not expose GitHub tokens to SSH publication transports', async () => {
@@ -119,7 +175,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await new GitClient(runner, '/workspace', '/trusted/git', '/trusted/ssh').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
+    await new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
 
     const publicationClone = runner.mock.calls.find(([, args]) => args[0] === 'clone');
     expect(publicationClone?.[2]?.env).toMatchObject({
@@ -137,7 +193,7 @@ describe('workspace branch handling', () => {
       new RegExp(`ssh(?:\\.exe)?' -F '${process.platform === 'win32' ? 'NUL' : '/dev/null'}'$`, 'i')
     );
     expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
-    expect(publicationPush?.[0]).toBe('/trusted/git');
+    expect(publicationPush?.[0]).toBe('git');
     const updateRef = runner.mock.calls.find(([, args]) => args.includes('update-ref'));
     expect(updateRef?.[1]).toEqual([
       '-c',
@@ -164,7 +220,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace', '/trusted/bin/git').push('main', { expectedRepo: 'o/r' })).rejects.toThrow('Refusing to publish');
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('main', { expectedRepo: 'o/r' })).rejects.toThrow('Refusing to publish');
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
@@ -179,7 +235,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace', '/trusted/bin/git').push('main', { expectedRepo: 'o/r' }))
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('main', { expectedRepo: 'o/r' }))
       .rejects.toThrow('Refusing to publish o/r');
     expect(runner).toHaveBeenCalledTimes(1);
   });
@@ -202,7 +258,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
       expectedRepo: 'o/r'
     })).rejects.toThrow('Git LFS pointer');
     expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
@@ -222,7 +278,7 @@ describe('workspace branch handling', () => {
       stderr: '', durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
       expectedRepo: 'o/r'
     })).rejects.toThrow('Git LFS pointer');
     expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
@@ -248,7 +304,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+    await new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
       expectedRepo: 'o/r'
     });
 
@@ -267,7 +323,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    await expect(new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
       expectedRepo: 'o/r'
     })).rejects.toThrow('Could not inspect');
     expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
@@ -287,7 +343,7 @@ describe('workspace branch handling', () => {
       durationMs: 1
     }));
 
-    const error = await new GitClient(runner, '/workspace', '/trusted/git').push('kaizen/issue-330-fix', {
+    const error = await new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
       expectedRepo: 'o/r'
     }).catch((caught: unknown) => caught);
 
@@ -307,7 +363,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace', '/trusted/bin/git');
+    const git = new GitClient(trustedRunner(runner), '/workspace');
 
     await git.checkout('main', { ignoreOtherWorktrees: true });
 
@@ -524,7 +580,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace', '/trusted/bin/git');
+    const git = new GitClient(trustedRunner(runner), '/workspace');
 
     await git.abortRebase();
 

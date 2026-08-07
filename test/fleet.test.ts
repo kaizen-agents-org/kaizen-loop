@@ -3,15 +3,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fleetHasFailures, migrateLegacySchedulerConfig, refreshFleet, syncFleet, type FleetProjectResult } from '../src/commands/fleet.js';
+import { fleetHasFailures, migrateLegacySchedulerConfig, refreshFleet, syncFleet as syncFleetImpl, type FleetProjectResult } from '../src/commands/fleet.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { loadRegistry, saveRegistry, updateRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 
+const syncFleet: typeof syncFleetImpl = (options) => syncFleetImpl({
+  ...options,
+  schedulerLauncherTrust: options.schedulerLauncherTrust ?? (() => true)
+});
+
 beforeEach(() => {
   vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/bin/echo');
-  vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', '/bin/sh');
+  vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', path.resolve('scripts/run-scheduled.sh'));
 });
 
 afterEach(() => {

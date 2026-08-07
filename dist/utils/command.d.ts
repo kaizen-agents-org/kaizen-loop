@@ -4,6 +4,7 @@ export interface TrustedExecutables {
     githubCli?: string;
     ssh?: string;
     githubToken?: string;
+    githubTokenCommand?: string;
 }
 export declare const INITIAL_GIT_EXECUTABLE: string | undefined;
 export declare const INITIAL_GITHUB_CLI_EXECUTABLE: string | undefined;
@@ -39,6 +40,7 @@ export declare function publicationGitExecutable(command: CommandRunner): string
 export declare function githubCliExecutable(command: CommandRunner): string | undefined;
 export declare function publicationSshExecutable(command: CommandRunner): string | undefined;
 export declare function publicationGithubToken(command: CommandRunner): string | undefined;
+export declare function publicationGithubTokenCommand(command: CommandRunner): string | undefined;
 export declare function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner;
 export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
 export declare function isTrustedExecutablePath(executable: string, canWrite?: (candidate: string) => boolean): boolean;
