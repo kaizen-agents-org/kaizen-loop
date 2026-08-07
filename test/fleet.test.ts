@@ -10,6 +10,7 @@ import type { CommandRunner } from '../src/utils/command.js';
 
 beforeEach(() => {
   vi.stubEnv('KAIZEN_CRON_GITHUB_TOKEN_COMMAND', '/bin/echo');
+  vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', '/bin/sh');
 });
 
 afterEach(() => {
