@@ -188,7 +188,9 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('45 4 * * 0 ');
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain("bin/run-scheduled.sh'");
-    expect(crontabInput).toContain(`GH_TOKEN="$('${process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND}')"`);
+    expect(crontabInput).toContain(
+      `GH_TOKEN="$('${await fs.realpath(process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND!)}')"`
+    );
     expect(crontabInput).not.toContain('publication-token');
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");
     expect(crontabInput).toContain("'owner-repo' 'issue-watch'");

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -74,6 +75,31 @@ describe('githubCliEnv', () => {
       GH_ENTERPRISE_TOKEN: 'enterprise-token',
       GITHUB_ENTERPRISE_TOKEN: 'github-enterprise-token',
       GH_CONFIG_DIR: '/gh-config'
+    });
+  });
+
+  it('removes startup tokens from the supervisor process environment while retaining privileged access', () => {
+    const script = `
+      import { githubCliEnv, hasSupervisorGitHubToken } from './src/utils/command.ts';
+      process.stdout.write(JSON.stringify({
+        parentToken: process.env.GH_TOKEN,
+        privilegedToken: githubCliEnv().GH_TOKEN,
+        hasToken: hasSupervisorGitHubToken()
+      }));
+    `;
+    const stdout = execFileSync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '-e', script],
+      {
+        cwd: path.resolve(import.meta.dirname, '..'),
+        env: { ...process.env, GH_TOKEN: 'startup-token' },
+        encoding: 'utf8'
+      }
+    );
+
+    expect(JSON.parse(stdout)).toEqual({
+      privilegedToken: 'startup-token',
+      hasToken: true
     });
   });
 });

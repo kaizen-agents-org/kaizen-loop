@@ -1,3 +1,4 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -97,10 +98,12 @@ function commandLine(slug, job, tokenCommand) {
 }
 function requiredCronTokenCommand() {
     const command = process.env.KAIZEN_CRON_GITHUB_TOKEN_COMMAND;
+    let resolvedCommand;
     let trusted = false;
     if (command && path.isAbsolute(command)) {
         try {
-            trusted = isTrustedExecutablePath(command);
+            resolvedCommand = fsSync.realpathSync(command);
+            trusted = isTrustedExecutablePath(resolvedCommand);
         }
         catch {
             trusted = false;
@@ -109,7 +112,7 @@ function requiredCronTokenCommand() {
     if (!trusted) {
         throw new ConfigError('Managed cron requires KAIZEN_CRON_GITHUB_TOKEN_COMMAND to name an absolute, immutable operator-managed secret command.');
     }
-    return command;
+    return resolvedCommand;
 }
 async function removeLaunchdPlists(slug, runCommand) {
     const launchAgentsDir = path.join(os.homedir(), 'Library', 'LaunchAgents');

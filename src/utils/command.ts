@@ -33,7 +33,8 @@ const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
-const INITIAL_GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv();
+const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
 
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const PROCESS_TERMINATION_GRACE_MS = 250;
@@ -201,7 +202,19 @@ export function buildUntrustedEnv(
 }
 
 export function githubCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
+  const current = buildAllowlistedEnv(source, [...DEFAULT_ENV_ALLOWLIST, ...GITHUB_CLI_AUTH_ENV_ALLOWLIST]);
+  return source === process.env
+    ? buildAllowlistedEnv(INITIAL_GITHUB_AUTH_ENV, GITHUB_CLI_AUTH_ENV_ALLOWLIST, current)
+    : current;
+}
+
+export function hasSupervisorGitHubToken(source: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(
+    source.GH_TOKEN ||
+    source.GITHUB_TOKEN ||
+    INITIAL_GITHUB_AUTH_ENV.GH_TOKEN ||
+    INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN
+  );
 }
 
 export function gitCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -345,6 +358,14 @@ function canCurrentUserWrite(candidate: string): boolean {
     const code = (error as NodeJS.ErrnoException).code;
     return code !== 'EACCES' && code !== 'EPERM';
   }
+}
+
+function captureGitHubAuthEnv(): NodeJS.ProcessEnv {
+  const captured = buildAllowlistedEnv(process.env, GITHUB_CLI_AUTH_ENV_ALLOWLIST);
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
+    delete process.env[key];
+  }
+  return captured;
 }
 
 export function gitSshPublicationEnv(

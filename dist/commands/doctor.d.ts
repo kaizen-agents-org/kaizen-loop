@@ -1,5 +1,5 @@
 import type { KaizenConfig } from '../config/schema.js';
-import type { CommandRunner } from '../utils/command.js';
+import { type CommandRunner } from '../utils/command.js';
 export declare function doctorProject(options: {
     cwd: string;
     project?: string;

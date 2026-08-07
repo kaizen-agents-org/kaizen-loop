@@ -64,3 +64,4 @@ export declare class GitClient {
     }): Promise<void>;
     private git;
 }
+export declare function isGitLfsPointer(content: string): boolean;

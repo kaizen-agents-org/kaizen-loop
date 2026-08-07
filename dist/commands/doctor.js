@@ -9,6 +9,7 @@ import { resolveProject } from '../config/registry.js';
 import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
+import { hasSupervisorGitHubToken } from '../utils/command.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
@@ -30,7 +31,7 @@ export async function doctorProject(options) {
         : undefined;
     await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, configPath).authStatus()));
     await check(checks, 'publication auth', async () => {
-        if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+        if (!hasSupervisorGitHubToken()) {
             throw new Error('set GH_TOKEN or GITHUB_TOKEN in the supervisor environment');
         }
     });

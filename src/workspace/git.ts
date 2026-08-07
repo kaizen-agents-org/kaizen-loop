@@ -247,8 +247,22 @@ export class GitClient {
       if (lfsPointers.exitCode > 1) {
         throw new Error(`Could not inspect ${ref} for Git LFS pointers before publication.`);
       }
-      if (lfsPointers.exitCode === 0 && lfsPointers.stdout.trim()) {
-        throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${lfsPointers.stdout.trim()}`);
+      const verifiedLfsPointers: string[] = [];
+      for (const candidate of lfsPointers.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
+        const pathPrefix = `${ref}:`;
+        const candidatePath = candidate.startsWith(pathPrefix) ? candidate.slice(pathPrefix.length) : candidate;
+        const pointer = await this.run(publicationGitExecutable, ['show', `${ref}:${candidatePath}`], {
+          cwd: publicationDir,
+          env: isolatedGitEnv(),
+          rejectOnNonZero: false
+        });
+        if (pointer.exitCode !== 0) {
+          throw new Error(`Could not inspect ${candidatePath} for Git LFS pointer metadata before publication.`);
+        }
+        if (isGitLfsPointer(pointer.stdout)) verifiedLfsPointers.push(candidatePath);
+      }
+      if (verifiedLfsPointers.length > 0) {
+        throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${verifiedLfsPointers.join(', ')}`);
       }
       const env = pushUrl.startsWith('https://') ? gitPublicationEnv() : gitSshPublicationEnv();
       const lease = options.forceWithLease
@@ -301,6 +315,14 @@ export class GitClient {
       rejectOnNonZero: options?.rejectOnNonZero
     });
   }
+}
+
+export function isGitLfsPointer(content: string): boolean {
+  const lines = content.replace(/\r\n/g, '\n').trimEnd().split('\n');
+  return lines.length === 3
+    && lines[0] === 'version https://git-lfs.github.com/spec/v1'
+    && /^oid sha256:[0-9a-f]{64}$/.test(lines[1])
+    && /^size [0-9]+$/.test(lines[2]);
 }
 
 function parseWorktreeList(output: string): Array<{ path: string; branch?: string }> {

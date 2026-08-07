@@ -5,7 +5,7 @@ import { defaultConfigObject } from '../config/config.js';
 import { configSchema } from '../config/schema.js';
 import { upsertProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
-import type { CommandRunner } from '../utils/command.js';
+import { hasSupervisorGitHubToken, type CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { workspaceDir } from '../utils/paths.js';
 import { repoFromRemote, slugFromRepo } from '../utils/slug.js';
@@ -42,7 +42,7 @@ export async function initProject(options: InitOptions): Promise<InitResult> {
 
   const github = new GitHubClient(options.runCommand, repoDir);
   await github.authStatus();
-  if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+  if (!hasSupervisorGitHubToken()) {
     throw new ConfigError('Set GH_TOKEN or GITHUB_TOKEN in the supervisor environment before initialization.');
   }
 

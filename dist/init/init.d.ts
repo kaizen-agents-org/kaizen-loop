@@ -1,4 +1,4 @@
-import type { CommandRunner } from '../utils/command.js';
+import { type CommandRunner } from '../utils/command.js';
 export interface InitOptions {
     cwd: string;
     agent?: 'claude' | 'codex';
