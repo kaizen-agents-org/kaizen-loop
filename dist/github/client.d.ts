@@ -11,7 +11,8 @@ export interface ExecutionAuthorization {
 export declare class GitHubClient {
     private readonly run;
     private readonly cwd;
-    constructor(run: CommandRunner, cwd: string);
+    private readonly githubCliExecutable;
+    constructor(run: CommandRunner, cwd: string, githubCliExecutable?: string | undefined);
     authStatus(): Promise<void>;
     createLabels(labels?: string[]): Promise<void>;
     listIssues(labels: string | string[], limit?: number): Promise<GitHubIssue[]>;

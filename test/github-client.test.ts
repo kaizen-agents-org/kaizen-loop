@@ -4,6 +4,22 @@ import { buildDiscoveredIssueFingerprint } from '../src/discovered-issue-fingerp
 import type { CommandRunner } from '../src/utils/command.js';
 
 describe('GitHubClient', () => {
+  it('uses a pinned GitHub CLI executable for authenticated calls', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: options?.cwd,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await new GitHubClient(runner, '/repo', '/trusted/gh').authStatus();
+
+    expect(runner).toHaveBeenCalledWith('/trusted/gh', ['auth', 'status'], expect.objectContaining({ cwd: '/repo' }));
+  });
+
   it('includes the roadmap classification in the default label set', () => {
     expect(KAIZEN_LABELS).toContain('kaizen:roadmap');
   });

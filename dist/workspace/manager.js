@@ -86,9 +86,7 @@ export class WorkspaceManager {
         if (result.exitCode === 0 || !config.commands.setup || !isTransientDependencyFailure(output)) {
             return result;
         }
-        const setup = await this.runSetup(config, runDeadlineAt);
-        if (!setup)
-            return result;
+        const setup = await this.runDependencyRepair(config.commands.setup, config, runDeadlineAt);
         const retried = setup.ok
             ? await this.runShell(command, timeoutMs, config, runDeadlineAt)
             : result;
@@ -104,6 +102,14 @@ export class WorkspaceManager {
                 retryOutput
             ].filter(Boolean).join('\n'),
             stderr: ''
+        };
+    }
+    async runDependencyRepair(command, config, runDeadlineAt) {
+        const result = await this.runShell(command, undefined, config, runDeadlineAt, { CI: 'true' });
+        return {
+            command,
+            ok: result.exitCode === 0,
+            output: `${result.stdout}${result.stderr}`
         };
     }
     async createIssueBranch(config, issue) {
@@ -206,13 +212,31 @@ export class WorkspaceManager {
         const diff = await this.git().workingTreeDiff();
         return truncateText(diff.trim(), maxChars);
     }
-    async runShell(command, timeoutMs, config, runDeadlineAt) {
-        return this.run(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
-            cwd: this.workspacePath,
-            env: await envWithKaizenTemp(buildUntrustedEnv(process.env, config.safety.envAllowlist), this.workspacePath),
-            timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
-            rejectOnNonZero: false
-        });
+    async runShell(command, timeoutMs, config, runDeadlineAt, extraEnv = {}) {
+        const shell = process.platform === 'win32' ? 'cmd' : 'sh';
+        const args = process.platform === 'win32' ? ['/c', command] : ['-lc', command];
+        const startedAt = Date.now();
+        try {
+            return await this.run(shell, args, {
+                cwd: this.workspacePath,
+                env: await envWithKaizenTemp(buildUntrustedEnv(process.env, config.safety.envAllowlist, extraEnv), this.workspacePath),
+                timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
+                rejectOnNonZero: false
+            });
+        }
+        catch (error) {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            const result = failure.result;
+            return {
+                command: result?.command ?? shell,
+                args: result?.args ?? args,
+                cwd: result?.cwd ?? this.workspacePath,
+                exitCode: result?.exitCode || 1,
+                stdout: result?.stdout ?? '',
+                stderr: [result?.stderr, failure.message].filter(Boolean).join('\n'),
+                durationMs: result?.durationMs ?? Date.now() - startedAt
+            };
+        }
     }
     async removeWorktreesForBranch(branch) {
         const git = this.git();

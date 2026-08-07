@@ -292,6 +292,7 @@ async function runCli(options: { cwd: string; binDir: string; args: string[] }) 
         env: {
           ...process.env,
           KAIZEN_TEST_GIT_EXECUTABLE: '1',
+          KAIZEN_TEST_GH_EXECUTABLE: '1',
           KAIZEN_TMPDIR: tmpDir,
           PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`,
           TMPDIR: ipcTmpDir,

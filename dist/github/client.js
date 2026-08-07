@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { githubCliEnv } from '../utils/command.js';
+import { githubCliEnv, githubCliExecutable as resolveGitHubCliExecutable } from '../utils/command.js';
 import { buildDiscoveredIssueFingerprint, extractEvidence, hasDiscoveredIssueFingerprint, hasDiscoveredIssueMarker, parseFailureClass } from '../discovered-issue-fingerprint.js';
 export const KAIZEN_LABELS = [
     'kaizen',
@@ -25,9 +25,11 @@ export const KAIZEN_LABELS = [
 export class GitHubClient {
     run;
     cwd;
-    constructor(run, cwd) {
+    githubCliExecutable;
+    constructor(run, cwd, githubCliExecutable = resolveGitHubCliExecutable(run)) {
         this.run = run;
         this.cwd = cwd;
+        this.githubCliExecutable = githubCliExecutable;
     }
     async authStatus() {
         await this.gh(['auth', 'status']);
@@ -392,11 +394,14 @@ export class GitHubClient {
         await this.gh(['pr', 'ready', String(number), '--undo']);
     }
     async gh(args, options = {}) {
+        if (!this.githubCliExecutable) {
+            throw new Error('Trusted GitHub CLI executable was not found before untrusted work.');
+        }
         let lastError;
         const attempts = options.noRetry ? 1 : 3;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
             try {
-                return await this.run('gh', args, { cwd: this.cwd, env: githubCliEnv() });
+                return await this.run(this.githubCliExecutable, args, { cwd: this.cwd, env: githubCliEnv() });
             }
             catch (error) {
                 const message = String(error);

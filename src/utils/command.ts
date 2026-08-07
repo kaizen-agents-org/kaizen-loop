@@ -31,6 +31,7 @@ const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 const SUPERVISOR_CREDENTIAL_ENV = new Set([...GITHUB_CLI_AUTH_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
+export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
 const INITIAL_GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 
@@ -243,6 +244,13 @@ export function publicationGitExecutable(command: CommandRunner): string | undef
   return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: boolean })[TRUSTED_COMMAND_RUNNER]
     ? INITIAL_GIT_EXECUTABLE
     : 'git';
+}
+
+export function githubCliExecutable(command: CommandRunner): string | undefined {
+  if (process.env.NODE_ENV === 'test' && process.env.KAIZEN_TEST_GH_EXECUTABLE === '1') return 'gh';
+  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: boolean })[TRUSTED_COMMAND_RUNNER]
+    ? INITIAL_GITHUB_CLI_EXECUTABLE
+    : 'gh';
 }
 
 export function executableNames(
