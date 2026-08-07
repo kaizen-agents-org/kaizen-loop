@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { envWithKaizenTemp } from './temp.js';
 
@@ -32,7 +31,7 @@ const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 const SUPERVISOR_CREDENTIAL_ENV = new Set([...GITHUB_CLI_AUTH_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
-export const INITIAL_GITHUB_CLI_EXECUTABLE = preserveStartupExecutable('gh', process.env.PATH);
+export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
 const INITIAL_GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 
@@ -272,57 +271,6 @@ function resolveTrustedExecutable(command: string, searchPath: string | undefine
   return resolveExecutable(command, searchPath, isTrustedExecutablePath);
 }
 
-const startupExecutableCopyDirs = new Set<string>();
-let startupExecutableCleanupInstalled = false;
-
-export function preserveStartupExecutable(
-  command: string,
-  searchPath: string | undefined,
-  accept: (executable: string) => boolean = isTrustedExecutablePath,
-  tempRoot: string = process.platform === 'win32' ? os.tmpdir() : '/tmp'
-): string | undefined {
-  const executable = resolveExecutable(command, searchPath, (candidate) => fs.statSync(candidate).isFile());
-  if (!executable || accept(executable)) return executable;
-
-  let copyDir: string | undefined;
-  try {
-    copyDir = fs.mkdtempSync(path.join(tempRoot, 'kaizen-startup-cli-'));
-    fs.chmodSync(copyDir, 0o700);
-    const copyPath = path.join(copyDir, `${command}${path.extname(executable)}`);
-    fs.copyFileSync(executable, copyPath, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(copyPath, 0o500);
-    fs.chmodSync(copyDir, 0o500);
-    startupExecutableCopyDirs.add(copyDir);
-    installStartupExecutableCleanup();
-    return copyPath;
-  } catch {
-    if (copyDir) {
-      try {
-        fs.chmodSync(copyDir, 0o700);
-        fs.rmSync(copyDir, { recursive: true, force: true });
-      } catch {
-        // Leave cleanup to the operating system if the private copy cannot be removed.
-      }
-    }
-    return undefined;
-  }
-}
-
-function installStartupExecutableCleanup(): void {
-  if (startupExecutableCleanupInstalled) return;
-  startupExecutableCleanupInstalled = true;
-  process.once('exit', () => {
-    for (const copyDir of startupExecutableCopyDirs) {
-      try {
-        fs.chmodSync(copyDir, 0o700);
-        fs.rmSync(copyDir, { recursive: true, force: true });
-      } catch {
-        // The operating system will eventually reclaim an inaccessible temporary copy.
-      }
-    }
-  });
-}
-
 function resolveExecutable(
   command: string,
   searchPath: string | undefined,
@@ -360,7 +308,7 @@ export function isTrustedExecutablePath(executable: string): boolean {
   while (true) {
     const stat = fs.statSync(current);
     if (current === executable && !stat.isFile()) return false;
-    if (stat.uid === uid || (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && groups.has(stat.gid))) {
+    if (stat.uid !== 0 || (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && groups.has(stat.gid))) {
       return false;
     }
     const parent = path.dirname(current);

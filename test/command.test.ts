@@ -10,9 +10,9 @@ import {
   gitPublicationEnv,
   gitSshPublicationEnv,
   githubCliEnv,
+  isTrustedExecutablePath,
   isWindowsExecutablePathTrusted,
   isolatedGitEnv,
-  preserveStartupExecutable,
   runCommand,
   withRunDeadline,
   type CommandRunner
@@ -161,24 +161,14 @@ describe('executableNames', () => {
   });
 });
 
-describe.runIf(process.platform !== 'win32')('preserveStartupExecutable', () => {
-  it('copies a user-owned startup executable before untrusted work can replace it', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-startup-executable-test-'));
-    const binDir = path.join(root, 'bin');
-    await fs.mkdir(binDir);
-    const source = path.join(binDir, 'gh');
-    await fs.writeFile(source, '#!/bin/sh\necho original\n', { mode: 0o700 });
+describe.runIf(process.platform !== 'win32')('isTrustedExecutablePath', () => {
+  it('rejects an executable owned by the supervisor user', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-user-owned-executable-'));
+    const executable = path.join(root, 'gh');
+    await fs.writeFile(executable, '#!/bin/sh\n', { mode: 0o700 });
 
-    const snapshot = preserveStartupExecutable('gh', binDir, () => false, root);
-    expect(snapshot).toBeDefined();
-    expect(snapshot).not.toBe(source);
-    expect(await fs.readFile(snapshot!, 'utf8')).toContain('echo original');
+    expect(isTrustedExecutablePath(executable)).toBe(false);
 
-    await fs.writeFile(source, '#!/bin/sh\necho replaced\n', { mode: 0o700 });
-    expect(await fs.readFile(snapshot!, 'utf8')).toContain('echo original');
-    expect((await fs.stat(snapshot!)).mode & 0o222).toBe(0);
-
-    await fs.chmod(path.dirname(snapshot!), 0o700);
     await fs.rm(root, { recursive: true, force: true });
   });
 });

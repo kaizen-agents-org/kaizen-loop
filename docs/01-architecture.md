@@ -185,7 +185,9 @@ kaizen run --project <slug> --scheduled --job issue-watch
 `kaizen doctor` がすべて検査する:
 
 - `git` ≥ 2.30
-- `gh` CLI(`gh auth status` が通ること)
+- `gh` CLI(`gh auth status` が通り、実体と全祖先ディレクトリが管理者所有かつ supervisor
+  ユーザー・所属グループ・他ユーザーから書き込み不可であること)。同一 UID の非信頼コードから
+  認証済み実行ファイルを保護できないため、ユーザー所有の Homebrew 版は fail closed で拒否する。
 - supervisor 環境の `GH_TOKEN` または `GITHUB_TOKEN`(`gh auth login` の保存済み認証だけでは publication に使わない)
 - `builder-agent`
 - `verifier`(`verifier.enabled: true` の場合)

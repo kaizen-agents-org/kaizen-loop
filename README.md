@@ -162,7 +162,11 @@ npm run dogfood:verify
 The CLI delegates external work instead of embedding tokens or provider SDKs:
 
 - `git` for workspace, branch, diff, commit, push, and worktree operations.
-- `gh` for issue, label, comment, and PR operations.
+- `gh` for issue, label, comment, and PR operations. Because authenticated calls happen after
+  untrusted workspace execution, the resolved binary and every ancestor directory must be owned
+  by an administrator and not writable by the supervisor user, its groups, or other users.
+  User-owned Homebrew installations are intentionally rejected; install an administrator-managed
+  copy on the supervisor `PATH`. `kaizen doctor` fails closed when no trusted copy is available.
 - `builder-agent` on `PATH` when `.kaizen/config.yml` uses the default builder command.
 - `verifier` on `PATH` when `verifier.enabled: true`.
 - `codex` for the PR guardian workflow when `guardian.enabled: true`.

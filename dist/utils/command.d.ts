@@ -28,7 +28,6 @@ export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv, initialTok
 export declare function publicationGitExecutable(command: CommandRunner): string | undefined;
 export declare function githubCliExecutable(command: CommandRunner): string | undefined;
 export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
-export declare function preserveStartupExecutable(command: string, searchPath: string | undefined, accept?: (executable: string) => boolean, tempRoot?: string): string | undefined;
 export declare function isTrustedExecutablePath(executable: string): boolean;
 export declare function isWindowsExecutablePathTrusted(executable: string, trustedRoots: string[], canWrite?: (candidate: string) => boolean): boolean;
 export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv, sshExecutable?: string | undefined): NodeJS.ProcessEnv;
