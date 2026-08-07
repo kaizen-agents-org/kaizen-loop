@@ -108,34 +108,41 @@ describe('workspace branch handling', () => {
   });
 
   it('obtains HTTPS credentials from the trusted broker only after publication validation', async () => {
-    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+    const events: string[] = [];
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      events.push(args[0] ?? command);
+      return {
       command,
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: command === 'github-token'
-        ? 'broker-secret\n'
-        : args.join(' ') === 'remote get-url --push --all origin'
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
           ? 'https://github.com/o/r.git\n'
           : args[0] === 'rev-parse'
             ? 'deadbeef\n'
             : '',
       stderr: '',
       durationMs: 1
-    }));
+      };
+    });
+    const tokenProvider = vi.fn(async () => {
+      events.push('github-token-provider');
+      return 'broker-secret\n';
+    });
 
-    await new GitClient(trustedRunner(runner, { githubToken: false }), '/workspace')
+    await new GitClient(trustedRunner(runner, { githubToken: false, githubTokenProvider: tokenProvider }), '/workspace')
       .push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
 
-    const brokerIndex = runner.mock.calls.findIndex(([command]) => command === 'github-token');
-    const cloneIndex = runner.mock.calls.findIndex(([, args]) => args[0] === 'clone');
-    const inspectionIndex = runner.mock.calls.findIndex(([, args]) => args[0] === 'grep');
-    const pushIndex = runner.mock.calls.findIndex(([, args]) => args[0] === 'push');
+    const brokerIndex = events.indexOf('github-token-provider');
+    const cloneIndex = events.indexOf('clone');
+    const inspectionIndex = events.indexOf('grep');
+    const pushIndex = events.indexOf('push');
     expect(brokerIndex).toBeGreaterThan(cloneIndex);
     expect(brokerIndex).toBeGreaterThan(inspectionIndex);
     expect(pushIndex).toBeGreaterThan(brokerIndex);
-    expect(runner.mock.calls[brokerIndex][2]?.env?.GH_TOKEN).toBeUndefined();
-    expect(runner.mock.calls[pushIndex][2]?.env?.KAIZEN_GIT_PASSWORD).toBe('broker-secret');
+    expect(tokenProvider).toHaveBeenCalledOnce();
+    const push = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(push?.[2]?.env?.KAIZEN_GIT_PASSWORD).toBe('broker-secret');
   });
 
   it('rejects malformed broker output without exposing it', async () => {
@@ -144,16 +151,17 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: command === 'github-token'
-        ? 'secret-one\nsecret-two\n'
-        : args.join(' ') === 'remote get-url --push --all origin'
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
           ? 'https://github.com/o/r.git\n'
           : '',
       stderr: '',
       durationMs: 1
     }));
 
-    const error = await new GitClient(trustedRunner(runner, { githubToken: false }), '/workspace')
+    const error = await new GitClient(trustedRunner(runner, {
+      githubToken: false,
+      githubTokenProvider: async () => 'secret-one\nsecret-two\n'
+    }), '/workspace')
       .push('kaizen/issue-330-fix', { expectedRepo: 'o/r' })
       .catch((caught: unknown) => caught);
 

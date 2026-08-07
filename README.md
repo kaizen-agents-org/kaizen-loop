@@ -121,10 +121,13 @@ For a target repository:
 Set `GH_TOKEN` or `GITHUB_TOKEN` only for credential-only `init`, `actions prepare`,
 and `actions publish` phases. Builder-capable commands reject ambient token variables
 because same-UID child processes can recover the original environment through procfs.
-For local HTTPS publication, set `KAIZEN_GITHUB_TOKEN_COMMAND` to an absolute,
-immutable, operator-managed executable. Kaizen captures only its canonical path at
-startup and invokes it with no arguments after builder and verifier processes exit,
-immediately before the validated push. It must print exactly one token line. Publication
+For local HTTPS publication, set `KAIZEN_GITHUB_TOKEN_SOCKET` to the absolute Unix
+socket of a broker running under a separate OS identity. The broker must authenticate
+the connecting supervisor by kernel peer credentials, allow the exact supervisor PID
+and executable, and reject builder/verifier descendants. Kaizen connects only after
+builder and verifier processes exit and immediately before the validated push. The
+newline-delimited JSON request is `{"version":1,"operation":"github-token"}` and the
+broker must return exactly one token line. Publication
 rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
 `KAIZEN_CRON_SCHEDULED_LAUNCHER` must name an absolute,

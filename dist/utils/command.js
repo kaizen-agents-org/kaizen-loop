@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { envWithKaizenTemp } from './temp.js';
 export const DEFAULT_ENV_ALLOWLIST = [
@@ -33,7 +34,7 @@ export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', proc
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
 const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv.slice(2));
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
-const INITIAL_GITHUB_TOKEN_COMMAND = resolveConfiguredTrustedExecutable('KAIZEN_GITHUB_TOKEN_COMMAND', process.env.KAIZEN_GITHUB_TOKEN_COMMAND);
+const INITIAL_GITHUB_TOKEN_SOCKET = resolveConfiguredBrokerSocket(process.env.KAIZEN_GITHUB_TOKEN_SOCKET);
 const activeChildren = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
@@ -152,7 +153,9 @@ Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
         githubCli: INITIAL_GITHUB_CLI_EXECUTABLE,
         ssh: INITIAL_SSH_EXECUTABLE,
         githubToken: INITIAL_GITHUB_TOKEN,
-        githubTokenCommand: INITIAL_GITHUB_TOKEN_COMMAND
+        githubTokenProvider: INITIAL_GITHUB_TOKEN_SOCKET
+            ? () => requestGithubToken(INITIAL_GITHUB_TOKEN_SOCKET)
+            : undefined
     })
 });
 export function buildAllowlistedEnv(source, allowlist, extra = {}) {
@@ -234,8 +237,8 @@ export function publicationSshExecutable(command) {
 export function publicationGithubToken(command) {
     return command[TRUSTED_COMMAND_RUNNER]?.githubToken;
 }
-export function publicationGithubTokenCommand(command) {
-    return command[TRUSTED_COMMAND_RUNNER]?.githubTokenCommand;
+export function publicationGithubTokenProvider(command) {
+    return command[TRUSTED_COMMAND_RUNNER]?.githubTokenProvider;
 }
 export function withTrustedExecutables(command, executables) {
     const trustedCommand = (executable, args, options) => command(executable, args, options);
@@ -255,23 +258,65 @@ export function executableNames(command, platform = process.platform, pathExt = 
 function resolveTrustedExecutable(command, searchPath) {
     return resolveExecutable(command, searchPath, isTrustedExecutablePath);
 }
-function resolveConfiguredTrustedExecutable(name, executable) {
-    if (!executable)
+function resolveConfiguredBrokerSocket(socketPath) {
+    if (!socketPath)
         return undefined;
-    if (!path.isAbsolute(executable))
-        throw new Error(`${name} must be an absolute path.`);
+    if (process.platform === 'win32')
+        throw new Error('KAIZEN_GITHUB_TOKEN_SOCKET requires a Unix platform.');
+    if (!path.isAbsolute(socketPath))
+        throw new Error('KAIZEN_GITHUB_TOKEN_SOCKET must be an absolute path.');
     let resolved;
     try {
-        resolved = fs.realpathSync(executable);
-        fs.accessSync(resolved, fs.constants.X_OK);
+        resolved = fs.realpathSync(socketPath);
+        const stat = fs.statSync(resolved);
+        const uid = process.getuid?.();
+        if (!stat.isSocket() || uid === undefined || stat.uid === uid) {
+            throw new Error('untrusted socket owner');
+        }
+        let current = path.dirname(resolved);
+        while (true) {
+            const directory = fs.statSync(current);
+            if (directory.uid !== 0 || (directory.mode & 0o022) !== 0 || canCurrentUserWrite(current)) {
+                throw new Error('untrusted socket directory');
+            }
+            const parent = path.dirname(current);
+            if (parent === current)
+                break;
+            current = parent;
+        }
     }
     catch {
-        throw new Error(`${name} does not resolve to an executable file.`);
-    }
-    if (!isTrustedExecutablePath(resolved)) {
-        throw new Error(`${name} must resolve to an immutable operator-managed executable.`);
+        throw new Error('KAIZEN_GITHUB_TOKEN_SOCKET must resolve to a broker socket owned by a separate identity in immutable root-owned directories.');
     }
     return resolved;
+}
+function requestGithubToken(socketPath) {
+    return new Promise((resolve, reject) => {
+        const socket = net.createConnection(socketPath);
+        let output = '';
+        const fail = () => {
+            socket.destroy();
+            reject(new Error('GitHub credential broker failed to return one non-empty token line.'));
+        };
+        socket.setEncoding('utf8');
+        socket.setTimeout(10_000, fail);
+        socket.on('connect', () => socket.end('{"version":1,"operation":"github-token"}\n'));
+        socket.on('data', (chunk) => {
+            output += chunk;
+            if (output.length > 8_193)
+                fail();
+        });
+        socket.on('error', fail);
+        socket.on('end', () => {
+            const lines = output.replace(/\r\n/g, '\n').split('\n');
+            const token = lines[0]?.trim();
+            if (!token || token.length > 8_192 || lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
+                fail();
+                return;
+            }
+            resolve(token);
+        });
+    });
 }
 function resolveExecutable(command, searchPath, accept) {
     for (const directory of searchPath?.split(path.delimiter) ?? []) {

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable, publicationSshExecutable as resolvePublicationSshExecutable, publicationGithubToken as resolvePublicationGithubToken, publicationGithubTokenCommand as resolvePublicationGithubTokenCommand, buildAllowlistedEnv, DEFAULT_ENV_ALLOWLIST } from '../utils/command.js';
+import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable, publicationSshExecutable as resolvePublicationSshExecutable, publicationGithubToken as resolvePublicationGithubToken, publicationGithubTokenProvider as resolvePublicationGithubTokenProvider } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
 export class GitClient {
     run;
@@ -279,26 +279,16 @@ export class GitClient {
         const captured = resolvePublicationGithubToken(this.run);
         if (captured)
             return captured;
-        const tokenCommand = resolvePublicationGithubTokenCommand(this.run);
-        if (!tokenCommand) {
-            throw new Error('HTTPS Git publication requires a credential-only token or KAIZEN_GITHUB_TOKEN_COMMAND.');
+        const tokenProvider = resolvePublicationGithubTokenProvider(this.run);
+        if (!tokenProvider) {
+            throw new Error('HTTPS Git publication requires a credential-only token or KAIZEN_GITHUB_TOKEN_SOCKET.');
         }
         try {
-            const result = await this.run(tokenCommand, [], {
-                cwd: path.dirname(tokenCommand),
-                env: buildAllowlistedEnv(process.env, DEFAULT_ENV_ALLOWLIST, {
-                    PATH: path.dirname(tokenCommand)
-                }),
-                timeoutMs: 10_000,
-                rejectOnNonZero: false
-            });
-            const lines = result.stdout.replace(/\r\n/g, '\n').split('\n');
-            if (result.exitCode !== 0 || lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
+            const lines = (await tokenProvider()).replace(/\r\n/g, '\n').split('\n');
+            const token = lines[0]?.trim();
+            if (!token || token.length > 8_192 || lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
                 throw new Error('invalid broker result');
             }
-            const token = lines[0]?.trim();
-            if (!token || token.length > 8_192)
-                throw new Error('invalid broker result');
             return token;
         }
         catch {
