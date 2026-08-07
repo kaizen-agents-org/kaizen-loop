@@ -33,6 +33,7 @@ export declare class WorkspaceManager {
     runSetup(config: KaizenConfig, runDeadlineAt?: number): Promise<WorkspaceCommandResult | undefined>;
     runVerify(config: KaizenConfig, runDeadlineAt?: number): Promise<WorkspaceCommandResult[]>;
     private runVerifyCommand;
+    private runDependencyRepair;
     createIssueBranch(config: KaizenConfig, issue: {
         number: number;
         title: string;
