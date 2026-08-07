@@ -46,7 +46,11 @@ describe('workspace branch handling', () => {
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'https://github.com/o/r.git\n'
+        : args[0] === 'rev-parse' && args[1] === '--verify'
+          ? 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'
+          : '',
       stderr: '',
       durationMs: 1
     }));
@@ -58,7 +62,7 @@ describe('workspace branch handling', () => {
     expect(push?.[1]).toEqual([
       'push',
       '--no-verify',
-      '--force-with-lease=refs/heads/kaizen/issue-12-retry-branch:',
+      '--force-with-lease=refs/heads/kaizen/issue-12-retry-branch:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       'https://github.com/o/r.git',
       'kaizen/issue-12-retry-branch:refs/heads/kaizen/issue-12-retry-branch'
     ]);
