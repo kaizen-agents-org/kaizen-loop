@@ -10,7 +10,7 @@ import type { KaizenConfig } from '../config/schema.js';
 import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
-import { hasSupervisorGitHubToken, type CommandRunner } from '../utils/command.js';
+import type { CommandRunner } from '../utils/command.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
@@ -32,11 +32,6 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     ? configDrift(localConfig, workspaceConfig, resolved.project)
     : undefined;
   await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, configPath).authStatus()));
-  await check(checks, 'publication auth', async () => {
-    if (!hasSupervisorGitHubToken()) {
-      throw new Error('set GH_TOKEN or GITHUB_TOKEN in the supervisor environment');
-    }
-  });
   await check(checks, 'github labels', async () => {
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');

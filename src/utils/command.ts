@@ -33,7 +33,7 @@ const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
-const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv);
+const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv.slice(2));
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
 
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -382,9 +382,11 @@ function canCurrentUserWrite(candidate: string): boolean {
 function captureGitHubAuthEnv(argv: string[]): NodeJS.ProcessEnv {
   const captured = buildAllowlistedEnv(process.env, GITHUB_CLI_AUTH_ENV_ALLOWLIST);
   const hasToken = Boolean(captured.GH_TOKEN || captured.GITHUB_TOKEN || captured.GH_ENTERPRISE_TOKEN || captured.GITHUB_ENTERPRISE_TOKEN);
-  const credentialOnlyInvocation = argv.some((arg, index) =>
-    (arg === 'actions' && (argv[index + 1] === 'prepare' || argv[index + 1] === 'publish')) || arg === 'init'
-  );
+  const commands = commandArguments(argv);
+  const command = commands[0];
+  const subcommand = commands[1];
+  const credentialOnlyInvocation = command === 'init' ||
+    (command === 'actions' && (subcommand === 'prepare' || subcommand === 'publish'));
   if (hasToken && !credentialOnlyInvocation) {
     throw new Error(
       'Refusing to start a builder-capable Kaizen process with GitHub token environment variables. Use a credential-only `init`, `actions prepare`, or `actions publish` phase, or an external broker.'
@@ -394,6 +396,29 @@ function captureGitHubAuthEnv(argv: string[]): NodeJS.ProcessEnv {
     delete process.env[key];
   }
   return captured;
+}
+
+function commandArguments(argv: string[]): string[] {
+  const commands: string[] = [];
+  for (let index = 0; index < argv.length;) {
+    const arg = argv[index];
+    if (arg === '--json') {
+      index += 1;
+      continue;
+    }
+    if (arg === '--project') {
+      if (argv[index + 1] === undefined) return [];
+      index += 2;
+      continue;
+    }
+    if (arg.startsWith('--project=')) {
+      index += 1;
+      continue;
+    }
+    commands.push(arg);
+    index += 1;
+  }
+  return commands;
 }
 
 export function gitSshPublicationEnv(

@@ -83,7 +83,8 @@ describe('githubCliEnv', () => {
 
   it('removes startup tokens from the supervisor process environment while retaining privileged access', () => {
     const script = `
-      import { gitPublicationEnv, githubCliEnv, hasSupervisorGitHubToken } from './src/utils/command.ts';
+      process.argv.splice(1, 0, 'kaizen');
+      const { gitPublicationEnv, githubCliEnv, hasSupervisorGitHubToken } = await import('./src/utils/command.ts');
       process.stdout.write(JSON.stringify({
         parentToken: process.env.GH_TOKEN,
         privilegedToken: githubCliEnv().GH_TOKEN,
@@ -109,7 +110,8 @@ describe('githubCliEnv', () => {
 
   it('restores startup authentication only for the trusted GitHub CLI boundary', () => {
     const script = `
-      import { githubCliEnv, trustedGithubCliEnv } from './src/utils/command.ts';
+      process.argv.splice(1, 0, 'kaizen');
+      const { githubCliEnv, trustedGithubCliEnv } = await import('./src/utils/command.ts');
       process.stdout.write(JSON.stringify({
         ordinary: githubCliEnv().GH_TOKEN,
         trusted: trustedGithubCliEnv().GH_TOKEN
@@ -124,10 +126,16 @@ describe('githubCliEnv', () => {
     expect(JSON.parse(stdout)).toEqual({ trusted: 'startup-token' });
   });
 
-  it('rejects startup tokens in builder-capable processes', () => {
+  it.each([
+    ['run'],
+    ['doctor'],
+    ['run', '--project', 'init'],
+    ['run', '--job', 'init']
+  ])('rejects startup tokens in builder-capable processes: %s', (...args) => {
+    const script = "process.argv.splice(1, 0, 'kaizen'); await import('./src/utils/command.ts')";
     expect(() => execFileSync(
       process.execPath,
-      ['--import', 'tsx', '--input-type=module', '-e', "await import('./src/utils/command.ts')", 'run'],
+      ['--import', 'tsx', '--input-type=module', '-e', script, '--', ...args],
       {
         cwd: path.resolve(import.meta.dirname, '..'),
         env: { ...process.env, GH_TOKEN: 'startup-token' },
@@ -135,6 +143,27 @@ describe('githubCliEnv', () => {
         stdio: 'pipe'
       }
     )).toThrow('Refusing to start a builder-capable Kaizen process');
+  });
+
+  it.each([
+    ['init'],
+    ['--json', 'init'],
+    ['--project', 'owner-repo', 'actions', 'prepare'],
+    ['actions', '--json', 'publish'],
+    ['actions', '--project', 'owner-repo', 'publish'],
+    ['actions', 'publish']
+  ])('accepts startup tokens only for exact credential-only commands: %s', (...args) => {
+    const script = "process.argv.splice(1, 0, 'kaizen'); await import('./src/utils/command.ts')";
+    expect(() => execFileSync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '-e', script, '--', ...args],
+      {
+        cwd: path.resolve(import.meta.dirname, '..'),
+        env: { ...process.env, GH_TOKEN: 'startup-token' },
+        encoding: 'utf8',
+        stdio: 'pipe'
+      }
+    )).not.toThrow();
   });
 });
 
