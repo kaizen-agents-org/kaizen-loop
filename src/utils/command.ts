@@ -356,8 +356,7 @@ function resolveConfiguredBrokerSocket(socketPath: string | undefined): string |
   try {
     resolved = fs.realpathSync(socketPath);
     const stat = fs.statSync(resolved);
-    const uid = process.getuid?.();
-    if (!stat.isSocket() || uid === undefined || stat.uid === uid) {
+    if (!stat.isSocket() || stat.uid !== 0) {
       throw new Error('untrusted socket owner');
     }
     let current = path.dirname(resolved);
@@ -372,10 +371,14 @@ function resolveConfiguredBrokerSocket(socketPath: string | undefined): string |
     }
   } catch {
     throw new Error(
-      'KAIZEN_GITHUB_TOKEN_SOCKET must resolve to a broker socket owned by a separate identity in immutable root-owned directories.'
+      'KAIZEN_GITHUB_TOKEN_SOCKET must resolve to a root-owned broker socket in immutable root-owned directories.'
     );
   }
   return resolved;
+}
+
+export function configuredGithubTokenSocket(): string | undefined {
+  return INITIAL_GITHUB_TOKEN_SOCKET;
 }
 
 function requestGithubPublication(socketPath: string, request: GitHubPublicationRequest): Promise<void> {
@@ -384,7 +387,7 @@ function requestGithubPublication(socketPath: string, request: GitHubPublication
     let output = '';
     const fail = () => {
       socket.destroy();
-      reject(new Error('GitHub credential broker failed to return one non-empty token line.'));
+      reject(new Error('GitHub credential broker failed to acknowledge publication.'));
     };
     socket.setEncoding('utf8');
     socket.setTimeout(10_000, fail);

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { KaizenConfig, RegistryProject, SchedulerJobConfig, SchedulerSchedule } from '../config/schema.js';
-import { isTrustedExecutablePath, type CommandRunner } from '../utils/command.js';
+import { configuredGithubTokenSocket, isTrustedExecutablePath, type CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
 
@@ -18,6 +18,7 @@ export async function enableScheduler(options: {
   const jobs = schedulerJobs(options.config);
   const platform = options.platform ?? process.platform;
   const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher(options.launcherTrust);
+  const githubTokenSocket = configuredGithubTokenSocket();
   if (platform === 'darwin') {
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
@@ -26,7 +27,7 @@ export async function enableScheduler(options: {
       const plistPath = launchdPlistPath(options.slug, job.name);
       paths.push(plistPath);
       await fs.mkdir(path.dirname(plistPath), { recursive: true });
-      await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher!));
+      await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher!, githubTokenSocket));
       await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath]);
     }
     return { type: 'launchd', path: paths[0], paths, jobs };
@@ -39,7 +40,7 @@ export async function enableScheduler(options: {
   for (const job of jobs) {
     lines.push(`# ${marker} ${job.name}`);
     for (const cronTime of cronTimes(job.config.schedule)) {
-      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!, githubTokenSocket)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
     }
   }
   await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
@@ -88,7 +89,7 @@ function launchdPlistPath(slug: string, jobName: string): string {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.${jobName}.plist`);
 }
 
-function launchdPlist(slug: string, job: SchedulerJob, launcher: string): string {
+function launchdPlist(slug: string, job: SchedulerJob, launcher: string, githubTokenSocket?: string): string {
   const stateDir = projectStateDir(slug);
   const schedule = launchdSchedule(job.config.schedule);
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -107,7 +108,10 @@ function launchdPlist(slug: string, job: SchedulerJob, launcher: string): string
   </array>
 ${schedule}
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string></dict>
+  <dict>
+    <key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string>
+    ${githubTokenSocket ? `<key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string>${escapeXml(githubTokenSocket)}</string>` : ''}
+  </dict>
   <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.out.log`))}</string>
   <key>StandardErrorPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.err.log`))}</string>
 </dict>
@@ -119,8 +123,9 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function commandLine(slug: string, job: SchedulerJob, launcher: string): string {
-  const command = `/bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+function commandLine(slug: string, job: SchedulerJob, launcher: string, githubTokenSocket?: string): string {
+  const socketEnv = githubTokenSocket ? `KAIZEN_GITHUB_TOKEN_SOCKET=${shQuote(githubTokenSocket)} ` : '';
+  const command = `${socketEnv}/bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
   return command;
 }
 

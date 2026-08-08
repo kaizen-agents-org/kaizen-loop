@@ -122,7 +122,7 @@ Set `GH_TOKEN` or `GITHUB_TOKEN` only for credential-only `init`, `actions prepa
 and `actions publish` phases. Builder-capable commands reject ambient token variables
 because same-UID child processes can recover the original environment through procfs.
 For local HTTPS publication, set `KAIZEN_GITHUB_TOKEN_SOCKET` to the absolute Unix
-socket of a broker running under a separate OS identity. The broker must authenticate
+socket of a root-owned broker running as root. The broker must authenticate
 the connecting supervisor by kernel peer credentials, allow the exact supervisor PID
 and executable, and reject builder/verifier descendants. Kaizen connects only after
 builder and verifier processes exit and sends the validated temporary bare-repository
