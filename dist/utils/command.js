@@ -37,6 +37,7 @@ const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_
 const INITIAL_GITHUB_TOKEN_SOCKET = resolveConfiguredBrokerSocket(process.env.KAIZEN_GITHUB_TOKEN_SOCKET);
 const INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS = publicationTimeoutMs(process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS);
 const activeChildren = new Set();
+const activePublicationSockets = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal;
@@ -155,7 +156,7 @@ Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
         ssh: INITIAL_SSH_EXECUTABLE,
         githubToken: INITIAL_GITHUB_TOKEN,
         githubPublisher: INITIAL_GITHUB_TOKEN_SOCKET
-            ? (request) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, request)
+            ? (request, timeoutMs) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, request, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
             : undefined
     })
 });
@@ -290,16 +291,24 @@ function resolveConfiguredBrokerSocket(socketPath) {
     }
     return resolved;
 }
-function requestGithubPublication(socketPath, request) {
+function requestGithubPublication(socketPath, request, timeoutMs) {
+    installShutdownHooks();
+    throwIfShutdownRequested();
     return new Promise((resolve, reject) => {
         const socket = net.createConnection(socketPath);
+        activePublicationSockets.add(socket);
         let output = '';
+        let settled = false;
         const fail = () => {
+            if (settled)
+                return;
+            settled = true;
+            activePublicationSockets.delete(socket);
             socket.destroy();
             reject(new Error('GitHub credential broker failed to acknowledge publication.'));
         };
         socket.setEncoding('utf8');
-        socket.setTimeout(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, fail);
+        socket.setTimeout(timeoutMs, fail);
         socket.on('connect', () => socket.end(`${JSON.stringify({
             version: 1,
             operation: 'git-push',
@@ -311,7 +320,10 @@ function requestGithubPublication(socketPath, request) {
                 fail();
         });
         socket.on('error', fail);
+        socket.on('close', () => activePublicationSockets.delete(socket));
         socket.on('end', () => {
+            if (settled)
+                return;
             const lines = output.replace(/\r\n/g, '\n').split('\n');
             if (lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
                 fail();
@@ -321,6 +333,8 @@ function requestGithubPublication(socketPath, request) {
                 const response = JSON.parse(lines[0] || '{}');
                 if (response.ok !== true)
                     throw new Error('broker rejected publication');
+                settled = true;
+                activePublicationSockets.delete(socket);
                 resolve();
             }
             catch {
@@ -466,7 +480,15 @@ export function withRunDeadline(runCommand, deadlineAt) {
     };
     const trustedExecutables = runCommand[TRUSTED_COMMAND_RUNNER];
     if (trustedExecutables) {
-        Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, { value: trustedExecutables });
+        const githubPublisher = trustedExecutables.githubPublisher;
+        Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, {
+            value: Object.freeze({
+                ...trustedExecutables,
+                githubPublisher: githubPublisher
+                    ? (request, timeoutMs) => githubPublisher(request, timeoutWithinDeadline(timeoutMs, deadlineAt))
+                    : undefined
+            })
+        });
     }
     return deadlineCommand;
 }
@@ -496,6 +518,8 @@ function installShutdownHooks() {
                 terminateProcessTree(child, 'SIGTERM');
                 setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000).unref();
             }
+            for (const socket of activePublicationSockets)
+                socket.destroy();
         });
     }
 }
