@@ -31,7 +31,7 @@ describe('GitHub Actions fix workflow', () => {
         return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
       }
       if (args.at(-1)?.endsWith('/events')) {
-        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
+        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' }, created_at: '2026-07-16T00:00:00Z' }]]));
       }
       if (args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
       if (command === 'verifier' && args.join(' ') === '--version --json') {
@@ -173,7 +173,7 @@ describe('GitHub Actions fix workflow', () => {
       if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
       if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
-        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
+        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' }, created_at: '2026-07-16T00:00:00Z' }]]));
       }
       if (command === 'gh' && args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
       if (command === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/git/ref/heads/main') {
@@ -227,7 +227,7 @@ describe('GitHub Actions fix workflow', () => {
       if (command === 'gh' && args[0] === 'repo') return result(command, args, 'owner/repo\n');
       if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
       if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
-        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
+        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' }, created_at: '2026-07-16T00:00:00Z' }]]));
       }
       if (command === 'gh' && args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
       return runCommand(command, args, options);
@@ -262,7 +262,7 @@ describe('GitHub Actions fix workflow', () => {
       }
       if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
         return result(command, args, JSON.stringify([[
-          { event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }
+          { event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' }, created_at: '2026-07-16T00:00:00Z' }
         ]]));
       }
       if (command === 'gh' && args.at(-1)?.endsWith('/permission')) {
@@ -328,7 +328,7 @@ describe('GitHub Actions fix workflow', () => {
       if (command === 'gh' && args[0] === 'issue') return result(command, args, JSON.stringify(issue(['kaizen', 'kaizen:ready', 'kaizen:authorized'])));
       if (command === 'gh' && args.at(-1)?.endsWith('/events')) {
         authorizationChecks += 1;
-        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' } }]]));
+        return result(command, args, JSON.stringify([[{ event: 'labeled', actor: { login: 'maintainer' }, label: { name: 'kaizen:authorized' }, created_at: '2026-07-16T00:00:00Z' }]]));
       }
       if (command === 'gh' && args.at(-1)?.endsWith('/permission')) return result(command, args, JSON.stringify({ permission: 'write' }));
       if (command === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/git/ref/heads/main') {

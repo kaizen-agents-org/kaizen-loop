@@ -103,9 +103,11 @@ export class GitHubClient {
             transition = pages
                 .flat()
                 .filter((item) => (item.event === 'labeled' || item.event === 'unlabeled')
-                && item.label?.name?.toLowerCase() === normalizedLabel)
-                .at(-1);
-            if (transition || attempt === attempts)
+                && item.label?.name?.toLowerCase() === normalizedLabel
+                && typeof item.created_at === 'string'
+                && Number.isFinite(Date.parse(item.created_at)))
+                .reduce((latest, item) => !latest || Date.parse(item.created_at) > Date.parse(latest.created_at) ? item : latest, undefined);
+            if (transition?.event === 'labeled' || attempt === attempts)
                 break;
             await sleep((options.eventRetry?.baseDelayMs ?? 0) * 2 ** (attempt - 1));
         }
