@@ -135,7 +135,7 @@ uses a 30-minute absolute broker publication deadline by default; set
 `KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS` at supervisor startup to 10000–3600000 ms.
 The broker must treat socket disconnect as cancellation and terminate its copy/push
 before it can update the remote, preventing an ambiguous late success.
-rejects refs containing Git LFS pointers because it cannot safely run repository
+Publication rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
 `KAIZEN_CRON_SCHEDULED_LAUNCHER` must name an absolute,
 operator-managed `run-scheduled.sh` whose file and ancestor directories are not
