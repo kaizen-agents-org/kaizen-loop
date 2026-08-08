@@ -10,6 +10,8 @@ export interface GitHubPublicationRequest {
     cwd: string;
     pushUrl: string;
     refspec: string;
+    expectedRepo: string;
+    expectedSha: string;
     forceWithLease?: string;
 }
 export declare const INITIAL_GIT_EXECUTABLE: string | undefined;
@@ -49,7 +51,6 @@ export declare function publicationGithubToken(command: CommandRunner): string |
 export declare function publicationGithubPublisher(command: CommandRunner): ((request: GitHubPublicationRequest) => Promise<void>) | undefined;
 export declare function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner;
 export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
-export declare function configuredGithubTokenSocket(): string | undefined;
 export declare function isTrustedExecutablePath(executable: string, canWrite?: (candidate: string) => boolean): boolean;
 export declare function isWindowsExecutablePathTrusted(executable: string, trustedRoots: string[], canWrite?: (candidate: string) => boolean): boolean;
 export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv, sshExecutable?: string | undefined): NodeJS.ProcessEnv;

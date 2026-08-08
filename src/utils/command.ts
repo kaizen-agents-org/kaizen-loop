@@ -42,6 +42,8 @@ export interface GitHubPublicationRequest {
   cwd: string;
   pushUrl: string;
   refspec: string;
+  expectedRepo: string;
+  expectedSha: string;
   forceWithLease?: string;
 }
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
@@ -375,10 +377,6 @@ function resolveConfiguredBrokerSocket(socketPath: string | undefined): string |
     );
   }
   return resolved;
-}
-
-export function configuredGithubTokenSocket(): string | undefined {
-  return INITIAL_GITHUB_TOKEN_SOCKET;
 }
 
 function requestGithubPublication(socketPath: string, request: GitHubPublicationRequest): Promise<void> {

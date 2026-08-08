@@ -224,6 +224,10 @@ export class GitClient {
             if (verifiedLfsPointers.length > 0) {
                 throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${verifiedLfsPointers.join(', ')}`);
             }
+            const validatedSha = await this.run(publicationGitExecutable, ['rev-parse', ref], {
+                cwd: publicationDir,
+                env: isolatedGitEnv()
+            });
             const lease = options.forceWithLease
                 ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
                 : [];
@@ -234,7 +238,14 @@ export class GitClient {
                     throw new Error('HTTPS Git publication requires a credential-only token or KAIZEN_GITHUB_TOKEN_SOCKET.');
                 }
                 try {
-                    await publisher({ cwd: publicationDir, pushUrl, refspec, forceWithLease: lease[0] });
+                    await publisher({
+                        cwd: publicationDir,
+                        pushUrl,
+                        refspec,
+                        expectedRepo: options.expectedRepo,
+                        expectedSha: validatedSha.stdout.trim(),
+                        forceWithLease: lease[0]
+                    });
                 }
                 catch {
                     throw new Error('GitHub credential broker failed to publish the validated ref.');
@@ -249,17 +260,13 @@ export class GitClient {
                     env
                 });
             }
-            const publishedSha = await this.run(publicationGitExecutable, ['rev-parse', ref], {
-                cwd: this.cwd,
-                env: publicationLocalEnv
-            });
             const disabledHooksPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
             await this.run(publicationGitExecutable, [
                 '-c',
                 `core.hooksPath=${disabledHooksPath}`,
                 'update-ref',
                 `refs/remotes/origin/${ref}`,
-                publishedSha.stdout.trim()
+                validatedSha.stdout.trim()
             ], { cwd: this.cwd, env: publicationLocalEnv });
             await this.run(publicationGitExecutable, ['config', `branch.${ref}.remote`, 'origin'], {
                 cwd: this.cwd,

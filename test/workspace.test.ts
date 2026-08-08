@@ -139,7 +139,9 @@ describe('workspace branch handling', () => {
     expect(brokerIndex).toBeGreaterThan(inspectionIndex);
     expect(publisher).toHaveBeenCalledWith(expect.objectContaining({
       pushUrl: 'https://github.com/o/r.git',
-      refspec: 'kaizen/issue-330-fix:refs/heads/kaizen/issue-330-fix'
+      refspec: 'kaizen/issue-330-fix:refs/heads/kaizen/issue-330-fix',
+      expectedRepo: 'o/r',
+      expectedSha: 'deadbeef'
     }));
     expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
     expect(runner.mock.calls.some(([, , options]) => options?.env?.KAIZEN_GIT_PASSWORD)).toBe(false);

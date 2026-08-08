@@ -126,8 +126,10 @@ socket of a root-owned broker running as root. The broker must authenticate
 the connecting supervisor by kernel peer credentials, allow the exact supervisor PID
 and executable, and reject builder/verifier descendants. Kaizen connects only after
 builder and verifier processes exit and sends the validated temporary bare-repository
-path, HTTPS URL, refspec, and optional force-with-lease value. The broker performs the
-authenticated Git push under its separate identity and returns only `{"ok":true}`;
+path, HTTPS URL, refspec, expected repository, expected commit SHA, and optional
+force-with-lease value. The broker must copy the bare repository into a root-owned
+private directory, revalidate the repository and SHA, perform the authenticated Git
+push under its separate identity, and return only `{"ok":true}`;
 the token never enters a Kaizen or same-UID Git child environment. Publication
 rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
@@ -135,6 +137,10 @@ pre-push hooks or upload LFS objects with a separate trusted credential path.
 operator-managed `run-scheduled.sh` whose file and ancestor directories are not
 writable by the runtime user. Provision this wrapper outside `KAIZEN_HOME`;
 `scheduler sync` installs only job definitions and never creates or refreshes it.
+Managed jobs intentionally do not inherit `KAIZEN_GITHUB_TOKEN_SOCKET`. Scheduled HTTPS
+publication requires a custom root-owned `run-scheduled.sh` that executes a fully
+root-owned runtime chain and injects the socket only into that protected process;
+the bundled user-owned runtime launcher fails closed for HTTPS publication.
 
 ```sh
 sudo install -d -o root -m 0755 /usr/local/libexec/kaizen-loop

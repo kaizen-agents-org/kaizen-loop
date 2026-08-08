@@ -289,9 +289,6 @@ function resolveConfiguredBrokerSocket(socketPath) {
     }
     return resolved;
 }
-export function configuredGithubTokenSocket() {
-    return INITIAL_GITHUB_TOKEN_SOCKET;
-}
 function requestGithubPublication(socketPath, request) {
     return new Promise((resolve, reject) => {
         const socket = net.createConnection(socketPath);
