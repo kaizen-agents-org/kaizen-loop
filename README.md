@@ -131,7 +131,7 @@ force-with-lease value. The broker must copy the bare repository into a root-own
 private directory, revalidate the repository and SHA, perform the authenticated Git
 push under its separate identity, and return only `{"ok":true}`;
 the token never enters a Kaizen or same-UID Git child environment. Publication
-uses a 30-minute broker inactivity deadline by default; set
+uses a 30-minute absolute broker publication deadline by default; set
 `KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS` at supervisor startup to 10000–3600000 ms.
 The broker must treat socket disconnect as cancellation and terminate its copy/push
 before it can update the remote, preventing an ambiguous late success.
