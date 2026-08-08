@@ -118,7 +118,7 @@ export class GitHubClient {
                 }
                 return item;
             }, undefined);
-            if (transition?.event === 'labeled' || attempt === attempts)
+            if (attempt === attempts)
                 break;
             await sleep((options.eventRetry?.baseDelayMs ?? 0) * 2 ** (attempt - 1));
         }

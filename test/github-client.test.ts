@@ -226,6 +226,37 @@ describe('GitHubClient', () => {
     expect(issueReads).toBe(2);
   });
 
+  it('uses the final retry snapshot when a stale labeled event names an earlier actor', async () => {
+    let eventReads = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue') {
+        return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));
+      }
+      if (args.at(-1)?.endsWith('/events')) {
+        eventReads += 1;
+        return ghResult(command, args, JSON.stringify([[{
+          id: eventReads < 3 ? 1 : 2,
+          event: 'labeled',
+          label: { name: 'kaizen:authorized' },
+          actor: { login: eventReads < 3 ? 'maintainer' : 'reader' },
+          created_at: eventReads < 3 ? '2026-07-16T00:00:00Z' : '2026-07-16T00:01:00Z'
+        }]]));
+      }
+      return ghResult(command, args, JSON.stringify({ permission: 'read' }));
+    });
+
+    const decision = await new GitHubClient(trustedRunner(runner), '/repo').checkExecutionAuthorization({
+      repo: 'o/r',
+      issue: 1,
+      label: 'kaizen:authorized',
+      minimumPermission: 'write',
+      eventRetry: { attempts: 3, baseDelayMs: 0 }
+    });
+
+    expect(decision).toMatchObject({ authorized: false, actor: 'reader', permission: 'read' });
+    expect(eventReads).toBe(3);
+  });
+
   it('fails closed when the latest authorization transition is removal', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'issue') return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));
