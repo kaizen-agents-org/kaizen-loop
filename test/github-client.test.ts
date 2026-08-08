@@ -194,6 +194,38 @@ describe('GitHubClient', () => {
     expect(decision).toMatchObject({ authorized: true, actor: 'current-maintainer', permission: 'triage' });
   });
 
+  it('fails closed when the live authorization label is removed during event retries', async () => {
+    let issueReads = 0;
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'issue') {
+        issueReads += 1;
+        return ghResult(command, args, JSON.stringify(issueWithLabels(
+          issueReads === 1 ? ['kaizen:authorized'] : []
+        )));
+      }
+      if (args.at(-1)?.endsWith('/events')) {
+        return ghResult(command, args, JSON.stringify([[{
+          id: 1,
+          event: 'labeled',
+          label: { name: 'kaizen:authorized' },
+          actor: { login: 'maintainer' },
+          created_at: '2026-07-16T00:00:00Z'
+        }]]));
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const decision = await new GitHubClient(trustedRunner(runner), '/repo').checkExecutionAuthorization({
+      repo: 'o/r', issue: 1, label: 'kaizen:authorized', minimumPermission: 'triage'
+    });
+
+    expect(decision).toEqual({
+      authorized: false,
+      reason: 'execution authorization label is not active: kaizen:authorized'
+    });
+    expect(issueReads).toBe(2);
+  });
+
   it('fails closed when the latest authorization transition is removal', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'issue') return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));

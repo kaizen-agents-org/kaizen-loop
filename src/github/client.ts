@@ -192,6 +192,10 @@ export class GitHubClient {
     if (transition?.event !== 'labeled' || !actor) {
       return { authorized: false, reason: `qualifying authorization label event not found: ${options.label}` };
     }
+    const refreshedIssue = await this.getIssue(options.issue);
+    if (!refreshedIssue.labels.some((label) => label.name.toLowerCase() === normalizedLabel)) {
+      return { authorized: false, reason: `execution authorization label is not active: ${options.label}` };
+    }
 
     const permissionResult = await this.gh(['api', `repos/${options.repo}/collaborators/${actor}/permission`]);
     const payload = JSON.parse(permissionResult.stdout || '{}') as {
