@@ -283,6 +283,7 @@ describe('runKaizen dry-run', () => {
       ['issue', 'list'],
       ['issue', 'view'],
       ['api', '--paginate'],
+      ['issue', 'view'],
       ['api', 'repos/o/r/collaborators/maintainer/permission']
     ]);
   });
