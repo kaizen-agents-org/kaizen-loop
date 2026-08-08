@@ -400,15 +400,18 @@ function requestGithubPublication(
     activePublicationSockets.add(socket);
     let output = '';
     let settled = false;
+    let absoluteTimeout: NodeJS.Timeout | undefined;
     const fail = () => {
       if (settled) return;
       settled = true;
+      if (absoluteTimeout) clearTimeout(absoluteTimeout);
       activePublicationSockets.delete(socket);
       socket.destroy();
       reject(new Error('GitHub credential broker failed to acknowledge publication.'));
     };
+    absoluteTimeout = setTimeout(fail, timeoutMs);
+    absoluteTimeout.unref();
     socket.setEncoding('utf8');
-    socket.setTimeout(timeoutMs, fail);
     socket.on('connect', () => socket.end(`${JSON.stringify({
       version: 1,
       operation: 'git-push',
@@ -419,7 +422,7 @@ function requestGithubPublication(
       if (output.length > 4_096) fail();
     });
     socket.on('error', fail);
-    socket.on('close', () => activePublicationSockets.delete(socket));
+    socket.on('close', fail);
     socket.on('end', () => {
       if (settled) return;
       const lines = output.replace(/\r\n/g, '\n').split('\n');
@@ -431,6 +434,7 @@ function requestGithubPublication(
         const response = JSON.parse(lines[0] || '{}') as { ok?: boolean };
         if (response.ok !== true) throw new Error('broker rejected publication');
         settled = true;
+        if (absoluteTimeout) clearTimeout(absoluteTimeout);
         activePublicationSockets.delete(socket);
         resolve();
       } catch {
