@@ -106,7 +106,18 @@ export class GitHubClient {
                 && item.label?.name?.toLowerCase() === normalizedLabel
                 && typeof item.created_at === 'string'
                 && Number.isFinite(Date.parse(item.created_at)))
-                .reduce((latest, item) => !latest || Date.parse(item.created_at) > Date.parse(latest.created_at) ? item : latest, undefined);
+                .reduce((latest, item) => {
+                if (!latest)
+                    return item;
+                const itemTimestamp = Date.parse(item.created_at);
+                const latestTimestamp = Date.parse(latest.created_at);
+                if (itemTimestamp !== latestTimestamp)
+                    return itemTimestamp > latestTimestamp ? item : latest;
+                if (Number.isSafeInteger(item.id) && Number.isSafeInteger(latest.id) && item.id !== latest.id) {
+                    return item.id > latest.id ? item : latest;
+                }
+                return item;
+            }, undefined);
             if (transition?.event === 'labeled' || attempt === attempts)
                 break;
             await sleep((options.eventRetry?.baseDelayMs ?? 0) * 2 ** (attempt - 1));

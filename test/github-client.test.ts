@@ -94,6 +94,7 @@ describe('GitHubClient', () => {
       if (args.at(-1)?.endsWith('/events')) {
         return ghResult(command, args, JSON.stringify([
           [{
+            id: 1,
             event: 'labeled',
             label: { name: 'kaizen:authorized' },
             actor: { login: 'maintainer' },
@@ -123,22 +124,25 @@ describe('GitHubClient', () => {
       if (args.at(-1)?.endsWith('/events')) {
         eventReads += 1;
         return ghResult(command, args, JSON.stringify(eventReads < 3 ? [[{
+          id: 10,
           event: 'unlabeled',
           label: { name: 'kaizen:authorized' },
           actor: { login: 'maintainer' },
           created_at: '2026-07-16T00:00:00Z'
         }]] : [[
           {
-            event: 'unlabeled',
+            id: 11,
+            event: 'labeled',
             label: { name: 'kaizen:authorized' },
             actor: { login: 'maintainer' },
             created_at: '2026-07-16T00:00:00Z'
           },
           {
-            event: 'labeled',
+            id: 10,
+            event: 'unlabeled',
             label: { name: 'kaizen:authorized' },
             actor: { login: 'maintainer' },
-            created_at: '2026-07-16T00:01:00Z'
+            created_at: '2026-07-16T00:00:00Z'
           }
         ]]));
       }
@@ -157,7 +161,7 @@ describe('GitHubClient', () => {
     expect(eventReads).toBe(3);
   });
 
-  it('selects the newest authorization transition by timestamp regardless of response order', async () => {
+  it('selects the newest authorization transition by timestamp and event ID regardless of response order', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => {
       if (args[0] === 'issue') {
         return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));
@@ -165,12 +169,14 @@ describe('GitHubClient', () => {
       if (args.at(-1)?.endsWith('/events')) {
         return ghResult(command, args, JSON.stringify([[
           {
+            id: 2,
             event: 'labeled',
             label: { name: 'kaizen:authorized' },
             actor: { login: 'current-maintainer' },
             created_at: '2026-07-16T00:01:00Z'
           },
           {
+            id: 1,
             event: 'labeled',
             label: { name: 'kaizen:authorized' },
             actor: { login: 'former-maintainer' },
@@ -193,12 +199,14 @@ describe('GitHubClient', () => {
       if (args[0] === 'issue') return ghResult(command, args, JSON.stringify(issueWithLabels(['kaizen:authorized'])));
       return ghResult(command, args, JSON.stringify([
         [{
+          id: 1,
           event: 'labeled',
           label: { name: 'kaizen:authorized' },
           actor: { login: 'maintainer' },
           created_at: '2026-07-16T00:00:00Z'
         }],
         [{
+          id: 2,
           event: 'unlabeled',
           label: { name: 'KAIZEN:AUTHORIZED' },
           actor: { login: 'maintainer' },
@@ -221,6 +229,7 @@ describe('GitHubClient', () => {
       if (args.at(-1)?.endsWith('/events')) {
         return ghResult(command, args, JSON.stringify([
           [{
+            id: 1,
             event: 'labeled',
             label: { name: 'kaizen:authorized' },
             actor: { login: 'reader' },

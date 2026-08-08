@@ -259,7 +259,7 @@ describe('runKaizen dry-run', () => {
       }
       if (args.at(-1) === 'repos/o/r/issues/1/events') {
         return result(command, args, repo, JSON.stringify([
-          [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' }, created_at: '2026-07-16T00:00:00Z' }]
+          [{ id: 1, event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' }, created_at: '2026-07-16T00:00:00Z' }]
         ]));
       }
       if (args.at(-1) === 'repos/o/r/collaborators/maintainer/permission') {
@@ -3051,7 +3051,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, '[]');
       if (command === 'gh' && args.at(-1) === 'repos/o/r/issues/1/events') {
         return result(command, args, repo, JSON.stringify([
-          [{ event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' }, created_at: '2026-07-16T00:00:00Z' }]
+          [{ id: 1, event: 'labeled', label: { name: 'kaizen:authorized' }, actor: { login: 'maintainer' }, created_at: '2026-07-16T00:00:00Z' }]
         ]));
       }
       if (command === 'gh' && args.at(-1) === 'repos/o/r/collaborators/maintainer/permission') {

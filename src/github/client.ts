@@ -147,6 +147,7 @@ export class GitHubClient {
 
     const attempts = Math.max(1, options.eventRetry?.attempts ?? 1);
     let transition: {
+      id?: number;
       event?: string;
       actor?: { login?: string };
       label?: { name?: string };
@@ -160,6 +161,7 @@ export class GitHubClient {
         `repos/${options.repo}/issues/${options.issue}/events`
       ]);
       const pages = JSON.parse(eventsResult.stdout || '[]') as Array<Array<{
+        id?: number;
         event?: string;
         actor?: { login?: string };
         label?: { name?: string };
@@ -173,11 +175,16 @@ export class GitHubClient {
           && typeof item.created_at === 'string'
           && Number.isFinite(Date.parse(item.created_at))
         )
-        .reduce<typeof transition>(
-          (latest, item) =>
-            !latest || Date.parse(item.created_at!) > Date.parse(latest.created_at!) ? item : latest,
-          undefined
-        );
+        .reduce<typeof transition>((latest, item) => {
+          if (!latest) return item;
+          const itemTimestamp = Date.parse(item.created_at!);
+          const latestTimestamp = Date.parse(latest.created_at!);
+          if (itemTimestamp !== latestTimestamp) return itemTimestamp > latestTimestamp ? item : latest;
+          if (Number.isSafeInteger(item.id) && Number.isSafeInteger(latest.id) && item.id !== latest.id) {
+            return item.id! > latest.id! ? item : latest;
+          }
+          return item;
+        }, undefined);
       if (transition?.event === 'labeled' || attempt === attempts) break;
       await sleep((options.eventRetry?.baseDelayMs ?? 0) * 2 ** (attempt - 1));
     }
