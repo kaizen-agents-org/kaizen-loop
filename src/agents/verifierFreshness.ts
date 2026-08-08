@@ -1,6 +1,6 @@
 import { VerifierAgentAdapter, type VerifierRuntimeInfo } from './verifier.js';
 import type { KaizenConfig } from '../config/schema.js';
-import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
+import { buildUntrustedEnv, type CommandRunner } from '../utils/command.js';
 
 export async function assertVerifierRuntimeFresh(
   config: KaizenConfig,
@@ -36,7 +36,7 @@ export async function resolveExpectedVerifierCommit(options: {
   const result = await options.runCommand('git', ['ls-remote', '--exit-code', repository, ref], {
     timeoutMs: options.config.verifier.freshnessTimeoutSeconds * 1_000,
     rejectOnNonZero: false,
-    env: buildAllowlistedEnv(process.env, options.config.safety.envAllowlist)
+    env: buildUntrustedEnv(process.env, options.config.safety.envAllowlist)
   });
   if (result.exitCode !== 0) {
     throw new Error(`Could not resolve trusted verifier revision ${repository} ${ref}: ${result.stderr || result.stdout || `git exited with code ${result.exitCode}`}`);

@@ -8,6 +8,7 @@ import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import { createGoalState, goalDir } from '../src/goals/state.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 
 afterEach(() => {
@@ -75,7 +76,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('succeeded');
@@ -142,7 +143,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('blocked');
@@ -171,7 +172,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     })).rejects.toThrow(/Kaizen goal is already active/);
 
     expect(runner).not.toHaveBeenCalledWith('goal-agent', expect.anything(), expect.anything());
@@ -196,7 +197,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('failed');
@@ -226,7 +227,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('failed');
@@ -257,7 +258,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('failed');
@@ -287,7 +288,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('failed');
@@ -315,7 +316,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     })).rejects.toThrow(/only active goals can run/);
   });
 
@@ -337,7 +338,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('failed');
@@ -363,7 +364,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('blocked');
@@ -409,7 +410,7 @@ describe('goal commands', () => {
       goalId: goal.id,
       assumeYes: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(result.status).toBe('blocked');
@@ -536,7 +537,7 @@ function goalRunner(options: {
       return result(command, args, runOptions?.cwd, 'built');
     }
 
-    if (command === 'git' && args.join(' ') === 'remote get-url origin') {
+    if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) {
       if (options.failRunPipeline) throw new Error('remote unavailable');
       return result(command, args, options.repo, 'https://github.com/o/r.git\n');
     }

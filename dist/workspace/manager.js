@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
-import { buildAllowlistedEnv } from '../utils/command.js';
+import { buildUntrustedEnv } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from './git.js';
@@ -219,7 +219,7 @@ export class WorkspaceManager {
         try {
             return await this.run(shell, args, {
                 cwd: this.workspacePath,
-                env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, config.safety.envAllowlist, extraEnv), this.workspacePath),
+                env: await envWithKaizenTemp(buildUntrustedEnv(process.env, config.safety.envAllowlist, extraEnv), this.workspacePath),
                 timeoutMs: boundedTimeoutMs(timeoutMs, runDeadlineAt),
                 rejectOnNonZero: false
             });

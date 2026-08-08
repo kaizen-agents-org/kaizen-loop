@@ -16,6 +16,7 @@ export interface VerifyActionsFixOptions {
     issue: number;
     patchPath: string;
     providerResultPath: string;
+    contextPath: string;
     outputDir: string;
     runCommand?: CommandRunner;
 }

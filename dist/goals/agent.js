@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { buildAllowlistedEnv } from '../utils/command.js';
+import { buildUntrustedEnv } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 const PLACEHOLDER_ISSUE_TEXT = [
@@ -97,7 +97,7 @@ export class GoalAgentAdapter {
         if (structuredCodex) {
             await fs.writeFile(schemaPath, JSON.stringify(toOpenAIStrictSchema(z.toJSONSchema(schema)), null, 2), { mode: 0o600 });
         }
-        const env = await envWithKaizenTemp(buildAllowlistedEnv(process.env, this.options.envAllowlist, {
+        const env = await envWithKaizenTemp(buildUntrustedEnv(process.env, this.options.envAllowlist, {
             KAIZEN_GOAL_RESULT_PATH: resultPath,
             KAIZEN_GOAL_MODE: mode
         }), req.cwd);

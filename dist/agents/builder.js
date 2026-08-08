@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { buildAllowlistedEnv } from '../utils/command.js';
+import { buildUntrustedEnv } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 const discoveredIssueSchema = z
     .object({
@@ -59,7 +59,7 @@ export class BuilderAgentAdapter {
             await this.runCommand(this.options.command, ['--version'], {
                 rejectOnNonZero: true,
                 timeoutMs: 30_000,
-                env: buildAllowlistedEnv(process.env, this.options.envAllowlist)
+                env: buildUntrustedEnv(process.env, this.options.envAllowlist)
             });
             return true;
         }
@@ -76,7 +76,7 @@ export class BuilderAgentAdapter {
         ]);
         await fs.mkdir(path.dirname(resultPath), { recursive: true });
         try {
-            const env = await envWithKaizenTemp(buildAllowlistedEnv(process.env, this.options.envAllowlist, {
+            const env = await envWithKaizenTemp(buildUntrustedEnv(process.env, this.options.envAllowlist, {
                 KAIZEN_BUILD_RESULT_PATH: resultPath,
                 KAIZEN_WORKSPACE_DIR: req.workspaceDir,
                 ...(req.preferredBackends?.length ? { KAIZEN_PREFERRED_AGENT: req.preferredBackends.join(',') } : {}),

@@ -1,12 +1,15 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { getKaizenHome, projectStateDir } from '../utils/paths.js';
+import { isTrustedExecutablePath } from '../utils/command.js';
+import { ConfigError } from '../utils/errors.js';
+import { projectStateDir } from '../utils/paths.js';
 export async function enableScheduler(options) {
     const jobs = schedulerJobs(options.config);
-    await installScheduledLauncher();
-    if ((options.platform ?? process.platform) === 'darwin') {
+    const platform = options.platform ?? process.platform;
+    const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher(options.launcherTrust);
+    if (platform === 'darwin') {
         await fs.mkdir(projectStateDir(options.slug), { recursive: true });
         await removeLaunchdPlists(options.slug, options.runCommand);
         const paths = [];
@@ -14,7 +17,7 @@ export async function enableScheduler(options) {
             const plistPath = launchdPlistPath(options.slug, job.name);
             paths.push(plistPath);
             await fs.mkdir(path.dirname(plistPath), { recursive: true });
-            await fs.writeFile(plistPath, launchdPlist(options.slug, job));
+            await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher));
             await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath]);
         }
         return { type: 'launchd', path: paths[0], paths, jobs };
@@ -26,7 +29,7 @@ export async function enableScheduler(options) {
     for (const job of jobs) {
         lines.push(`# ${marker} ${job.name}`);
         for (const cronTime of cronTimes(job.config.schedule)) {
-            lines.push(`${cronTime} ${commandLine(options.slug, job)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+            lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
         }
     }
     await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
@@ -58,7 +61,7 @@ function legacyLaunchdPlistPath(slug) {
 function launchdPlistPath(slug, jobName) {
     return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.${jobName}.plist`);
 }
-function launchdPlist(slug, job) {
+function launchdPlist(slug, job, launcher) {
     const stateDir = projectStateDir(slug);
     const schedule = launchdSchedule(job.config.schedule);
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -70,7 +73,7 @@ function launchdPlist(slug, job) {
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
-    <string>${escapeXml(scheduledLauncherPath())}</string>
+    <string>${escapeXml(launcher)}</string>
     <string>${escapeXml(process.execPath)}</string>
     <string>${escapeXml(slug)}</string>
     <string>${escapeXml(job.name)}</string>
@@ -87,8 +90,27 @@ ${schedule}
 function cronMarker(slug) {
     return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
-function commandLine(slug, job) {
-    return `/bin/sh ${shQuote(scheduledLauncherPath())} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+function commandLine(slug, job, launcher) {
+    const command = `/bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+    return command;
+}
+function requiredScheduledLauncher(trust = isTrustedExecutablePath) {
+    const launcher = process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER;
+    let resolvedLauncher;
+    let trusted = false;
+    if (launcher && path.isAbsolute(launcher) && path.basename(launcher) === 'run-scheduled.sh') {
+        try {
+            resolvedLauncher = fsSync.realpathSync(launcher);
+            trusted = resolvedLauncher === path.resolve(launcher) && trust(resolvedLauncher);
+        }
+        catch {
+            trusted = false;
+        }
+    }
+    if (!trusted) {
+        throw new ConfigError('Managed scheduling requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh.');
+    }
+    return resolvedLauncher;
 }
 async function removeLaunchdPlists(slug, runCommand) {
     const launchAgentsDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
@@ -231,24 +253,6 @@ function launchdDay(day) {
 }
 function cliPath() {
     return process.argv[1] ?? 'kaizen';
-}
-function scheduledLauncherPath() {
-    return path.join(getKaizenHome(), 'bin', 'run-scheduled.sh');
-}
-async function installScheduledLauncher() {
-    const scriptsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
-    const binDir = path.dirname(scheduledLauncherPath());
-    await fs.mkdir(binDir, { recursive: true });
-    for (const [sourceName, destinationName] of [
-        ['run-scheduled.sh', 'run-scheduled.sh'],
-        ['kaizen-runtime.sh', 'kaizen']
-    ]) {
-        const destination = path.join(binDir, destinationName);
-        const temporary = `${destination}.${process.pid}.tmp`;
-        await fs.copyFile(path.join(scriptsDir, sourceName), temporary);
-        await fs.chmod(temporary, 0o755);
-        await fs.rename(temporary, destination);
-    }
 }
 function escapeXml(value) {
     return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

@@ -7,6 +7,7 @@ import { executeRun } from '../src/commands/run.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -50,7 +51,7 @@ describe('runSandboxSmoke', () => {
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args[0] === 'ls-remote') return result(command, args, repo, 'b'.repeat(40) + '\trefs/heads/main\n');
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'docs/sandbox-smoke.md\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tdocs/sandbox-smoke.md\n');
@@ -66,7 +67,7 @@ describe('runSandboxSmoke', () => {
       job: 'weekly-sandbox-smoke',
       dryRun: false,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     if (!('kind' in artifact)) throw new Error('expected sandbox smoke artifact');
@@ -122,7 +123,7 @@ describe('runSandboxSmoke', () => {
       job: 'weekly-sandbox-smoke',
       dryRun: false,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     })).rejects.toThrow('Kaizen run is already active');
 
     expect(runner).not.toHaveBeenCalled();
@@ -149,7 +150,7 @@ describe('runSandboxSmoke', () => {
       project: 'o-r',
       json: true,
       assumeYes: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     })).rejects.toThrow('Smoke issue #16 was not processed: qualifying authorization label event not found: kaizen:authorized');
 
     expect(await fileExists(path.join(home, 'projects', 'o-r', 'smoke-runs'))).toBe(false);
@@ -192,7 +193,7 @@ describe('runSandboxSmoke', () => {
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args[0] === 'ls-remote') return result(command, args, repo, 'b'.repeat(40) + '\trefs/heads/main\n');
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'docs/sandbox-smoke.md\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tdocs/sandbox-smoke.md\n');
@@ -209,7 +210,7 @@ describe('runSandboxSmoke', () => {
       priority: 'P2',
       json: true,
       assumeYes: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(artifact.guardian).toMatchObject({

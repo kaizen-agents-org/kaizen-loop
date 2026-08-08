@@ -69,7 +69,7 @@ kaizen init [--agent claude|codex] [--schedule "02:00"] [--yes]
 
 ### 処理内容
 
-1. **前提検査**: Git リポジトリであること、GitHub リモート(origin)があること、`gh auth status` が通ること。失敗時は是正方法を表示して終了コード 2
+1. **前提検査**: Git リポジトリであること、GitHub リモート(origin)があること、`gh auth status` が通ること、supervisor 環境に publication 用の `GH_TOKEN` または `GITHUB_TOKEN` があること。失敗時は是正方法を表示して終了コード 2
 2. **対話セットアップ**(`--yes` で全デフォルト採用):
    - builder-agent へ渡す希望バックエンド(生成時のデフォルト: claude)。このリポジトリのコミット済み `.kaizen/config.yml` は `agent.default: codex` を設定するため、通常の Issue 処理は Codex を希望バックエンドとして渡す
    - 起動時刻(デフォルト: 02:00。登録済みプロジェクトと重複しない時刻を提案)
@@ -129,7 +129,7 @@ kaizen fix <Issue番号> [--project <slug>] [--agent claude|codex] [--yes] [--js
 GitHub Actions の reusable workflow は、credential-free verification job で次の deferred-publish 形式を使う。
 
 ```sh
-kaizen fix <Issue番号> --actions-patch <patch> --provider-result <json> --artifact-dir <dir> --json
+kaizen fix <Issue番号> --actions-patch <patch> --provider-result <json> --actions-context <context.json> --artifact-dir <dir> --json
 kaizen actions publish --artifact-dir <dir> --json
 ```
 
@@ -410,7 +410,7 @@ kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--guardia
 kaizen doctor [--project <slug>] [--repair]
 ```
 
-検査項目: gh 認証、開発 checkout と workspace の設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。運用検査には workspace 設定を使い、開発 checkout と意味的に異なる場合は `configuration.drift` に診断情報を返す。この差は feature branch 上の作業でも発生し得るため、それだけでは `ok: false` にしない。構造化された `verifier --version --json` provenance は必須であり、設定された canonical repository/ref の期待 commit、build commit、runtime commit が一致し、runtime が clean な場合だけ正常とする。旧 verifier のプレーンな version 出力は鮮度を証明できないため拒否する。再利用可能な Actions workflow は既定の `kaizen-agents-org/verifier` の `refs/heads/main` trust root のみをサポートし、カスタム trust root には対応する trusted workflow checkout が必要になる。
+検査項目: gh 認証、開発 checkout と workspace の設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。`doctor` は builder smoke test を実行するため、publication token を受け取らない。publication 用 token は credential-only な `init` / `actions prepare` / `actions publish` の各境界で検査する。運用検査には workspace 設定を使い、開発 checkout と意味的に異なる場合は `configuration.drift` に診断情報を返す。この差は feature branch 上の作業でも発生し得るため、それだけでは `ok: false` にしない。構造化された `verifier --version --json` provenance は必須であり、設定された canonical repository/ref の期待 commit、build commit、runtime commit が一致し、runtime が clean な場合だけ正常とする。旧 verifier のプレーンな version 出力は鮮度を証明できないため拒否する。再利用可能な Actions workflow は既定の `kaizen-agents-org/verifier` の `refs/heads/main` trust root のみをサポートし、カスタム trust root には対応する trusted workflow checkout が必要になる。
 
 `--repair`: 設定から必要な GitHub ラベルを再作成する。複数 repo の registry 再構築、stale ロック削除、ワークスペース再作成、スケジューラ定義の再生成は `kaizen fleet` を使う。
 

@@ -8,7 +8,7 @@ import { VerifierAgentAdapter } from '../agents/verifier.js';
 import { assertVerifierRuntimeFresh } from '../agents/verifierFreshness.js';
 import { loadConfig } from '../config/config.js';
 import { GitHubClient } from '../github/client.js';
-import { runCommand } from '../utils/command.js';
+import { githubCliExecutable, publicationGitExecutable, runCommand, trustedGithubCliEnv } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
@@ -37,6 +37,26 @@ const providerResultSchema = z.object({
         failureClass: z.enum(['none', 'external_action_failure'])
     }).strict()).default([])
 }).strict();
+const preparedContextSchema = z.object({
+    version: z.literal(1),
+    repo: z.string().regex(/^[^/]+\/[^/]+$/),
+    issue: z.object({
+        number: z.number().int().positive(),
+        title: z.string(),
+        body: z.string(),
+        labels: z.array(z.object({ name: z.string(), createdAt: z.string().optional() }).strict()),
+        createdAt: z.string(),
+        comments: z.array(z.object({ body: z.string(), createdAt: z.string().optional() }).strict()),
+        url: z.string().optional()
+    }).strict(),
+    baseSha: z.string().regex(/^[0-9a-f]{40}$/),
+    authorization: z.object({
+        authorized: z.literal(true),
+        actor: z.string(),
+        permission: z.enum(['none', 'read', 'triage', 'write', 'maintain', 'admin']),
+        reason: z.string()
+    }).strict()
+}).strict();
 const verifiedArtifactSchema = z.object({
     version: z.literal(1),
     repo: z.string().regex(/^[^/]+\/[^/]+$/),
@@ -63,7 +83,7 @@ const verifiedArtifactSchema = z.object({
 export async function prepareActionsFix(options) {
     const command = options.runCommand ?? runCommand;
     const context = await loadActionsContext(options.cwd, options.issue, command);
-    await assertAuthorized(context.github, context.repo, context.issue, context.config);
+    const authorization = await assertAuthorized(context.github, context.repo, context.issue, context.config);
     assertActionsVerifierTrustRoot(context.config);
     await assertVerifierRuntimeFresh(context.config, command, ACTIONS_VERIFIER_COMMIT);
     const git = new GitClient(command, options.cwd);
@@ -76,8 +96,9 @@ export async function prepareActionsFix(options) {
     await fs.writeFile(path.join(options.outputDir, 'context.json'), `${JSON.stringify({
         version: 1,
         repo: context.repo,
-        issue: context.issue.number,
-        baseSha
+        issue: context.issue,
+        baseSha,
+        authorization
     }, null, 2)}\n`);
     return { repo: context.repo, issue: context.issue.number, baseSha, promptPath: path.join(options.outputDir, 'prompt.md') };
 }
@@ -91,9 +112,13 @@ function assertActionsVerifierTrustRoot(config) {
 }
 export async function verifyActionsFix(options) {
     const command = options.runCommand ?? runCommand;
-    const context = await loadActionsContext(options.cwd, options.issue, command);
-    await assertAuthorized(context.github, context.repo, context.issue, context.config);
+    const context = await loadPreparedActionsContext(options.cwd, options.issue, options.contextPath);
     assertActionsVerifierTrustRoot(context.config);
+    const git = new GitClient(command, options.cwd);
+    const baseSha = await git.revParse('HEAD');
+    if (baseSha !== context.baseSha) {
+        throw new Error(`Verification checkout ${baseSha} does not match prepared base ${context.baseSha}.`);
+    }
     const patch = await readBoundedPatch(options.patchPath);
     const provider = providerResultSchema.parse(JSON.parse(await fs.readFile(options.providerResultPath, 'utf8')));
     const builder = parseAgentResult(provider.finalMessage);
@@ -101,8 +126,6 @@ export async function verifyActionsFix(options) {
         throw new Error(`Provider reported blocked: ${builder.blockedReason ?? builder.summary}`);
     if (builder.status === 'error')
         throw new Error(`Provider failed: ${builder.summary}`);
-    const git = new GitClient(command, options.cwd);
-    const baseSha = await git.revParse('HEAD');
     await applyPatch(command, options.cwd, options.patchPath);
     await assertWorkingTreeMatchesPatch(command, options.cwd, sha256(patch));
     const workspace = new WorkspaceManager(command, options.cwd);
@@ -196,7 +219,7 @@ export async function publishActionsFix(options) {
     await command('git', ['switch', '-c', branch], { cwd: options.cwd });
     await command('git', ['add', '-A', '--', ...artifact.files], { cwd: options.cwd });
     await command('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=github-actions[bot]', '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com', 'commit', '-m', `kaizen: ${summary} (#${artifact.issue.number})`], { cwd: options.cwd });
-    await git.push(branch);
+    await git.push(branch, { expectedRepo: context.repo });
     const body = buildPullRequestBody(artifact);
     const pr = await context.github.createPullRequest({
         base: context.config.git.defaultBranch,
@@ -213,13 +236,31 @@ async function loadActionsContext(cwd, issueNumber, command) {
         throw new Error('GitHub Actions execution requires safety.operationMode: external.');
     if (config.policy.mode !== 'pr-only')
         throw new Error('GitHub Actions execution requires policy.mode: pr-only.');
-    const repoResult = await command('gh', ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], { cwd });
+    const gh = githubCliExecutable(command);
+    if (!gh)
+        throw new Error('Could not resolve a trusted GitHub CLI executable.');
+    const repoResult = await command(gh, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], {
+        cwd,
+        env: trustedGithubCliEnv(process.env, gh, publicationGitExecutable(command))
+    });
     const repo = repoResult.stdout.trim();
     if (!/^[^/]+\/[^/]+$/.test(repo))
         throw new Error(`Could not resolve GitHub repository: ${repo}`);
     const github = new GitHubClient(command, cwd);
     const issue = await github.getIssue(issueNumber);
     return { config, repo, github, issue };
+}
+async function loadPreparedActionsContext(cwd, issueNumber, contextPath) {
+    const config = await loadConfig(cwd);
+    if (config.safety.operationMode !== 'external')
+        throw new Error('GitHub Actions execution requires safety.operationMode: external.');
+    if (config.policy.mode !== 'pr-only')
+        throw new Error('GitHub Actions execution requires policy.mode: pr-only.');
+    const prepared = preparedContextSchema.parse(JSON.parse(await fs.readFile(contextPath, 'utf8')));
+    if (prepared.issue.number !== issueNumber) {
+        throw new Error(`Prepared issue #${prepared.issue.number} does not match requested issue #${issueNumber}.`);
+    }
+    return { config, ...prepared };
 }
 async function assertAuthorized(github, repo, issue, config) {
     const eligible = issue.labels.some((label) => label.name.toLowerCase() === config.issues.label.toLowerCase());
@@ -241,6 +282,9 @@ async function assertAuthorized(github, repo, issue, config) {
     });
     if (!decision.authorized)
         throw new Error(`Execution is not authorized: ${decision.reason}`);
+    if (!decision.actor || !decision.permission)
+        throw new Error('Execution authorization evidence is incomplete.');
+    return { ...decision, authorized: true, actor: decision.actor, permission: decision.permission };
 }
 async function readBoundedPatch(patchPath) {
     const stats = await fs.stat(patchPath);

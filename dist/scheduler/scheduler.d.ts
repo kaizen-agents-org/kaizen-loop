@@ -1,11 +1,12 @@
 import type { KaizenConfig, RegistryProject, SchedulerJobConfig } from '../config/schema.js';
-import type { CommandRunner } from '../utils/command.js';
+import { type CommandRunner } from '../utils/command.js';
 export declare function enableScheduler(options: {
     slug: string;
     project: RegistryProject;
     config: KaizenConfig;
     runCommand: CommandRunner;
     platform?: NodeJS.Platform;
+    launcherTrust?: (launcher: string) => boolean;
 }): Promise<{
     type: 'launchd' | 'cron';
     path?: string;

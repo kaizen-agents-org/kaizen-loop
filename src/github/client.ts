@@ -1,5 +1,10 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { githubCliEnv, type CommandRunner } from '../utils/command.js';
+import {
+  trustedGithubCliEnv,
+  githubCliExecutable as resolveGitHubCliExecutable,
+  publicationGitExecutable as resolvePublicationGitExecutable,
+  type CommandRunner
+} from '../utils/command.js';
 import {
   buildDiscoveredIssueFingerprint,
   extractEvidence,
@@ -510,11 +515,18 @@ export class GitHubClient {
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
+    const githubCliExecutable = resolveGitHubCliExecutable(this.run);
+    if (!githubCliExecutable) {
+      throw new Error('Trusted GitHub CLI executable was not found before untrusted work.');
+    }
     let lastError: unknown;
     const attempts = options.noRetry ? 1 : 3;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        return await this.run('gh', args, { cwd: this.cwd, env: githubCliEnv() });
+        return await this.run(githubCliExecutable, args, {
+          cwd: this.cwd,
+          env: trustedGithubCliEnv(process.env, githubCliExecutable, resolvePublicationGitExecutable(this.run))
+        });
       } catch (error) {
         const message = String(error);
         if (options.ignoreAlreadyExists && /already exists/i.test(message)) return emptyResult(args, this.cwd);

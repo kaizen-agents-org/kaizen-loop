@@ -57,8 +57,10 @@ export declare class GitClient {
         deleted: number;
     }>>;
     workingTreeDiff(): Promise<string>;
-    push(ref: string, options?: {
+    push(ref: string, options: {
         forceWithLease?: boolean;
+        expectedRepo: string;
     }): Promise<void>;
     private git;
 }
+export declare function isGitLfsPointer(content: string): boolean;
