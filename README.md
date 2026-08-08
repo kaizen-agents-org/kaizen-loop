@@ -131,6 +131,10 @@ force-with-lease value. The broker must copy the bare repository into a root-own
 private directory, revalidate the repository and SHA, perform the authenticated Git
 push under its separate identity, and return only `{"ok":true}`;
 the token never enters a Kaizen or same-UID Git child environment. Publication
+uses a 30-minute broker inactivity deadline by default; set
+`KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS` at supervisor startup to 10000–3600000 ms.
+The broker must treat socket disconnect as cancellation and terminate its copy/push
+before it can update the remote, preventing an ambiguous late success.
 rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
 `KAIZEN_CRON_SCHEDULED_LAUNCHER` must name an absolute,
@@ -141,6 +145,9 @@ Managed jobs intentionally do not inherit `KAIZEN_GITHUB_TOKEN_SOCKET`. Schedule
 publication requires a custom root-owned `run-scheduled.sh` that executes a fully
 root-owned runtime chain and injects the socket only into that protected process;
 the bundled user-owned runtime launcher fails closed for HTTPS publication.
+Managed cron and launchd definitions explicitly clear inherited socket values before
+the wrapper starts; a protected launcher may inject the socket only after entering its
+root-owned runtime chain.
 
 ```sh
 sudo install -d -o root -m 0755 /usr/local/libexec/kaizen-loop

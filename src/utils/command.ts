@@ -52,6 +52,9 @@ const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH)
 const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv.slice(2));
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
 const INITIAL_GITHUB_TOKEN_SOCKET = resolveConfiguredBrokerSocket(process.env.KAIZEN_GITHUB_TOKEN_SOCKET);
+const INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS = publicationTimeoutMs(
+  process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS
+);
 
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const PROCESS_TERMINATION_GRACE_MS = 250;
@@ -388,7 +391,7 @@ function requestGithubPublication(socketPath: string, request: GitHubPublication
       reject(new Error('GitHub credential broker failed to acknowledge publication.'));
     };
     socket.setEncoding('utf8');
-    socket.setTimeout(10_000, fail);
+    socket.setTimeout(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, fail);
     socket.on('connect', () => socket.end(`${JSON.stringify({
       version: 1,
       operation: 'git-push',
@@ -414,6 +417,15 @@ function requestGithubPublication(socketPath: string, request: GitHubPublication
       }
     });
   });
+}
+
+function publicationTimeoutMs(value: string | undefined): number {
+  if (!value) return 30 * 60_000;
+  const timeout = Number(value);
+  if (!Number.isSafeInteger(timeout) || timeout < 10_000 || timeout > 60 * 60_000) {
+    throw new Error('KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS must be an integer from 10000 to 3600000.');
+  }
+  return timeout;
 }
 
 function resolveExecutable(
