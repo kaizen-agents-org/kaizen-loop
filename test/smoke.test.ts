@@ -150,6 +150,7 @@ describe('runSandboxSmoke', () => {
       project: 'o-r',
       json: true,
       assumeYes: true,
+      authorizationEventRetry: { attempts: 5, baseDelayMs: 0 },
       runCommand: trustedRunner(runner)
     })).rejects.toThrow('Smoke issue #16 was not processed: qualifying authorization label event not found: kaizen:authorized');
 

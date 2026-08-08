@@ -24,6 +24,10 @@ export interface SandboxSmokeOptions {
   assumeYes?: boolean;
   schedulerJob?: string;
   existingLock?: RunLock;
+  authorizationEventRetry?: {
+    attempts: number;
+    baseDelayMs: number;
+  };
   runCommand: CommandRunner;
 }
 
@@ -106,7 +110,7 @@ export async function runSandboxSmoke(options: SandboxSmokeOptions): Promise<San
     scheduled: Boolean(options.schedulerJob),
     job: options.schedulerJob,
     existingLock: options.existingLock,
-    authorizationEventRetry: {
+    authorizationEventRetry: options.authorizationEventRetry ?? {
       attempts: 5,
       baseDelayMs: 250
     },

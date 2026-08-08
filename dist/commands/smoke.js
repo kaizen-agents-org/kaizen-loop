@@ -32,7 +32,7 @@ export async function runSandboxSmoke(options) {
         scheduled: Boolean(options.schedulerJob),
         job: options.schedulerJob,
         existingLock: options.existingLock,
-        authorizationEventRetry: {
+        authorizationEventRetry: options.authorizationEventRetry ?? {
             attempts: 5,
             baseDelayMs: 250
         },
