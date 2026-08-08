@@ -9,7 +9,7 @@ import {
   publicationGitExecutable as resolvePublicationGitExecutable,
   publicationSshExecutable as resolvePublicationSshExecutable,
   publicationGithubToken as resolvePublicationGithubToken,
-  publicationGithubTokenProvider as resolvePublicationGithubTokenProvider,
+  publicationGithubPublisher as resolvePublicationGithubPublisher,
   type CommandRunner
 } from '../utils/command.js';
 import { repoFromRemote } from '../utils/slug.js';
@@ -267,16 +267,31 @@ export class GitClient {
       if (verifiedLfsPointers.length > 0) {
         throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${verifiedLfsPointers.join(', ')}`);
       }
-      const env = pushUrl.startsWith('https://')
-        ? gitPublicationEnv(process.env, await this.publicationToken())
-        : gitSshPublicationEnv(process.env, resolvePublicationSshExecutable(this.run));
       const lease = options.forceWithLease
         ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
         : [];
-      await this.run(publicationGitExecutable, ['push', '--no-verify', ...lease, pushUrl, `${ref}:refs/heads/${ref}`], {
-        cwd: publicationDir,
-        env
-      });
+      const refspec = `${ref}:refs/heads/${ref}`;
+      if (pushUrl.startsWith('https://') && !resolvePublicationGithubToken(this.run)) {
+        const publisher = resolvePublicationGithubPublisher(this.run);
+        if (!publisher) {
+          throw new Error(
+            'HTTPS Git publication requires a credential-only token or KAIZEN_GITHUB_TOKEN_SOCKET.'
+          );
+        }
+        try {
+          await publisher({ cwd: publicationDir, pushUrl, refspec, forceWithLease: lease[0] });
+        } catch {
+          throw new Error('GitHub credential broker failed to publish the validated ref.');
+        }
+      } else {
+        const env = pushUrl.startsWith('https://')
+          ? gitPublicationEnv(process.env, resolvePublicationGithubToken(this.run))
+          : gitSshPublicationEnv(process.env, resolvePublicationSshExecutable(this.run));
+        await this.run(publicationGitExecutable, ['push', '--no-verify', ...lease, pushUrl, refspec], {
+          cwd: publicationDir,
+          env
+        });
+      }
       const publishedSha = await this.run(publicationGitExecutable, ['rev-parse', ref], {
         cwd: this.cwd,
         env: publicationLocalEnv
@@ -313,27 +328,6 @@ export class GitClient {
       throw publicationError;
     }
     if (cleanupError !== undefined) throw cleanupError;
-  }
-
-  private async publicationToken(): Promise<string> {
-    const captured = resolvePublicationGithubToken(this.run);
-    if (captured) return captured;
-    const tokenProvider = resolvePublicationGithubTokenProvider(this.run);
-    if (!tokenProvider) {
-      throw new Error(
-        'HTTPS Git publication requires a credential-only token or KAIZEN_GITHUB_TOKEN_SOCKET.'
-      );
-    }
-    try {
-      const lines = (await tokenProvider()).replace(/\r\n/g, '\n').split('\n');
-      const token = lines[0]?.trim();
-      if (!token || token.length > 8_192 || lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
-        throw new Error('invalid broker result');
-      }
-      return token;
-    } catch {
-      throw new Error('GitHub credential broker failed to return one non-empty token line.');
-    }
   }
 
   private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv }) {

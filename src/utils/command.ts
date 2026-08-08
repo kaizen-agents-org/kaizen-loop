@@ -36,7 +36,13 @@ export interface TrustedExecutables {
   githubCli?: string;
   ssh?: string;
   githubToken?: string;
-  githubTokenProvider?: () => Promise<string>;
+  githubPublisher?: (request: GitHubPublicationRequest) => Promise<void>;
+}
+export interface GitHubPublicationRequest {
+  cwd: string;
+  pushUrl: string;
+  refspec: string;
+  forceWithLease?: string;
 }
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
@@ -193,8 +199,8 @@ Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
     githubCli: INITIAL_GITHUB_CLI_EXECUTABLE,
     ssh: INITIAL_SSH_EXECUTABLE,
     githubToken: INITIAL_GITHUB_TOKEN,
-    githubTokenProvider: INITIAL_GITHUB_TOKEN_SOCKET
-      ? () => requestGithubToken(INITIAL_GITHUB_TOKEN_SOCKET)
+    githubPublisher: INITIAL_GITHUB_TOKEN_SOCKET
+      ? (request: GitHubPublicationRequest) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, request)
       : undefined
   })
 });
@@ -312,8 +318,10 @@ export function publicationGithubToken(command: CommandRunner): string | undefin
   return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.githubToken;
 }
 
-export function publicationGithubTokenProvider(command: CommandRunner): (() => Promise<string>) | undefined {
-  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.githubTokenProvider;
+export function publicationGithubPublisher(
+  command: CommandRunner
+): ((request: GitHubPublicationRequest) => Promise<void>) | undefined {
+  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.githubPublisher;
 }
 
 export function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner {
@@ -370,7 +378,7 @@ function resolveConfiguredBrokerSocket(socketPath: string | undefined): string |
   return resolved;
 }
 
-function requestGithubToken(socketPath: string): Promise<string> {
+function requestGithubPublication(socketPath: string, request: GitHubPublicationRequest): Promise<void> {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let output = '';
@@ -380,20 +388,29 @@ function requestGithubToken(socketPath: string): Promise<string> {
     };
     socket.setEncoding('utf8');
     socket.setTimeout(10_000, fail);
-    socket.on('connect', () => socket.end('{"version":1,"operation":"github-token"}\n'));
+    socket.on('connect', () => socket.end(`${JSON.stringify({
+      version: 1,
+      operation: 'git-push',
+      ...request
+    })}\n`));
     socket.on('data', (chunk) => {
       output += chunk;
-      if (output.length > 8_193) fail();
+      if (output.length > 4_096) fail();
     });
     socket.on('error', fail);
     socket.on('end', () => {
       const lines = output.replace(/\r\n/g, '\n').split('\n');
-      const token = lines[0]?.trim();
-      if (!token || token.length > 8_192 || lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
+      if (lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
         fail();
         return;
       }
-      resolve(token);
+      try {
+        const response = JSON.parse(lines[0] || '{}') as { ok?: boolean };
+        if (response.ok !== true) throw new Error('broker rejected publication');
+        resolve();
+      } catch {
+        fail();
+      }
     });
   });
 }

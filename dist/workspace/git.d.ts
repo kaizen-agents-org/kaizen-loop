@@ -61,7 +61,6 @@ export declare class GitClient {
         forceWithLease?: boolean;
         expectedRepo: string;
     }): Promise<void>;
-    private publicationToken;
     private git;
 }
 export declare function isGitLfsPointer(content: string): boolean;

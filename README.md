@@ -125,9 +125,10 @@ For local HTTPS publication, set `KAIZEN_GITHUB_TOKEN_SOCKET` to the absolute Un
 socket of a broker running under a separate OS identity. The broker must authenticate
 the connecting supervisor by kernel peer credentials, allow the exact supervisor PID
 and executable, and reject builder/verifier descendants. Kaizen connects only after
-builder and verifier processes exit and immediately before the validated push. The
-newline-delimited JSON request is `{"version":1,"operation":"github-token"}` and the
-broker must return exactly one token line. Publication
+builder and verifier processes exit and sends the validated temporary bare-repository
+path, HTTPS URL, refspec, and optional force-with-lease value. The broker performs the
+authenticated Git push under its separate identity and returns only `{"ok":true}`;
+the token never enters a Kaizen or same-UID Git child environment. Publication
 rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
 `KAIZEN_CRON_SCHEDULED_LAUNCHER` must name an absolute,
