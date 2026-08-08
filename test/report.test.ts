@@ -8,6 +8,7 @@ import { reportIssue, reportIssueNow } from '../src/commands/report.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 const execFileAsync = promisify(execFile);
 const CLI_TEST_TIMEOUT_MS = 20_000;
@@ -135,7 +136,7 @@ describe('reportIssue', () => {
       prOnly: false,
       agent: 'codex',
       extraLabels: ['customer-impact'],
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(created.number).toBe(14);
@@ -167,7 +168,7 @@ describe('reportIssue', () => {
       prOnly: false,
       queue: true,
       extraLabels: [],
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     const labelCreates = runner.mock.calls.filter(([, args]) => args.join(' ').startsWith('label create'));
@@ -203,7 +204,7 @@ describe('reportIssueNow', () => {
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && args[0] === 'ls-remote') return result(command, args, repo, 'b'.repeat(40) + '\trefs/heads/main\n');
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -221,7 +222,7 @@ describe('reportIssueNow', () => {
       prOnly: false,
       extraLabels: [],
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.issue.number).toBe(14);
@@ -283,14 +284,31 @@ async function setupFakeBins() {
 async function runCli(options: { cwd: string; binDir: string; args: string[] }) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-cli-'));
   const ipcTmpDir = cliIpcTmpDir();
+  const childEnv = { ...process.env };
+  for (const key of [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+    'GH_CONFIG_DIR',
+    'SSH_AUTH_SOCK',
+    'SSH_ASKPASS',
+    'GIT_ASKPASS',
+    'GIT_CONFIG_GLOBAL',
+    'GIT_CONFIG_SYSTEM',
+    'GIT_CONFIG_COUNT',
+    'GIT_SSH_COMMAND',
+    'GIT_TERMINAL_PROMPT'
+  ]) delete childEnv[key];
   try {
     return await execFileAsync(
       process.execPath,
-      [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'cli.ts'), ...options.args],
+      [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'test', 'fixtures', 'trusted-cli.ts'), ...options.args],
       {
         cwd: options.cwd,
         env: {
-          ...process.env,
+          ...childEnv,
+          KAIZEN_TEST_TRUSTED_BIN: options.binDir,
           KAIZEN_TMPDIR: tmpDir,
           PATH: `${options.binDir}${path.delimiter}${process.env.PATH ?? ''}`,
           TMPDIR: ipcTmpDir,
@@ -365,7 +383,7 @@ case "$*" in
   'ls-remote --exit-code https://github.com/kaizen-agents-org/verifier.git refs/heads/main')
     printf '%s\\t%s\\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' 'refs/heads/main'
     ;;
-  'remote get-url origin')
+  'remote get-url origin'|'remote get-url --push --all origin')
     printf '%s\\n' 'https://github.com/o/r.git'
     ;;
   'diff --name-only origin/main...HEAD')

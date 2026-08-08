@@ -8,7 +8,7 @@ The workflow deliberately separates credentials and generated code:
 
 1. `prepare` re-fetches the issue and verifies the active authorization label and the label actor's current permission.
 2. `codex` generates a binary patch through `openai/codex-action` with read-only repository permission, checkout credentials disabled, and its API-key proxy enabled. If it fails, `claude` tries `anthropics/claude-code-action` with the same read-only repository permission.
-3. `verify` has no provider secret or write-capable token. It applies the patch through `kaizen fix --actions-patch`, runs repository setup/verification, invokes the pinned trusted verifier, and seals the patch SHA-256 plus evidence in an artifact.
+3. `verify` has no provider secret or GitHub token. It consumes the authorized prepare context through `--actions-context`, applies the patch through `kaizen fix --actions-patch`, runs repository setup/verification, invokes the pinned trusted verifier, and seals the patch SHA-256 plus evidence in an artifact.
 4. `publish` has no provider secret and does not execute repository code. It re-checks authorization, requires the same base commit and patch hash, disables Git hooks, pushes a branch, and creates a ready PR with a closing keyword.
 
 The provider artifact records the selected provider and preceding failed attempts. A GitHub Action failure that does not expose a structured provider error is recorded as `external_action_failure`; it falls back without being treated as a human-input block. Provider-native 429/timeout details remain visible in the Action log, while the stable workflow contract stays fail-closed.

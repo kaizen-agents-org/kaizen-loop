@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
+import { buildUntrustedEnv, type CommandRunner } from '../utils/command.js';
 import { extractLastJsonObject } from '../utils/json.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 
@@ -133,7 +133,7 @@ export class VerifierAgentAdapter {
     const commandOptions = {
       rejectOnNonZero: true,
       timeoutMs: 30_000,
-      env: buildAllowlistedEnv(process.env, this.options.envAllowlist)
+      env: buildUntrustedEnv(process.env, this.options.envAllowlist)
     };
     let result: Awaited<ReturnType<CommandRunner>>;
     let structuredError: string | undefined;
@@ -172,7 +172,7 @@ export class VerifierAgentAdapter {
 
     try {
       const env = await envWithKaizenTemp(
-        buildAllowlistedEnv(process.env, this.options.envAllowlist, {
+        buildUntrustedEnv(process.env, this.options.envAllowlist, {
           KAIZEN_VERIFIER_RESULT_PATH: resultPath,
           KAIZEN_WORKSPACE_DIR: req.workspaceDir
         }),

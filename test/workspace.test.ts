@@ -7,6 +7,12 @@ import type { CommandRunner } from '../src/utils/command.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 import { GitClient } from '../src/workspace/git.js';
 import { CheckpointBranchDivergedError, CheckpointBranchMissingError, WorkspaceManager } from '../src/workspace/manager.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 describe('workspace branch handling', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -34,26 +40,331 @@ describe('workspace branch handling', () => {
   });
 
   it('can force-with-lease when pushing regenerated issue branches', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,
       args,
       cwd: '/workspace',
       exitCode: 0,
-      stdout: '',
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'https://github.com/o/r.git\n'
+        : args[0] === 'rev-parse' && args[1] === '--verify'
+          ? 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'
+          : '',
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace');
+    const git = new GitClient(trustedRunner(runner), '/workspace');
 
-    await git.push('kaizen/issue-12-retry-branch', { forceWithLease: true });
+    await git.push('kaizen/issue-12-retry-branch', { forceWithLease: true, expectedRepo: 'o/r' });
 
-    expect(runner.mock.calls[0][1]).toEqual([
+    const push = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(push?.[1]).toEqual([
       'push',
-      '-u',
-      '--force-with-lease',
-      'origin',
-      'kaizen/issue-12-retry-branch'
+      '--no-verify',
+      '--force-with-lease=refs/heads/kaizen/issue-12-retry-branch:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      'https://github.com/o/r.git',
+      'kaizen/issue-12-retry-branch:refs/heads/kaizen/issue-12-retry-branch'
     ]);
+  });
+
+  it('uses supervisor GitHub credentials only for publication pushes', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    vi.stubEnv('SSH_AUTH_SOCK', '/supervisor-agent');
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const git = new GitClient(trustedRunner(runner), '/workspace');
+
+    await git.statusPorcelain();
+    await git.push('kaizen/issue-330-fix', { forceWithLease: true, expectedRepo: 'o/r' });
+
+    expect(runner.mock.calls[0][2]?.env?.GH_TOKEN).toBeUndefined();
+    const publicationValidation = runner.mock.calls.find(([, args]) => args[0] === 'remote' && args[1] === 'get-url');
+    expect(publicationValidation?.[0]).toBe('git');
+    expect(publicationValidation?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
+    expect(publicationValidation?.[2]?.env).toMatchObject({
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
+    });
+    const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(publicationPush?.[1].join(' ')).not.toContain('supervisor-token');
+    expect(publicationPush?.[2]?.cwd).not.toBe('/workspace');
+    expect(publicationPush?.[2]?.env).toMatchObject({
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '!f() { test "$1" = get || exit 0; printf "%s\\n" username=x-access-token "password=$KAIZEN_GIT_PASSWORD"; }; f',
+      KAIZEN_GIT_PASSWORD: 'supervisor-token'
+    });
+    expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(publicationPush?.[0]).toBe('git');
+  });
+
+  it('delegates HTTPS publication to the trusted broker only after validation', async () => {
+    const events: string[] = [];
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      events.push(args[0] ?? command);
+      return {
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+          ? 'https://github.com/o/r.git\n'
+          : args[0] === 'rev-parse'
+            ? 'deadbeef\n'
+            : '',
+      stderr: '',
+      durationMs: 1
+      };
+    });
+    const publisher = vi.fn(async () => {
+      events.push('github-publisher');
+    });
+
+    await new GitClient(trustedRunner(runner, { githubToken: false, githubPublisher: publisher }), '/workspace')
+      .push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
+
+    const brokerIndex = events.indexOf('github-publisher');
+    const cloneIndex = events.indexOf('clone');
+    const inspectionIndex = events.indexOf('grep');
+    expect(brokerIndex).toBeGreaterThan(cloneIndex);
+    expect(brokerIndex).toBeGreaterThan(inspectionIndex);
+    expect(publisher).toHaveBeenCalledWith(expect.objectContaining({
+      pushUrl: 'https://github.com/o/r.git',
+      refspec: 'kaizen/issue-330-fix:refs/heads/kaizen/issue-330-fix',
+      expectedRepo: 'o/r',
+      expectedSha: 'deadbeef'
+    }));
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+    expect(runner.mock.calls.some(([, , options]) => options?.env?.KAIZEN_GIT_PASSWORD)).toBe(false);
+  });
+
+  it('sanitizes broker publication failures', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+          ? 'https://github.com/o/r.git\n'
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const error = await new GitClient(trustedRunner(runner, {
+      githubToken: false,
+      githubPublisher: async () => { throw new Error('secret broker detail'); }
+    }), '/workspace')
+      .push('kaizen/issue-330-fix', { expectedRepo: 'o/r' })
+      .catch((caught: unknown) => caught);
+
+    expect(String(error)).toContain('credential broker failed');
+    expect(String(error)).not.toContain('secret broker detail');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
+  it('does not expose GitHub tokens to SSH publication transports', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    vi.stubEnv('SSH_AUTH_SOCK', '/supervisor-agent');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'git@github.com:o/r.git\n'
+        : args[0] === 'rev-parse'
+          ? 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', { expectedRepo: 'o/r' });
+
+    const publicationClone = runner.mock.calls.find(([, args]) => args[0] === 'clone');
+    expect(publicationClone?.[2]?.env).toMatchObject({
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
+    });
+    expect(publicationClone?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
+    const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(publicationPush?.[2]?.env).toMatchObject({
+      SSH_AUTH_SOCK: '/supervisor-agent',
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
+    });
+    expect(publicationPush?.[2]?.env?.GIT_SSH_COMMAND).toMatch(
+      new RegExp(`ssh(?:\\.exe)?' -F '${process.platform === 'win32' ? 'NUL' : '/dev/null'}'$`, 'i')
+    );
+    expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(publicationPush?.[0]).toBe('git');
+    const updateRef = runner.mock.calls.find(([, args]) => args.includes('update-ref'));
+    expect(updateRef?.[1]).toEqual([
+      '-c',
+      `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
+      'update-ref',
+      'refs/remotes/origin/kaizen/issue-330-fix',
+      'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+    ]);
+    expect(updateRef?.[2]?.env?.SSH_AUTH_SOCK).toBeUndefined();
+    expect(updateRef?.[2]?.env).toMatchObject({
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1'
+    });
+  });
+
+  it('refuses publication through unsupported origins', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: 'ext::malicious-command\n',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('main', { expectedRepo: 'o/r' })).rejects.toThrow('Refusing to publish');
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a valid GitHub push URL for a different repository', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: 'https://github.com/o/other.git\n',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('main', { expectedRepo: 'o/r' }))
+      .rejects.toThrow('Refusing to publish o/r');
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to publish Git LFS pointers without a trusted object upload', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'https://github.com/o/r.git\n'
+        : args[0] === 'grep'
+          ? 'kaizen/issue-330-fix:assets/model.bin\n'
+          : args[0] === 'show'
+            ? `version https://git-lfs.github.com/spec/v1\noid sha256:${'a'.repeat(64)}\nsize 123\n`
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    })).rejects.toThrow('Git LFS pointer');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
+  it('refuses to publish valid Git LFS pointers with extensions', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command, args, cwd: '/workspace', exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'https://github.com/o/r.git\n'
+        : args[0] === 'grep'
+          ? 'kaizen/issue-330-fix:assets/model.bin\n'
+          : args[0] === 'show'
+            ? `version https://git-lfs.github.com/spec/v1\next-0-example payload\noid sha256:${'a'.repeat(64)}\nsize 123\n`
+            : '',
+      stderr: '', durationMs: 1
+    }));
+
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    })).rejects.toThrow('Git LFS pointer');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
+  it('publishes ordinary files that only mention the LFS specification version', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+        ? 'https://github.com/o/r.git\n'
+        : args[0] === 'grep'
+          ? 'kaizen/issue-330-fix:docs/lfs.md\n'
+          : args[0] === 'show'
+            ? 'version https://git-lfs.github.com/spec/v1\nThis is documentation, not a pointer.\n'
+            : args[0] === 'rev-parse'
+              ? 'abc123\n'
+              : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    });
+
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(true);
+  });
+
+  it('refuses to publish when Git LFS inspection fails', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: args[0] === 'grep' ? 2 : 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    await expect(new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    })).rejects.toThrow('Could not inspect');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
+  it('preserves a publication failure when temporary cleanup also fails', async () => {
+    vi.stubEnv('GH_TOKEN', 'supervisor-token');
+    const cleanupError = new Error('cleanup failed');
+    vi.spyOn(fs, 'rm').mockRejectedValueOnce(cleanupError);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: args[0] === 'grep' ? 2 : 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin' ? 'https://github.com/o/r.git\n' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const error = await new GitClient(trustedRunner(runner), '/workspace').push('kaizen/issue-330-fix', {
+      expectedRepo: 'o/r'
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining('Could not inspect'),
+      cause: cleanupError
+    });
   });
 
   it('can check out a branch even when another worktree has it checked out', async () => {
@@ -66,7 +377,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace');
+    const git = new GitClient(trustedRunner(runner), '/workspace');
 
     await git.checkout('main', { ignoreOtherWorktrees: true });
 
@@ -283,7 +594,7 @@ describe('workspace branch handling', () => {
       stderr: '',
       durationMs: 1
     }));
-    const git = new GitClient(runner, '/workspace');
+    const git = new GitClient(trustedRunner(runner), '/workspace');
 
     await git.abortRebase();
 

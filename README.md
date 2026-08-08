@@ -118,7 +118,34 @@ npm run dev -- run --dry-run --json
 
 For a target repository:
 
+Set `GH_TOKEN` or `GITHUB_TOKEN` only for credential-only `init`, `actions prepare`,
+and `actions publish` phases. Builder-capable commands reject ambient token variables
+because same-UID child processes can recover the original environment through procfs.
+For local HTTPS publication, set `KAIZEN_GITHUB_TOKEN_SOCKET` to the absolute Unix
+socket of a root-owned broker running as root. The broker must authenticate
+the connecting supervisor by kernel peer credentials, allow the exact supervisor PID
+and executable, and reject builder/verifier descendants. Kaizen connects only after
+builder and verifier processes exit and sends the validated temporary bare-repository
+path, HTTPS URL, refspec, expected repository, expected commit SHA, and optional
+force-with-lease value. The broker must copy the bare repository into a root-owned
+private directory, revalidate the repository and SHA, perform the authenticated Git
+push under its separate identity, and return only `{"ok":true}`;
+the token never enters a Kaizen or same-UID Git child environment. Publication
+rejects refs containing Git LFS pointers because it cannot safely run repository
+pre-push hooks or upload LFS objects with a separate trusted credential path.
+`KAIZEN_CRON_SCHEDULED_LAUNCHER` must name an absolute,
+operator-managed `run-scheduled.sh` whose file and ancestor directories are not
+writable by the runtime user. Provision this wrapper outside `KAIZEN_HOME`;
+`scheduler sync` installs only job definitions and never creates or refreshes it.
+Managed jobs intentionally do not inherit `KAIZEN_GITHUB_TOKEN_SOCKET`. Scheduled HTTPS
+publication requires a custom root-owned `run-scheduled.sh` that executes a fully
+root-owned runtime chain and injects the socket only into that protected process;
+the bundled user-owned runtime launcher fails closed for HTTPS publication.
+
 ```sh
+sudo install -d -o root -m 0755 /usr/local/libexec/kaizen-loop
+sudo install -o root -m 0755 scripts/run-scheduled.sh /usr/local/libexec/kaizen-loop/run-scheduled.sh
+export KAIZEN_CRON_SCHEDULED_LAUNCHER=/usr/local/libexec/kaizen-loop/run-scheduled.sh
 kaizen init --agent codex --schedule 02:00
 kaizen scheduler sync
 export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"
@@ -131,10 +158,10 @@ kaizen goal create "Improve onboarding reliability" --success "npm test and npm 
 kaizen goal run <goal-id> --yes --json
 ```
 
-After upgrading from a release without the stable operator launcher, run
-`npm run build && node dist/cli.js scheduler sync` once from the upgraded
-kaizen-loop checkout for each registered project. Subsequent invocations atomically
-refresh both installed launchers from the self-updating runtime checkout.
+After upgrading from a release that self-installed the scheduled launcher,
+provision the operator-managed launcher above and rerun `kaizen scheduler sync`
+for each registered project. Scheduler synchronization never writes or replaces
+`KAIZEN_CRON_SCHEDULED_LAUNCHER`.
 
 For a third-party installation, start with the [third-party adopter guide](./docs/15-third-party-adopter-guide.md). Its recommended GitHub Actions path adds `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs. The lower-level workflow contract is documented in [docs/14-github-actions.md](./docs/14-github-actions.md).
 
@@ -150,7 +177,11 @@ npm run dogfood:verify
 The CLI delegates external work instead of embedding tokens or provider SDKs:
 
 - `git` for workspace, branch, diff, commit, push, and worktree operations.
-- `gh` for issue, label, comment, and PR operations.
+- `gh` for issue, label, comment, and PR operations. Because authenticated calls happen after
+  untrusted workspace execution, the resolved binary and every ancestor directory must be owned
+  by an administrator and not writable by the supervisor user, its groups, or other users.
+  User-owned Homebrew installations are intentionally rejected; install an administrator-managed
+  copy on the supervisor `PATH`. `kaizen doctor` fails closed when no trusted copy is available.
 - `builder-agent` on `PATH` when `.kaizen/config.yml` uses the default builder command.
 - `verifier` on `PATH` when `verifier.enabled: true`.
 - `codex` for the PR guardian workflow when `guardian.enabled: true`.

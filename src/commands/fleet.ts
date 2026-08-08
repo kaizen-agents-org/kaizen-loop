@@ -33,6 +33,7 @@ export interface FleetSyncOptions {
   prune: boolean;
   dryRun: boolean;
   runCommand: CommandRunner;
+  schedulerLauncherTrust?: (launcher: string) => boolean;
 }
 
 export interface FleetProjectResult {
@@ -177,7 +178,8 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
           slug: project.slug,
           project: projectRegistryEntry(project, config, true),
           config,
-          runCommand: options.runCommand
+          runCommand: options.runCommand,
+          launcherTrust: options.schedulerLauncherTrust
         });
         await updateRegistry((registry) => {
           const registered = registry.projects[project.slug];

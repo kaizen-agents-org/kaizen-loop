@@ -1,4 +1,8 @@
-import { gitCliEnv } from '../utils/command.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { gitCliEnv, gitPublicationEnv, gitSshPublicationEnv, isolatedGitEnv, publicationGitExecutable as resolvePublicationGitExecutable, publicationSshExecutable as resolvePublicationSshExecutable, publicationGithubToken as resolvePublicationGithubToken, publicationGithubPublisher as resolvePublicationGithubPublisher } from '../utils/command.js';
+import { repoFromRemote } from '../utils/slug.js';
 export class GitClient {
     run;
     cwd;
@@ -154,16 +158,161 @@ export class GitClient {
         const result = await this.git(['diff', '--no-ext-diff', 'HEAD'], { rejectOnNonZero: false });
         return result.stdout;
     }
-    async push(ref, options = {}) {
-        await this.git(['push', '-u', ...(options.forceWithLease ? ['--force-with-lease'] : []), 'origin', ref]);
+    async push(ref, options) {
+        const publicationGitExecutable = resolvePublicationGitExecutable(this.run);
+        if (!publicationGitExecutable) {
+            throw new Error('Could not resolve a trusted Git executable before publication.');
+        }
+        const publicationLocalEnv = isolatedGitEnv();
+        const pushUrlResult = await this.run(publicationGitExecutable, ['remote', 'get-url', '--push', '--all', 'origin'], {
+            cwd: this.cwd,
+            env: publicationLocalEnv
+        });
+        const pushUrls = pushUrlResult.stdout.split('\n').map((url) => url.trim()).filter(Boolean);
+        if (pushUrls.length !== 1)
+            throw new Error(`Refusing to publish through ${pushUrls.length} origin push URLs.`);
+        const pushUrl = pushUrls[0];
+        const pushRepo = repoFromRemote(pushUrl);
+        if (!pushRepo || pushRepo.toLowerCase() !== options.expectedRepo.toLowerCase()) {
+            throw new Error(`Refusing to publish ${options.expectedRepo} to origin ${pushUrl}`);
+        }
+        const expectedRemote = options.forceWithLease
+            ? await this.run(publicationGitExecutable, ['rev-parse', '--verify', `refs/remotes/origin/${ref}`], {
+                cwd: this.cwd,
+                env: publicationLocalEnv,
+                rejectOnNonZero: false
+            })
+            : undefined;
+        const publicationDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-publication-'));
+        let publicationError;
+        let cleanupError;
+        try {
+            await this.run(publicationGitExecutable, ['clone', '--bare', '--no-local', this.cwd, publicationDir], {
+                env: publicationLocalEnv
+            });
+            const lfsPointers = await this.run(publicationGitExecutable, [
+                'grep',
+                '-I',
+                '-l',
+                '-e',
+                '^version https://git-lfs.github.com/spec/v1$',
+                ref,
+                '--'
+            ], {
+                cwd: publicationDir,
+                env: isolatedGitEnv(),
+                rejectOnNonZero: false
+            });
+            if (lfsPointers.exitCode > 1) {
+                throw new Error(`Could not inspect ${ref} for Git LFS pointers before publication.`);
+            }
+            const verifiedLfsPointers = [];
+            for (const candidate of lfsPointers.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
+                const pathPrefix = `${ref}:`;
+                const candidatePath = candidate.startsWith(pathPrefix) ? candidate.slice(pathPrefix.length) : candidate;
+                const pointer = await this.run(publicationGitExecutable, ['show', `${ref}:${candidatePath}`], {
+                    cwd: publicationDir,
+                    env: isolatedGitEnv(),
+                    rejectOnNonZero: false
+                });
+                if (pointer.exitCode !== 0) {
+                    throw new Error(`Could not inspect ${candidatePath} for Git LFS pointer metadata before publication.`);
+                }
+                if (isGitLfsPointer(pointer.stdout))
+                    verifiedLfsPointers.push(candidatePath);
+            }
+            if (verifiedLfsPointers.length > 0) {
+                throw new Error(`Refusing to publish Git LFS pointer files without a trusted object upload: ${verifiedLfsPointers.join(', ')}`);
+            }
+            const validatedSha = await this.run(publicationGitExecutable, ['rev-parse', ref], {
+                cwd: publicationDir,
+                env: isolatedGitEnv()
+            });
+            const lease = options.forceWithLease
+                ? [`--force-with-lease=refs/heads/${ref}:${expectedRemote?.exitCode === 0 ? expectedRemote.stdout.trim() : ''}`]
+                : [];
+            const refspec = `${ref}:refs/heads/${ref}`;
+            if (pushUrl.startsWith('https://') && !resolvePublicationGithubToken(this.run)) {
+                const publisher = resolvePublicationGithubPublisher(this.run);
+                if (!publisher) {
+                    throw new Error('HTTPS Git publication requires a credential-only token or KAIZEN_GITHUB_TOKEN_SOCKET.');
+                }
+                try {
+                    await publisher({
+                        cwd: publicationDir,
+                        pushUrl,
+                        refspec,
+                        expectedRepo: options.expectedRepo,
+                        expectedSha: validatedSha.stdout.trim(),
+                        forceWithLease: lease[0]
+                    });
+                }
+                catch {
+                    throw new Error('GitHub credential broker failed to publish the validated ref.');
+                }
+            }
+            else {
+                const env = pushUrl.startsWith('https://')
+                    ? gitPublicationEnv(process.env, resolvePublicationGithubToken(this.run))
+                    : gitSshPublicationEnv(process.env, resolvePublicationSshExecutable(this.run));
+                await this.run(publicationGitExecutable, ['push', '--no-verify', ...lease, pushUrl, refspec], {
+                    cwd: publicationDir,
+                    env
+                });
+            }
+            const disabledHooksPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+            await this.run(publicationGitExecutable, [
+                '-c',
+                `core.hooksPath=${disabledHooksPath}`,
+                'update-ref',
+                `refs/remotes/origin/${ref}`,
+                validatedSha.stdout.trim()
+            ], { cwd: this.cwd, env: publicationLocalEnv });
+            await this.run(publicationGitExecutable, ['config', `branch.${ref}.remote`, 'origin'], {
+                cwd: this.cwd,
+                env: publicationLocalEnv
+            });
+            await this.run(publicationGitExecutable, ['config', `branch.${ref}.merge`, `refs/heads/${ref}`], {
+                cwd: this.cwd,
+                env: publicationLocalEnv
+            });
+        }
+        catch (error) {
+            publicationError = error;
+        }
+        finally {
+            try {
+                await fs.rm(publicationDir, { recursive: true, force: true });
+            }
+            catch (error) {
+                cleanupError = error;
+            }
+        }
+        if (publicationError !== undefined) {
+            if (publicationError instanceof Error && publicationError.cause === undefined && cleanupError !== undefined) {
+                publicationError.cause = cleanupError;
+            }
+            throw publicationError;
+        }
+        if (cleanupError !== undefined)
+            throw cleanupError;
     }
     git(args, options) {
         return this.run('git', args, {
             cwd: this.cwd,
-            env: gitCliEnv(),
+            env: options?.env ?? gitCliEnv(),
             rejectOnNonZero: options?.rejectOnNonZero
         });
     }
+}
+export function isGitLfsPointer(content) {
+    const lines = content.replace(/\r\n/g, '\n').trimEnd().split('\n');
+    if (lines.length < 3 || lines[0] !== 'version https://git-lfs.github.com/spec/v1')
+        return false;
+    const oidIndex = lines.length - 2;
+    return lines.slice(1, oidIndex).every((line) => /^ext-[0-9]+-[A-Za-z0-9][A-Za-z0-9._-]* .+$/.test(line))
+        && /^oid sha256:[0-9a-f]{64}$/.test(lines[oidIndex])
+        && /^size [0-9]+$/.test(lines[oidIndex + 1]);
 }
 function parseWorktreeList(output) {
     const worktrees = [];

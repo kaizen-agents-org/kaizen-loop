@@ -3,7 +3,7 @@ import { loadConfig } from '../config/config.js';
 import { resolveProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
 import { runKaizen } from '../orchestrator/run.js';
-import { buildAllowlistedEnv } from '../utils/command.js';
+import { buildUntrustedEnv } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
@@ -199,7 +199,7 @@ async function runMechanicalEvaluation(options) {
     try {
         const result = await options.runCommand(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
             cwd: options.workspacePath,
-            env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, options.config.safety.envAllowlist), options.workspacePath),
+            env: await envWithKaizenTemp(buildUntrustedEnv(process.env, options.config.safety.envAllowlist), options.workspacePath),
             timeoutMs: options.config.goal.evaluation.timeoutMinutes * 60_000,
             rejectOnNonZero: false
         });

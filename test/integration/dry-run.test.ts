@@ -9,8 +9,13 @@ import type { GitHubIssue } from '../../src/github/types.js';
 import { applyImplementationBudget, runKaizen as runKaizenCore } from '../../src/orchestrator/run.js';
 import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
 import type { CommandRunner } from '../../src/utils/command.js';
+import { trustedRunner } from '../helpers/trustedRunner.js';
 
 const testVerifierCommit = 'b'.repeat(40);
+
+function isGitCommand(command: string): boolean {
+  return /^git(?:\.exe)?$/i.test(path.basename(command));
+}
 
 async function runKaizen(options: Parameters<typeof runKaizenCore>[0]) {
   if (!options.runCommand) return runKaizenCore(options);
@@ -40,7 +45,7 @@ async function runKaizen(options: Parameters<typeof runKaizenCore>[0]) {
       runtime: { commit: testVerifierCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
     }));
   };
-  return runKaizenCore({ ...options, runCommand });
+  return runKaizenCore({ ...options, runCommand: trustedRunner(runCommand) });
 }
 
 describe('runKaizen dry-run', () => {
@@ -1055,7 +1060,7 @@ describe('runKaizen PR flow', () => {
         consecutiveZeroThroughputRuns: 1
       }
     });
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands).toEqual(['fetch origin', 'checkout main', 'reset --hard origin/main', 'clean -fdx']);
   });
 
@@ -2201,7 +2206,7 @@ describe('runKaizen PR flow', () => {
       }
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'claude' && args[0] === '-p' && args[1] === 'ok') return result(command, args, workspace, 'ok');
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'sh' && args.join(' ') === '-lc npm test') {
         return { ...result(command, args, workspace, 'not ok'), exitCode: 1, stderr: 'failed' };
       }
@@ -2234,6 +2239,7 @@ describe('runKaizen PR flow', () => {
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
     vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('GH_TOKEN', 'supervisor-publication-token');
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
@@ -2293,7 +2299,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -2318,9 +2324,21 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].reason).toContain('Verifier cleared PR');
     const prCreateArgs = runner.mock.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
     expect(prCreateArgs?.[1]).not.toContain('--draft');
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
-    expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
+    expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
     expect(gitCommands).not.toContain('push origin main');
+    const builderRuns = runner.mock.calls.filter(([command]) => command === 'builder-agent');
+    expect(builderRuns.every(([, , options]) => options?.env?.GH_TOKEN === undefined)).toBe(true);
+    const publicationPush = runner.mock.calls.find(([, args]) => args[0] === 'push');
+    expect(publicationPush?.[2]?.env).toMatchObject({
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '!f() { test "$1" = get || exit 0; printf "%s\\n" username=x-access-token "password=$KAIZEN_GIT_PASSWORD"; }; f',
+      KAIZEN_GIT_PASSWORD: 'supervisor-publication-token'
+    });
+    expect(publicationPush?.[2]?.env?.GH_TOKEN).toBeUndefined();
+    expect(runner.mock.calls.flatMap(([, args]) => args)).not.toContain('supervisor-publication-token');
     const prCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr create'));
     expect(String(prCreate?.[1].at(-1))).toContain('## Builder notes');
     expect(String(prCreate?.[1].at(-1))).toContain('Protected path changed');
@@ -2397,7 +2415,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: 'PRで確認する', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -2473,7 +2491,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -2556,7 +2574,7 @@ describe('runKaizen PR flow', () => {
         activeBuilders -= 1;
         return result(command, args, options?.cwd, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args[0] === 'show-ref') return { ...result(command, args, options?.cwd, ''), exitCode: 1 };
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, options?.cwd, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, options?.cwd, 'src/file.ts\n');
@@ -2580,7 +2598,7 @@ describe('runKaizen PR flow', () => {
     expect([...builderWorkspaces].every((item) => item.includes(`${path.basename(workspace)}-worktrees`))).toBe(true);
     expect(prBodies).toHaveLength(2);
     expect(prBodies).toEqual(expect.arrayContaining([expect.stringContaining('Closes #1'), expect.stringContaining('Closes #2')]));
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('worktree add -B kaizen/issue-1-fix-bug '))).toBe(true);
     expect(gitCommands.some((command) => command.startsWith('worktree add -B kaizen/issue-2-fix-bug '))).toBe(true);
     // 2 issues x (1 pre-cleanup remove in createIssueWorktree + 1 post-cleanup remove in removeIssueWorktree) = 4
@@ -2699,7 +2717,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -2843,7 +2861,7 @@ describe('runKaizen PR flow', () => {
         }]);
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       return result(command, args, options?.cwd, '');
     });
 
@@ -2955,7 +2973,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/kaizen-agents-org/kaizen-loop.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/kaizen-agents-org/kaizen-loop.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3069,7 +3087,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3157,7 +3175,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3242,11 +3260,11 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args[0] === 'show-ref' && missingCheckpointRefs) {
         return { ...result(command, args, options?.cwd, ''), exitCode: 1 };
       }
-      if (command === 'git' && args[0] === 'push' && failPushes) throw new Error('push unavailable');
+      if (isGitCommand(command) && args[0] === 'push' && failPushes) throw new Error('push unavailable');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3271,7 +3289,7 @@ describe('runKaizen PR flow', () => {
     expect(ghCommands.some((command) => command.startsWith('pr create') && command.includes('--draft'))).toBe(true);
     const draftCreate = runner.mock.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
     expect(String(draftCreate?.[1].at(draftCreate[1].indexOf('--body') + 1))).toContain('Direct commit rejected');
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command.startsWith('push'))).toBe(true);
 
     missingCheckpointRefs = true;
@@ -3392,7 +3410,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
         return result(command, args, options?.cwd, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, options?.cwd, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, options?.cwd, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, options?.cwd, '1\t0\tsrc/file.ts\n');
@@ -3416,9 +3434,9 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].commit).toBe('abc123');
     const ghCommands = runner.mock.calls.filter(([command]) => command === 'gh').map(([, args]) => args.join(' '));
     expect(ghCommands.some((command) => command.startsWith('pr create'))).toBe(false);
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     expect(gitCommands).toContain('checkout --ignore-other-worktrees main');
-    expect(gitCommands).toContain('push -u origin main');
+    expect(gitCommands).toContain('push --no-verify https://github.com/o/r.git main:refs/heads/main');
   });
 
   it('returns block_pr verifier results to the builder before creating a PR', async () => {
@@ -3487,7 +3505,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3603,7 +3621,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, verifierRuns === 1 ? 'invalid verifier response' : 'checkpoint verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3704,7 +3722,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3793,7 +3811,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/auth/session.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '4\t1\tsrc/auth/session.ts\n');
@@ -3875,7 +3893,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3919,7 +3937,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'Implemented safely.', notes: '' });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -3974,7 +3992,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'approved', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
@@ -4044,7 +4062,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
         return result(command, args, workspace, 'verified');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') {
         statusCalls += 1;
         return result(command, args, workspace, statusCalls === 2 ? 'M generated.txt\n' : '');
@@ -4070,11 +4088,11 @@ describe('runKaizen PR flow', () => {
     });
 
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
-    const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
+    const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
     expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
-    expect(gitCommands).toContain('push -u --force-with-lease origin kaizen/issue-1-fix-bug');
+    expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
   });
 
   it('treats a fixed result with passing verification and no diff as already fixed', async () => {
@@ -4114,7 +4132,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
@@ -4188,7 +4206,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') {
         return result(command, args, workspace, verificationCreatedChanges ? 'M generated.txt\n' : '');
       }
@@ -4256,7 +4274,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
@@ -4314,7 +4332,7 @@ describe('runKaizen PR flow', () => {
         });
         return result(command, args, workspace, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
@@ -4366,7 +4384,7 @@ describe('runKaizen PR flow', () => {
         return result(command, args, repo, JSON.stringify([issue()]));
       }
       if (command === 'gh') return githubReadinessResult(command, args, repo);
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'sh' && args.join(' ') === '-lc npm ci') {
         setupCalls += 1;
         return setupCalls === 1

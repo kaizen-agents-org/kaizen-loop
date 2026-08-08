@@ -6,6 +6,7 @@ import { planImprove, runImprove } from '../src/commands/improve.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -31,7 +32,7 @@ describe('planImprove', () => {
       dryRun: true,
       maxIssues: 2,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(plan.selected.map((item) => item.number)).toEqual([1, 2]);
@@ -53,7 +54,7 @@ describe('planImprove', () => {
       issueNumbers: [4, 5],
       dryRun: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(plan.selected.map((item) => item.number)).toEqual([4, 5]);
@@ -80,7 +81,7 @@ describe('planImprove', () => {
       issueNumbers: [4, 5],
       dryRun: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(plan.selected.map((item) => item.number)).toEqual([4]);
@@ -104,7 +105,7 @@ describe('runImprove', () => {
       issueNumbers: [7],
       dryRun: true,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect('selected' in output && output.selected[0].number).toBe(7);
@@ -128,7 +129,7 @@ describe('runImprove', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'fixed', notes: '' });
         return result(command, args, options?.cwd, 'built');
       }
-      if (command === 'git' && args.join(' ') === 'remote get-url origin') return result(command, args, repo, 'https://github.com/o/r.git\n');
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, options?.cwd, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, options?.cwd, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, options?.cwd, '1\t0\tsrc/file.ts\n');
@@ -142,13 +143,13 @@ describe('runImprove', () => {
       issueNumbers: [8],
       dryRun: false,
       json: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect('issues' in output && output.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => command === 'git').map(([, args]) => args.join(' '));
     expect(gitCommands.some((command) => command === 'push -u origin main')).toBe(false);
-    expect(gitCommands.some((command) => command === 'push -u --force-with-lease origin kaizen/issue-8-issue-8')).toBe(true);
+    expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-8-issue-8:'))).toBe(true);
   });
 });
 

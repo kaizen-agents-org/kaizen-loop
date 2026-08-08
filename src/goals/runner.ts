@@ -5,7 +5,7 @@ import type { KaizenConfig } from '../config/schema.js';
 import { GitHubClient } from '../github/client.js';
 import { runKaizen, type DirectCommitConfirmation } from '../orchestrator/run.js';
 import type { RunSummary } from '../orchestrator/summary.js';
-import { buildAllowlistedEnv, type CommandRunner } from '../utils/command.js';
+import { buildUntrustedEnv, type CommandRunner } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
@@ -246,7 +246,7 @@ async function runMechanicalEvaluation(options: {
   try {
     const result = await options.runCommand(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
       cwd: options.workspacePath,
-      env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, options.config.safety.envAllowlist), options.workspacePath),
+      env: await envWithKaizenTemp(buildUntrustedEnv(process.env, options.config.safety.envAllowlist), options.workspacePath),
       timeoutMs: options.config.goal.evaluation.timeoutMinutes * 60_000,
       rejectOnNonZero: false
     });

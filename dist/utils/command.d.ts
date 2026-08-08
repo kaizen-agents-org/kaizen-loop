@@ -1,4 +1,21 @@
 export declare const DEFAULT_ENV_ALLOWLIST: string[];
+export interface TrustedExecutables {
+    git?: string;
+    githubCli?: string;
+    ssh?: string;
+    githubToken?: string;
+    githubPublisher?: (request: GitHubPublicationRequest) => Promise<void>;
+}
+export interface GitHubPublicationRequest {
+    cwd: string;
+    pushUrl: string;
+    refspec: string;
+    expectedRepo: string;
+    expectedSha: string;
+    forceWithLease?: string;
+}
+export declare const INITIAL_GIT_EXECUTABLE: string | undefined;
+export declare const INITIAL_GITHUB_CLI_EXECUTABLE: string | undefined;
 export interface CommandResult {
     command: string;
     args: string[];
@@ -16,10 +33,27 @@ export interface RunCommandOptions {
     rejectOnNonZero?: boolean;
 }
 export type CommandRunner = (command: string, args: string[], options?: RunCommandOptions) => Promise<CommandResult>;
+export declare const COMMAND_RUNNER_INJECTION: unique symbol;
+export declare function processCommandRunner(defaultRunner: CommandRunner): CommandRunner;
 export declare const runCommand: CommandRunner;
 export declare function buildAllowlistedEnv(source: NodeJS.ProcessEnv, allowlist: string[], extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export declare function buildUntrustedEnv(source: NodeJS.ProcessEnv, allowlist: string[], extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function githubCliEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export declare function trustedGithubCliEnv(source?: NodeJS.ProcessEnv, githubCliExecutable?: string | undefined, gitExecutable?: string | undefined): NodeJS.ProcessEnv;
+export declare function hasSupervisorGitHubToken(source?: NodeJS.ProcessEnv): boolean;
 export declare function gitCliEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export declare function isolatedGitEnv(source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv, initialToken?: string | undefined): NodeJS.ProcessEnv;
+export declare function publicationGitExecutable(command: CommandRunner): string | undefined;
+export declare function githubCliExecutable(command: CommandRunner): string | undefined;
+export declare function publicationSshExecutable(command: CommandRunner): string | undefined;
+export declare function publicationGithubToken(command: CommandRunner): string | undefined;
+export declare function publicationGithubPublisher(command: CommandRunner): ((request: GitHubPublicationRequest) => Promise<void>) | undefined;
+export declare function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner;
+export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
+export declare function isTrustedExecutablePath(executable: string, canWrite?: (candidate: string) => boolean): boolean;
+export declare function isWindowsExecutablePathTrusted(executable: string, trustedRoots: string[], canWrite?: (candidate: string) => boolean): boolean;
+export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv, sshExecutable?: string | undefined): NodeJS.ProcessEnv;
 export declare function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): CommandRunner;
 export declare function throwIfShutdownRequested(): void;
 export declare function formatCommand(command: string, args: string[]): string;

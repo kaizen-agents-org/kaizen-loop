@@ -1,12 +1,21 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { buildAllowlistedEnv, githubCliEnv } from '../utils/command.js';
+import { buildUntrustedEnv, githubCliExecutable, publicationGitExecutable, trustedGithubCliEnv } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
 import { isSyncPullRequest } from './wipLimit.js';
 export const MANAGED_PR_GUARDIAN_MARKER = '<!-- kaizen-pr-guardian:managed -->';
+function githubCliEnv(command) {
+    return trustedGithubCliEnv(process.env, githubCliExecutable(command), publicationGitExecutable(command));
+}
+function runGitHubCli(command, args, options = {}) {
+    const executable = githubCliExecutable(command);
+    if (!executable)
+        throw new Error('Could not resolve a trusted GitHub CLI executable.');
+    return command(executable, args, { ...options, env: githubCliEnv(command) });
+}
 export function guardianJobsDir(stateDir) {
     return path.join(stateDir, 'guardian', 'jobs');
 }
@@ -401,7 +410,7 @@ export async function runPrGuardianSkill(runCommand, req) {
                     buildPrompt(req, attempt)
                 ], {
                     cwd: req.workspaceDir,
-                    env: await envWithKaizenTemp(buildAllowlistedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
+                    env: await envWithKaizenTemp(buildUntrustedEnv(process.env, req.config.safety.envAllowlist), req.workspaceDir),
                     timeoutMs: boundedTimeoutMs(req.config.guardian.timeoutMinutes * 60_000, req.runDeadlineAt),
                     rejectOnNonZero: false
                 });
@@ -486,7 +495,7 @@ export async function isPrGuardianSkillRunnerAvailable(config, runCommand) {
         await runCommand(config.guardian.command, ['--version'], {
             rejectOnNonZero: true,
             timeoutMs: 30_000,
-            env: buildAllowlistedEnv(process.env, config.safety.envAllowlist)
+            env: buildUntrustedEnv(process.env, config.safety.envAllowlist)
         });
         return true;
     }
@@ -542,9 +551,8 @@ async function listUnresolvedReviewThreads(runCommand, req) {
         ];
         if (cursor)
             args.push('-F', `cursor=${cursor}`);
-        const result = await runCommand('gh', args, {
+        const result = await runGitHubCli(runCommand, args, {
             cwd: req.workspaceDir,
-            env: githubCliEnv(),
             timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
             rejectOnNonZero: false
         });
@@ -616,14 +624,14 @@ async function inspectPrGate(runCommand, req) {
     };
 }
 async function listCheckAnnotations(runCommand, req, headRefOid) {
-    const runsResult = await runCommand('gh', [
+    const runsResult = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/commits/${headRefOid}/check-runs?per_page=100`,
         '--paginate',
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -640,14 +648,14 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
     const annotations = [];
     for (let index = 0; index < annotatedRuns.length; index += 4) {
         const batch = await Promise.all(annotatedRuns.slice(index, index + 4).map(async (checkRun) => {
-            const result = await runCommand('gh', [
+            const result = await runGitHubCli(runCommand, [
                 'api',
                 `repos/${req.repo}/check-runs/${checkRun.id}/annotations?per_page=100`,
                 '--paginate',
                 '--slurp'
             ], {
                 cwd: req.workspaceDir,
-                env: githubCliEnv(),
+                env: githubCliEnv(runCommand),
                 timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
                 rejectOnNonZero: false
             });
@@ -669,7 +677,7 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
     return annotations;
 }
 async function inspectPullRequestTerminalState(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'pr',
         'view',
         String(req.prNumber),
@@ -679,7 +687,7 @@ async function inspectPullRequestTerminalState(runCommand, req) {
         'state,baseRefName,closingIssuesReferences'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -690,7 +698,7 @@ async function inspectPullRequestTerminalState(runCommand, req) {
 }
 async function inspectPullRequest(runCommand, req) {
     const [result, reviews, reviewComments, issueComments, requiredChecks] = await Promise.all([
-        runCommand('gh', [
+        runGitHubCli(runCommand, [
             'pr',
             'view',
             String(req.prNumber),
@@ -700,7 +708,7 @@ async function inspectPullRequest(runCommand, req) {
             'state,isDraft,mergeStateStatus,mergeable,reviewDecision,reviewRequests,headRefOid,statusCheckRollup'
         ], {
             cwd: req.workspaceDir,
-            env: githubCliEnv(),
+            env: githubCliEnv(runCommand),
             timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
             rejectOnNonZero: false
         }),
@@ -792,7 +800,7 @@ function isExpectedBotReview(review) {
     return isExpectedBotLogin(normalizeReviewerLogin(review.user?.login));
 }
 async function listRequiredChecks(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'pr',
         'checks',
         String(req.prNumber),
@@ -803,7 +811,7 @@ async function listRequiredChecks(runCommand, req) {
         'name,state,bucket,workflow'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -821,14 +829,14 @@ async function listRequiredChecks(runCommand, req) {
     }));
 }
 async function listPullRequestReviews(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/pulls/${req.prNumber}/reviews?per_page=100`,
         '--paginate',
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -841,14 +849,14 @@ async function listPullRequestReviews(runCommand, req) {
         : pages;
 }
 async function listPullRequestReviewComments(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/pulls/${req.prNumber}/comments?per_page=100`,
         '--paginate',
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -871,14 +879,14 @@ async function listPullRequestReviewComments(runCommand, req) {
     return comments;
 }
 async function listPullRequestIssueComments(runCommand, req) {
-    const result = await runCommand('gh', [
+    const result = await runGitHubCli(runCommand, [
         'api',
         `repos/${req.repo}/issues/${req.prNumber}/comments?per_page=100`,
         '--paginate',
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(),
+        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });

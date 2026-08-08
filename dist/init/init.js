@@ -5,6 +5,7 @@ import { defaultConfigObject } from '../config/config.js';
 import { configSchema } from '../config/schema.js';
 import { upsertProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
+import { hasSupervisorGitHubToken } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { workspaceDir } from '../utils/paths.js';
 import { repoFromRemote, slugFromRepo } from '../utils/slug.js';
@@ -22,6 +23,9 @@ export async function initProject(options) {
         throw new ConfigError(`origin is not a GitHub remote: ${remoteUrl}`);
     const github = new GitHubClient(options.runCommand, repoDir);
     await github.authStatus();
+    if (!hasSupervisorGitHubToken()) {
+        throw new ConfigError('Set GH_TOKEN or GITHUB_TOKEN in the supervisor environment before initialization.');
+    }
     const agent = chooseAgent(options.agent);
     const commands = await detectCommands(repoDir);
     const configPath = path.join(repoDir, '.kaizen', 'config.yml');

@@ -7,6 +7,7 @@ import { doctorProject } from '../src/commands/doctor.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -33,7 +34,7 @@ describe('doctorProject', () => {
       return result(command, args, options?.cwd, 'ok');
     });
 
-    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: runner });
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: trustedRunner(runner) });
 
     expect(output.ok).toBe(true);
     expect(output.runtime).toEqual({ commit: 'abc123', directory: '/runtime/kaizen-loop' });
@@ -65,7 +66,7 @@ describe('doctorProject', () => {
       cwd: repo,
       project: 'o-r',
       repair: true,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(true);
@@ -98,7 +99,7 @@ describe('doctorProject', () => {
       cwd: repo,
       project: 'o-r',
       repair: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(false);
@@ -127,7 +128,7 @@ describe('doctorProject', () => {
       cwd: repo,
       project: 'o-r',
       repair: false,
-      runCommand: runner
+      runCommand: trustedRunner(runner)
     });
 
     expect(output.ok).toBe(false);
@@ -166,7 +167,7 @@ describe('doctorProject', () => {
       return result(command, args, options?.cwd, 'ok');
     });
 
-    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: runner });
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: trustedRunner(runner) });
 
     expect(output.ok).toBe(false);
     expect(output.checks.find((item) => item.name === 'verifier agent')).toMatchObject({

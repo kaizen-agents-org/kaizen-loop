@@ -106,7 +106,8 @@ export async function syncFleet(options) {
                     slug: project.slug,
                     project: projectRegistryEntry(project, config, true),
                     config,
-                    runCommand: options.runCommand
+                    runCommand: options.runCommand,
+                    launcherTrust: options.schedulerLauncherTrust
                 });
                 await updateRegistry((registry) => {
                     const registered = registry.projects[project.slug];

@@ -16,6 +16,7 @@ export interface FleetSyncOptions {
     prune: boolean;
     dryRun: boolean;
     runCommand: CommandRunner;
+    schedulerLauncherTrust?: (launcher: string) => boolean;
 }
 export interface FleetProjectResult {
     slug: string;
