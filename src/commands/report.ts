@@ -25,6 +25,10 @@ export interface ReportIssueNowOptions extends ReportIssueOptions {
   scheduled?: boolean;
   job?: string;
   existingLock?: RunLock;
+  authorizationEventRetry?: {
+    attempts: number;
+    baseDelayMs: number;
+  };
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<'direct' | 'pr' | 'reject'>;
 }
 
@@ -72,6 +76,7 @@ export async function reportIssueNow(options: ReportIssueNowOptions) {
     assumeYes: Boolean(options.assumeYes),
     confirmDirectCommit: options.confirmDirectCommit,
     existingLock: options.existingLock,
+    authorizationEventRetry: options.authorizationEventRetry,
     runCommand: options.runCommand
   });
   return { issue, fix };

@@ -32,6 +32,10 @@ export async function runSandboxSmoke(options) {
         scheduled: Boolean(options.schedulerJob),
         job: options.schedulerJob,
         existingLock: options.existingLock,
+        authorizationEventRetry: options.authorizationEventRetry ?? {
+            attempts: 5,
+            baseDelayMs: 250
+        },
         runCommand: options.runCommand
     });
     const run = result.fix;
@@ -39,6 +43,7 @@ export async function runSandboxSmoke(options) {
         throw new Error('Smoke run unexpectedly returned a dry-run selection.');
     }
     const issueSummary = run.issues.find((issue) => issue.number === result.issue.number) ?? run.issues[0];
+    assertSmokePullRequest(result.issue.number, run, issueSummary);
     const runId = toRunId(new Date(run.startedAt));
     const stateDir = projectStateDir(resolved.slug);
     const runDir = path.join(stateDir, 'runs', runId);
@@ -109,6 +114,16 @@ export async function runSandboxSmoke(options) {
     await fs.mkdir(artifactDir, { recursive: true });
     await fs.writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
     return artifact;
+}
+function assertSmokePullRequest(issueNumber, run, issueSummary) {
+    if (!issueSummary) {
+        const skipped = run.skipped.find((item) => item.number === issueNumber);
+        throw new Error(`Smoke issue #${issueNumber} was not processed: ${skipped?.reason ?? 'no issue result was recorded'}`);
+    }
+    if (issueSummary.number !== issueNumber || issueSummary.outcome !== 'pr-created' || !issueSummary.pr || !issueSummary.prUrl) {
+        const reason = issueSummary.reason ? `: ${issueSummary.reason}` : '';
+        throw new Error(`Smoke issue #${issueNumber} did not open a pull request (outcome: ${issueSummary.outcome})${reason}`);
+    }
 }
 function defaultSmokeTitle(startedAt) {
     return `[sandbox-smoke] Verify Kaizen issue-to-PR path ${startedAt}`;

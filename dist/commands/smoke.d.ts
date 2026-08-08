@@ -12,6 +12,10 @@ export interface SandboxSmokeOptions {
     assumeYes?: boolean;
     schedulerJob?: string;
     existingLock?: RunLock;
+    authorizationEventRetry?: {
+        attempts: number;
+        baseDelayMs: number;
+    };
     runCommand: CommandRunner;
 }
 export interface SandboxSmokeArtifact {

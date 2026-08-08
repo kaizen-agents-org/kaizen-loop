@@ -20,6 +20,10 @@ export interface RunOptions {
     assumeYes?: boolean;
     confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
     existingLock?: RunLock;
+    authorizationEventRetry?: {
+        attempts: number;
+        baseDelayMs: number;
+    };
     runCommand: CommandRunner;
 }
 export type DirectCommitChoice = 'direct' | 'pr' | 'reject';
