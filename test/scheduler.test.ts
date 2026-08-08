@@ -246,6 +246,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain('45 4 * * 0 ');
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain(`'${await fs.realpath(process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER!)}'`);
+    expect(crontabInput).toContain('KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh');
     expect(crontabInput).not.toContain('GH_TOKEN=');
     expect(crontabInput).not.toContain('publication-token');
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");
@@ -387,6 +388,7 @@ describe('enableScheduler', () => {
     expect(plist).toContain('<key>StartInterval</key><integer>300</integer>');
     expect(plist).toContain('<string>/bin/sh</string>');
     expect(plist).toContain('<string>issue-watch</string>');
+    expect(plist).toContain('<key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>');
     expect(plist).not.toContain('bin/run-scheduled.sh</string>');
   });
 
