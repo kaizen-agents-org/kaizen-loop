@@ -38,6 +38,15 @@ export interface TrustedExecutables {
   githubToken?: string;
   githubPublisher?: GitHubPublisher;
 }
+
+export class TrustedGitHubCliUnavailableError extends Error {
+  readonly reasonCode = 'trusted_github_cli_unavailable' as const;
+
+  constructor(message = trustedGitHubCliRemediation()) {
+    super(message);
+    this.name = 'TrustedGitHubCliUnavailableError';
+  }
+}
 export interface GitHubPublicationRequest {
   cwd: string;
   pushUrl: string;
@@ -319,6 +328,16 @@ export function publicationGitExecutable(command: CommandRunner): string | undef
 
 export function githubCliExecutable(command: CommandRunner): string | undefined {
   return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.githubCli;
+}
+
+export function requireTrustedGitHubCliExecutable(command: CommandRunner): string {
+  const executable = githubCliExecutable(command);
+  if (!executable) throw new TrustedGitHubCliUnavailableError();
+  return executable;
+}
+
+function trustedGitHubCliRemediation(): string {
+  return 'Trusted GitHub CLI executable was not found before untrusted work. Install gh in an immutable root-owned path reachable on PATH before starting Kaizen, then reinstall managed scheduler jobs.';
 }
 
 export function publicationSshExecutable(command: CommandRunner): string | undefined {

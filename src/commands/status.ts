@@ -526,8 +526,12 @@ function emptySandboxSmokeMetrics() {
 }
 
 function summarizeRunIssues(summaries: RunSummary[]) {
-  const issues = summaries.flatMap((summary) => summary.issues ?? []);
-  const topLevelSkipped = summaries.reduce((sum, summary) => sum + (summary.skipped?.length ?? 0), 0);
+  const allIssues = summaries.flatMap((summary) => summary.issues ?? []);
+  const issues = allIssues.filter((issue) => issue.number > 0);
+  const topLevelSkipped = summaries.reduce(
+    (sum, summary) => sum + (summary.skipped?.filter((issue) => issue.number > 0).length ?? 0),
+    0
+  );
   const metrics = emptyRunMetrics();
   metrics.runs = summaries.length;
   metrics.processed = issues.length;
@@ -535,7 +539,7 @@ function summarizeRunIssues(summaries: RunSummary[]) {
   metrics.directCommit = countOutcome(issues, 'direct-commit');
   metrics.alreadyFixed = countOutcome(issues, 'already-fixed');
   metrics.failed = countOutcome(issues, 'failed');
-  metrics.infrastructureFailed = countOutcome(issues, 'infrastructure-failure');
+  metrics.infrastructureFailed = countOutcome(allIssues, 'infrastructure-failure');
   metrics.blocked = countOutcome(issues, 'blocked');
   metrics.skipped = countOutcome(issues, 'skipped') + topLevelSkipped;
   metrics.verificationFailed = countReasonPrefix(issues, 'Verification failed:');

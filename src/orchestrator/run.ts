@@ -485,6 +485,15 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       }
     } catch (error) {
       runFailed = true;
+      const reason = error instanceof Error ? error.message : String(error);
+      summary.issues.push({
+        number: 0,
+        title: 'Run infrastructure preflight',
+        outcome: 'infrastructure-failure',
+        reason
+      });
+      summary.skipped.push({ number: 0, reason });
+      queueObservation ??= { backlogCount: 0, eligibleCount: 0 };
       throw error;
     } finally {
       summary.finishedAt = new Date().toISOString();
@@ -492,7 +501,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       if (queueObservation) {
         summary.queue = summarizeQueue({
           ...queueObservation,
-          processedCount: summary.issues.length,
+          processedCount: summary.issues.filter((issue) => issue.number > 0).length,
           result: summary.result,
           skipped: summary.skipped,
           previousSummaries: await readPersistedRunSummaries(stateDir),
@@ -2968,7 +2977,7 @@ async function updateLastRun(slug: string, summary: RunSummary): Promise<void> {
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt,
     result: summary.result,
-    processed: summary.issues.length,
+    processed: summary.issues.filter((issue) => issue.number > 0).length,
     fixed: summary.issues.filter((issue) =>
       issue.outcome === 'direct-commit' || issue.outcome === 'pr-created' || issue.outcome === 'already-fixed'
     ).length,

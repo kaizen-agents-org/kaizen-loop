@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   trustedGithubCliEnv,
-  githubCliExecutable as resolveGitHubCliExecutable,
+  requireTrustedGitHubCliExecutable,
   publicationGitExecutable as resolvePublicationGitExecutable,
   type CommandRunner
 } from '../utils/command.js';
@@ -534,10 +534,7 @@ export class GitHubClient {
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
-    const githubCliExecutable = resolveGitHubCliExecutable(this.run);
-    if (!githubCliExecutable) {
-      throw new Error('Trusted GitHub CLI executable was not found before untrusted work.');
-    }
+    const githubCliExecutable = requireTrustedGitHubCliExecutable(this.run);
     let lastError: unknown;
     const attempts = options.noRetry ? 1 : 3;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {

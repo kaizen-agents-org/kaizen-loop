@@ -29,6 +29,13 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 const SUPERVISOR_CREDENTIAL_ENV = new Set([...GITHUB_CLI_AUTH_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
+export class TrustedGitHubCliUnavailableError extends Error {
+    reasonCode = 'trusted_github_cli_unavailable';
+    constructor(message = trustedGitHubCliRemediation()) {
+        super(message);
+        this.name = 'TrustedGitHubCliUnavailableError';
+    }
+}
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
@@ -232,6 +239,15 @@ export function publicationGitExecutable(command) {
 }
 export function githubCliExecutable(command) {
     return command[TRUSTED_COMMAND_RUNNER]?.githubCli;
+}
+export function requireTrustedGitHubCliExecutable(command) {
+    const executable = githubCliExecutable(command);
+    if (!executable)
+        throw new TrustedGitHubCliUnavailableError();
+    return executable;
+}
+function trustedGitHubCliRemediation() {
+    return 'Trusted GitHub CLI executable was not found before untrusted work. Install gh in an immutable root-owned path reachable on PATH before starting Kaizen, then reinstall managed scheduler jobs.';
 }
 export function publicationSshExecutable(command) {
     return command[TRUSTED_COMMAND_RUNNER]?.ssh;

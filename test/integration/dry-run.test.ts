@@ -1789,6 +1789,62 @@ describe('runKaizen PR flow', () => {
     });
   });
 
+  it('persists blocked infrastructure health when trusted GitHub CLI is unavailable', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith(
+        { guardian: { enabled: false } },
+        { agent: 'claude', setup: null, verify: [] }
+      )
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace,
+          schedule: '02:00', enabled: false, createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(runKaizenCore({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: false,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    })).rejects.toThrow('Trusted GitHub CLI executable was not found');
+
+    const lastRun = JSON.parse(await fs.readFile(
+      path.join(home, 'projects', 'o-r', 'last-run.json'),
+      'utf8'
+    )) as {
+      result: string;
+      processed: number;
+      infrastructureFailed: number;
+      queue: { health: { state: string; reasonCode: string } };
+    };
+    expect(lastRun).toMatchObject({
+      result: 'failed',
+      processed: 0,
+      infrastructureFailed: 1,
+      queue: {
+        health: {
+          state: 'blocked',
+          reasonCode: 'trusted_github_cli_unavailable'
+        }
+      }
+    });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('previews merged PR issue reconciliation during dry-run without mutating GitHub', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));

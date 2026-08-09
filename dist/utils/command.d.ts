@@ -6,6 +6,10 @@ export interface TrustedExecutables {
     githubToken?: string;
     githubPublisher?: GitHubPublisher;
 }
+export declare class TrustedGitHubCliUnavailableError extends Error {
+    readonly reasonCode: "trusted_github_cli_unavailable";
+    constructor(message?: string);
+}
 export interface GitHubPublicationRequest {
     cwd: string;
     pushUrl: string;
@@ -47,6 +51,7 @@ export declare function isolatedGitEnv(source?: NodeJS.ProcessEnv): NodeJS.Proce
 export declare function gitPublicationEnv(source?: NodeJS.ProcessEnv, initialToken?: string | undefined): NodeJS.ProcessEnv;
 export declare function publicationGitExecutable(command: CommandRunner): string | undefined;
 export declare function githubCliExecutable(command: CommandRunner): string | undefined;
+export declare function requireTrustedGitHubCliExecutable(command: CommandRunner): string;
 export declare function publicationSshExecutable(command: CommandRunner): string | undefined;
 export declare function publicationGithubToken(command: CommandRunner): string | undefined;
 export declare function publicationGithubPublisher(command: CommandRunner): GitHubPublisher | undefined;

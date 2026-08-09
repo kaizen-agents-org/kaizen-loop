@@ -152,7 +152,10 @@ root-owned runtime chain.
 ```sh
 sudo install -d -o root -m 0755 /usr/local/libexec/kaizen-loop
 sudo install -o root -m 0755 scripts/run-scheduled.sh /usr/local/libexec/kaizen-loop/run-scheduled.sh
+# Install a standalone gh binary, not a user-owned wrapper or profile symlink.
+sudo install -o root -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-loop/gh
 export KAIZEN_CRON_SCHEDULED_LAUNCHER=/usr/local/libexec/kaizen-loop/run-scheduled.sh
+export PATH=/usr/local/libexec/kaizen-loop:$PATH
 kaizen init --agent codex --schedule 02:00
 kaizen scheduler sync
 export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"
@@ -168,7 +171,10 @@ kaizen goal run <goal-id> --yes --json
 After upgrading from a release that self-installed the scheduled launcher,
 provision the operator-managed launcher above and rerun `kaizen scheduler sync`
 for each registered project. Scheduler synchronization never writes or replaces
-`KAIZEN_CRON_SCHEDULED_LAUNCHER`.
+`KAIZEN_CRON_SCHEDULED_LAUNCHER`. It also verifies the trusted `gh` executable
+before removing or replacing existing jobs. When the executable is absent,
+install the administrator-managed copy, start Kaizen with its directory first on
+`PATH`, and rerun scheduler synchronization.
 
 For a third-party installation, start with the [third-party adopter guide](./docs/15-third-party-adopter-guide.md). Its recommended GitHub Actions path adds `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs. The lower-level workflow contract is documented in [docs/14-github-actions.md](./docs/14-github-actions.md).
 

@@ -209,6 +209,7 @@ interface SchedulerProvider {
 
 - job ごとに `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job-id>.plist` を管理する
 - operator は root 所有かつ runtime user が変更できない絶対パスへ `run-scheduled.sh` を事前配置し、`KAIZEN_CRON_SCHEDULED_LAUNCHER` で指定する。`scheduler sync` は launcher を作成・更新せず、信頼条件を満たさないパスや symlink を fail closed で拒否する。各 job はこの wrapper から operator launcher を経由し、専用 runtime clone を `origin/main` に更新・ビルドしてから実行する。通常の開発 checkout は変更しない
+- scheduler を同期するプロセスの `PATH` には、実行ファイルと全親ディレクトリが root 所有かつ group / other から書込不能な `gh` を含める。user-owned Homebrew wrapper や home profile symlink は受理しない。`scheduler sync` はこの条件を job 置換前に検査し、満たさない場合は既存 plist を変更せず remediation 付きで停止する
 - `schedule.type: daily` / `times` / `weekly` は `StartCalendarInterval`
 - `schedule.type: interval` は `StartInterval`
 - `schedule.type: rrule` は launchd で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする
@@ -220,6 +221,7 @@ interface SchedulerProvider {
 
 - crontab に Kaizen 管理マーカー付きの行を追加する
 - 各行は launchd と同じ operator-managed scheduled wrapper と共通 launcher を経由し、最新の `origin/main` build を実行する
+- `scheduler sync` で検証した trusted `gh` のディレクトリを各行の `PATH` 先頭へ固定し、非 login shell でも同じ実行ファイルを解決する
 - `schedule.type: daily` / `times` / `weekly` は cron の時刻指定へ展開する
 - `schedule.type: interval` は cron で表現できる範囲へ変換する
 - `schedule.type: rrule` は cron で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする
