@@ -107,7 +107,10 @@ function launchdPlist(slug: string, job: SchedulerJob, launcher: string): string
   </array>
 ${schedule}
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string></dict>
+  <dict>
+    <key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string>
+    <key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>
+  </dict>
   <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.out.log`))}</string>
   <key>StandardErrorPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.err.log`))}</string>
 </dict>
@@ -120,7 +123,7 @@ function cronMarker(slug: string): string {
 }
 
 function commandLine(slug: string, job: SchedulerJob, launcher: string): string {
-  const command = `/bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+  const command = `KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
   return command;
 }
 

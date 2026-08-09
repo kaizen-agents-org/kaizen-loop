@@ -80,7 +80,10 @@ function launchdPlist(slug, job, launcher) {
   </array>
 ${schedule}
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string></dict>
+  <dict>
+    <key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string>
+    <key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>
+  </dict>
   <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.out.log`))}</string>
   <key>StandardErrorPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.err.log`))}</string>
 </dict>
@@ -91,7 +94,7 @@ function cronMarker(slug) {
     return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 function commandLine(slug, job, launcher) {
-    const command = `/bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+    const command = `KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
     return command;
 }
 function requiredScheduledLauncher(trust = isTrustedExecutablePath) {

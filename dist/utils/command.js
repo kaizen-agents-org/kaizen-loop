@@ -35,7 +35,9 @@ const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH)
 const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv.slice(2));
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
 const INITIAL_GITHUB_TOKEN_SOCKET = resolveConfiguredBrokerSocket(process.env.KAIZEN_GITHUB_TOKEN_SOCKET);
+const INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS = publicationTimeoutMs(process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS);
 const activeChildren = new Set();
+const activePublicationSockets = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal;
@@ -154,7 +156,7 @@ Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
         ssh: INITIAL_SSH_EXECUTABLE,
         githubToken: INITIAL_GITHUB_TOKEN,
         githubPublisher: INITIAL_GITHUB_TOKEN_SOCKET
-            ? (request) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, request)
+            ? (request, timeoutMs) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, request, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
             : undefined
     })
 });
@@ -289,16 +291,28 @@ function resolveConfiguredBrokerSocket(socketPath) {
     }
     return resolved;
 }
-function requestGithubPublication(socketPath, request) {
+function requestGithubPublication(socketPath, request, timeoutMs) {
+    installShutdownHooks();
+    throwIfShutdownRequested();
     return new Promise((resolve, reject) => {
         const socket = net.createConnection(socketPath);
+        activePublicationSockets.add(socket);
         let output = '';
+        let settled = false;
+        let absoluteTimeout;
         const fail = () => {
+            if (settled)
+                return;
+            settled = true;
+            if (absoluteTimeout)
+                clearTimeout(absoluteTimeout);
+            activePublicationSockets.delete(socket);
             socket.destroy();
             reject(new Error('GitHub credential broker failed to acknowledge publication.'));
         };
+        absoluteTimeout = setTimeout(fail, timeoutMs);
+        absoluteTimeout.unref();
         socket.setEncoding('utf8');
-        socket.setTimeout(10_000, fail);
         socket.on('connect', () => socket.end(`${JSON.stringify({
             version: 1,
             operation: 'git-push',
@@ -310,7 +324,10 @@ function requestGithubPublication(socketPath, request) {
                 fail();
         });
         socket.on('error', fail);
+        socket.on('close', fail);
         socket.on('end', () => {
+            if (settled)
+                return;
             const lines = output.replace(/\r\n/g, '\n').split('\n');
             if (lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
                 fail();
@@ -320,6 +337,10 @@ function requestGithubPublication(socketPath, request) {
                 const response = JSON.parse(lines[0] || '{}');
                 if (response.ok !== true)
                     throw new Error('broker rejected publication');
+                settled = true;
+                if (absoluteTimeout)
+                    clearTimeout(absoluteTimeout);
+                activePublicationSockets.delete(socket);
                 resolve();
             }
             catch {
@@ -327,6 +348,15 @@ function requestGithubPublication(socketPath, request) {
             }
         });
     });
+}
+function publicationTimeoutMs(value) {
+    if (!value)
+        return 30 * 60_000;
+    const timeout = Number(value);
+    if (!Number.isSafeInteger(timeout) || timeout < 10_000 || timeout > 60 * 60_000) {
+        throw new Error('KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS must be an integer from 10000 to 3600000.');
+    }
+    return timeout;
 }
 function resolveExecutable(command, searchPath, accept) {
     for (const directory of searchPath?.split(path.delimiter) ?? []) {
@@ -456,7 +486,15 @@ export function withRunDeadline(runCommand, deadlineAt) {
     };
     const trustedExecutables = runCommand[TRUSTED_COMMAND_RUNNER];
     if (trustedExecutables) {
-        Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, { value: trustedExecutables });
+        const githubPublisher = trustedExecutables.githubPublisher;
+        Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, {
+            value: Object.freeze({
+                ...trustedExecutables,
+                githubPublisher: githubPublisher
+                    ? (request, timeoutMs) => githubPublisher(request, timeoutWithinDeadline(timeoutMs, deadlineAt))
+                    : undefined
+            })
+        });
     }
     return deadlineCommand;
 }
@@ -486,6 +524,8 @@ function installShutdownHooks() {
                 terminateProcessTree(child, 'SIGTERM');
                 setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000).unref();
             }
+            for (const socket of activePublicationSockets)
+                socket.destroy();
         });
     }
 }

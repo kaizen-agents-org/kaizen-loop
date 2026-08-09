@@ -17,9 +17,12 @@ import {
   isWindowsExecutablePathTrusted,
   isolatedGitEnv,
   publicationGitExecutable,
+  publicationGithubPublisher,
   runCommand,
+  withTrustedExecutables,
   withRunDeadline,
-  type CommandRunner
+  type CommandRunner,
+  type GitHubPublicationRequest
 } from '../src/utils/command.js';
 
 describe('buildAllowlistedEnv', () => {
@@ -357,6 +360,26 @@ describe('runCommand', () => {
 });
 
 describe('withRunDeadline', () => {
+  it('caps broker publication at the remaining run deadline', async () => {
+    const runner = vi.fn<CommandRunner>();
+    const publisher = vi.fn(async (_request: GitHubPublicationRequest, _timeoutMs?: number) => {});
+    const trustedRunner = withTrustedExecutables(runner, { githubPublisher: publisher });
+    const deadlineRunner = withRunDeadline(trustedRunner, Date.now() + 1_000);
+    const request = {
+      cwd: '/workspace',
+      pushUrl: 'https://github.com/owner/repo.git',
+      refspec: 'HEAD:refs/heads/fix',
+      expectedRepo: 'owner/repo',
+      expectedSha: 'a'.repeat(40)
+    };
+
+    await publicationGithubPublisher(deadlineRunner)!(request);
+
+    expect(publisher).toHaveBeenCalledOnce();
+    expect(publisher.mock.calls[0][1]).toBeGreaterThan(0);
+    expect(publisher.mock.calls[0][1]).toBeLessThanOrEqual(1_000);
+  });
+
   it('bounds command timeouts by the remaining run deadline', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
       command,
