@@ -508,7 +508,11 @@ async function createVerifierRemote(): Promise<{
 }> {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-remote-'));
   const git = async (...args: string[]): Promise<string> => {
-    const { stdout } = await execFileAsync('git', args, { cwd: repo });
+    const { stdout } = await execFileAsync('git', [
+      '-c', 'commit.gpgSign=false',
+      '-c', 'tag.gpgSign=false',
+      ...args
+    ], { cwd: repo });
     return stdout.trim();
   };
   await git('init', '--initial-branch=main');
