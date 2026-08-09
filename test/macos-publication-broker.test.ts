@@ -200,7 +200,10 @@ const preflight = () => request({
       const escalation = setTimeout(() => {
         if (broker.exitCode === null) broker.kill('SIGKILL');
       }, 5_000);
-      await exited;
+      await Promise.race([
+        exited,
+        new Promise<void>((resolve) => setTimeout(resolve, 10_000))
+      ]);
       clearTimeout(escalation);
     }
     await fs.rm(root, { recursive: true, force: true });
