@@ -11,8 +11,8 @@ Run the complete repository checks before creating a release tag:
 set -euo pipefail
 npm test
 npm run typecheck
-npm run build
 npm run check:dist
+npm run build
 ```
 
 `dist/` is committed and is the CLI shipped by the tag, so `check:dist` is a
