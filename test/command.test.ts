@@ -18,6 +18,7 @@ import {
   isWindowsExecutablePathTrusted,
   isolatedGitEnv,
   publicationGitExecutable,
+  publicationGithubPreflight,
   publicationGithubPublisher,
   runCommand,
   withTrustedExecutables,
@@ -54,9 +55,14 @@ describe('buildUntrustedEnv', () => {
       GITHUB_TOKEN: 'github-token',
       GH_CONFIG_DIR: '/supervisor-gh',
       SSH_AUTH_SOCK: '/supervisor-agent',
+      KAIZEN_GITHUB_TOKEN_SOCKET: '/trusted/broker.sock',
+      KAIZEN_GITHUB_BROKER_CAPABILITY: 'a'.repeat(64),
       gh_token: 'case-insensitive-publication-token',
       github_token: 'case-insensitive-github-token'
-    }, ['PATH', 'GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'SSH_AUTH_SOCK', 'gh_token', 'github_token'], {
+    }, [
+      'PATH', 'GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'SSH_AUTH_SOCK',
+      'KAIZEN_GITHUB_TOKEN_SOCKET', 'KAIZEN_GITHUB_BROKER_CAPABILITY', 'gh_token', 'github_token'
+    ], {
       github_enterprise_token: 'extra-token'
     })).toEqual({ PATH: '/bin' });
   });
@@ -416,6 +422,27 @@ describe('withRunDeadline', () => {
     expect(publisher).toHaveBeenCalledOnce();
     expect(publisher.mock.calls[0][1]).toBeGreaterThan(0);
     expect(publisher.mock.calls[0][1]).toBeLessThanOrEqual(1_000);
+  });
+
+  it('caps authenticated broker preflight at the remaining run deadline', async () => {
+    const runner = vi.fn<CommandRunner>();
+    const preflight = vi.fn(async (_request: { pushUrl: string; expectedRepo: string }, _timeoutMs?: number) => {});
+    const trustedRunner = withTrustedExecutables(runner, { githubPublicationPreflight: preflight });
+    const deadlineRunner = withRunDeadline(trustedRunner, Date.now() + 1_000);
+    const request = { pushUrl: 'https://github.com/o/r.git', expectedRepo: 'o/r' };
+
+    await publicationGithubPreflight(deadlineRunner)!(request);
+
+    expect(preflight).toHaveBeenCalledOnce();
+    expect(preflight.mock.calls[0][0]).toEqual(request);
+    expect(preflight.mock.calls[0][1]).toBeGreaterThan(0);
+    expect(preflight.mock.calls[0][1]).toBeLessThanOrEqual(1_000);
+
+    await publicationGithubPreflight(deadlineRunner)!(request, 50);
+    expect(preflight.mock.calls[1][1]).toBe(50);
+
+    await publicationGithubPreflight(deadlineRunner)!(request, 60_000);
+    expect(preflight.mock.calls[2][1]).toBeLessThanOrEqual(1_000);
   });
 
   it('bounds command timeouts by the remaining run deadline', async () => {

@@ -10,7 +10,7 @@ import { loadRegistry, resolveProject } from '../config/registry.js';
 import { buildDiscoveredIssueFingerprint, parseFailureClass } from '../discovered-issue-fingerprint.js';
 import { CreatedPullRequestValidationError, GitHubClient } from '../github/client.js';
 import { agentSummary, buildPrProgressComment, buildResultComment, countAttempts, countConsecutiveRetryableBlocks, markedPullRequestNumbers } from '../report/comments.js';
-import { throwIfShutdownRequested, withRunDeadline } from '../utils/command.js';
+import { publicationGithubPreflight, publicationGithubToken, throwIfShutdownRequested, withRunDeadline } from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -215,6 +215,12 @@ export async function runKaizen(options) {
         let runFailed = false;
         let queueObservation;
         try {
+            await preflightScheduledPublication({
+                scheduled: options.scheduled,
+                localPath: resolved.project.localPath,
+                expectedRepo: resolved.project.repo,
+                runCommand
+            });
             let selection = await selectRunIssues();
             if (options.scheduled && config.guardian.enabled) {
                 try {
@@ -407,6 +413,30 @@ export async function runKaizen(options) {
     }
     finally {
         await lock.release();
+    }
+}
+export async function preflightScheduledPublication(options) {
+    if (!options.scheduled)
+        return;
+    if (publicationGithubToken(options.runCommand)) {
+        throw new Error('Scheduled publication refuses ambient GitHub tokens; use the authenticated publication broker.');
+    }
+    const pushUrls = await new GitClient(options.runCommand, options.localPath).publicationPushUrls();
+    if (pushUrls.length !== 1) {
+        throw new Error(`Scheduled publication requires exactly one origin push URL; found ${pushUrls.length}.`);
+    }
+    const remoteUrl = pushUrls[0];
+    if (!remoteUrl.startsWith('https://'))
+        return;
+    const brokerPreflight = publicationGithubPreflight(options.runCommand);
+    if (!brokerPreflight) {
+        throw new Error('Scheduled HTTPS publication requires an authenticated publication broker before issue intake. Install the macOS publication broker and resync scheduler jobs.');
+    }
+    try {
+        await brokerPreflight({ pushUrl: remoteUrl, expectedRepo: options.expectedRepo });
+    }
+    catch {
+        throw new Error('Scheduled HTTPS publication broker preflight failed before issue intake. Verify the root-owned broker, launcher registration, and repository allowlist.');
     }
 }
 export async function preflightVerifier(options) {

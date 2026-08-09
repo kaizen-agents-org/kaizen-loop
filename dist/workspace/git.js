@@ -18,6 +18,17 @@ export class GitClient {
         const result = await this.git(['remote', 'get-url', name]);
         return result.stdout.trim();
     }
+    async publicationPushUrls() {
+        const publicationGitExecutable = resolvePublicationGitExecutable(this.run);
+        if (!publicationGitExecutable) {
+            throw new Error('Could not resolve a trusted Git executable before publication.');
+        }
+        const result = await this.run(publicationGitExecutable, ['remote', 'get-url', '--push', '--all', 'origin'], {
+            cwd: this.cwd,
+            env: isolatedGitEnv()
+        });
+        return result.stdout.split('\n').map((url) => url.trim()).filter(Boolean);
+    }
     async currentBranch() {
         const result = await this.git(['branch', '--show-current']);
         return result.stdout.trim();
@@ -164,11 +175,7 @@ export class GitClient {
             throw new Error('Could not resolve a trusted Git executable before publication.');
         }
         const publicationLocalEnv = isolatedGitEnv();
-        const pushUrlResult = await this.run(publicationGitExecutable, ['remote', 'get-url', '--push', '--all', 'origin'], {
-            cwd: this.cwd,
-            env: publicationLocalEnv
-        });
-        const pushUrls = pushUrlResult.stdout.split('\n').map((url) => url.trim()).filter(Boolean);
+        const pushUrls = await this.publicationPushUrls();
         if (pushUrls.length !== 1)
             throw new Error(`Refusing to publish through ${pushUrls.length} origin push URLs.`);
         const pushUrl = pushUrls[0];

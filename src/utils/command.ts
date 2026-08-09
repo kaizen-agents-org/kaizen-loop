@@ -29,7 +29,12 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
   'GITHUB_ENTERPRISE_TOKEN'
 ];
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
-const SUPERVISOR_CREDENTIAL_ENV = new Set([...GITHUB_CLI_AUTH_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
+const SUPERVISOR_CREDENTIAL_ENV = new Set([
+  ...GITHUB_CLI_AUTH_ENV_ALLOWLIST,
+  ...GIT_CLI_AUTH_ENV_ALLOWLIST,
+  'KAIZEN_GITHUB_TOKEN_SOCKET',
+  'KAIZEN_GITHUB_BROKER_CAPABILITY'
+]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export interface TrustedExecutables {
   git?: string;
@@ -37,6 +42,7 @@ export interface TrustedExecutables {
   ssh?: string;
   githubToken?: string;
   githubPublisher?: GitHubPublisher;
+  githubPublicationPreflight?: GitHubPublicationPreflight;
 }
 
 export class TrustedGitHubCliUnavailableError extends Error {
@@ -55,13 +61,22 @@ export interface GitHubPublicationRequest {
   expectedSha: string;
   forceWithLease?: string;
 }
+export interface GitHubPublicationPreflightRequest {
+  pushUrl: string;
+  expectedRepo: string;
+}
 export type GitHubPublisher = (request: GitHubPublicationRequest, timeoutMs?: number) => Promise<void>;
+export type GitHubPublicationPreflight = (
+  request: GitHubPublicationPreflightRequest,
+  timeoutMs?: number
+) => Promise<void>;
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
 const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv.slice(2));
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
 const INITIAL_GITHUB_TOKEN_SOCKET = resolveConfiguredBrokerSocket(process.env.KAIZEN_GITHUB_TOKEN_SOCKET);
+const INITIAL_GITHUB_BROKER_CAPABILITY = resolveBrokerCapability(process.env.KAIZEN_GITHUB_BROKER_CAPABILITY);
 const INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS = publicationTimeoutMs(
   process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS
 );
@@ -223,6 +238,15 @@ function initialTrustedExecutables(): TrustedExecutables {
     githubPublisher: INITIAL_GITHUB_TOKEN_SOCKET
       ? (request: GitHubPublicationRequest, timeoutMs?: number) => requestGithubPublication(
         INITIAL_GITHUB_TOKEN_SOCKET,
+        INITIAL_GITHUB_BROKER_CAPABILITY,
+        request,
+        Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS)
+      )
+      : undefined,
+    githubPublicationPreflight: INITIAL_GITHUB_TOKEN_SOCKET
+      ? (request: GitHubPublicationPreflightRequest, timeoutMs?: number) => requestGithubPublicationPreflight(
+        INITIAL_GITHUB_TOKEN_SOCKET,
+        INITIAL_GITHUB_BROKER_CAPABILITY,
         request,
         Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS)
       )
@@ -359,6 +383,13 @@ export function publicationGithubPublisher(
   return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]?.githubPublisher;
 }
 
+export function publicationGithubPreflight(
+  command: CommandRunner
+): GitHubPublicationPreflight | undefined {
+  return (command as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER]
+    ?.githubPublicationPreflight;
+}
+
 export function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner {
   const trustedCommand: CommandRunner = (executable, args, options) => command(executable, args, options);
   Object.defineProperty(trustedCommand, TRUSTED_COMMAND_RUNNER, { value: Object.freeze({ ...executables }) });
@@ -412,9 +443,36 @@ function resolveConfiguredBrokerSocket(socketPath: string | undefined): string |
   return resolved;
 }
 
+function resolveBrokerCapability(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error('KAIZEN_GITHUB_BROKER_CAPABILITY must be a 64-character lowercase hexadecimal value.');
+  }
+  delete process.env.KAIZEN_GITHUB_BROKER_CAPABILITY;
+  return value;
+}
+
 function requestGithubPublication(
   socketPath: string,
+  capability: string | undefined,
   request: GitHubPublicationRequest,
+  timeoutMs: number
+): Promise<void> {
+  return requestBroker(socketPath, { operation: 'git-push', capability, ...request }, timeoutMs);
+}
+
+function requestGithubPublicationPreflight(
+  socketPath: string,
+  capability: string | undefined,
+  request: GitHubPublicationPreflightRequest,
+  timeoutMs: number
+): Promise<void> {
+  return requestBroker(socketPath, { operation: 'preflight', capability, ...request }, timeoutMs);
+}
+
+function requestBroker(
+  socketPath: string,
+  request: Record<string, unknown>,
   timeoutMs: number
 ): Promise<void> {
   installShutdownHooks();
@@ -436,9 +494,8 @@ function requestGithubPublication(
     absoluteTimeout = setTimeout(fail, timeoutMs);
     absoluteTimeout.unref();
     socket.setEncoding('utf8');
-    socket.on('connect', () => socket.end(`${JSON.stringify({
+    socket.on('connect', () => socket.write(`${JSON.stringify({
       version: 1,
-      operation: 'git-push',
       ...request
     })}\n`));
     socket.on('data', (chunk) => {
@@ -637,11 +694,18 @@ export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): 
   const trustedExecutables = (runCommand as CommandRunner & { [TRUSTED_COMMAND_RUNNER]?: TrustedExecutables })[TRUSTED_COMMAND_RUNNER];
   if (trustedExecutables) {
     const githubPublisher = trustedExecutables.githubPublisher;
+    const githubPublicationPreflight = trustedExecutables.githubPublicationPreflight;
     Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, {
       value: Object.freeze({
         ...trustedExecutables,
         githubPublisher: githubPublisher
           ? (request: GitHubPublicationRequest, timeoutMs?: number) => githubPublisher(
+            request,
+            timeoutWithinDeadline(timeoutMs, deadlineAt)
+          )
+          : undefined,
+        githubPublicationPreflight: githubPublicationPreflight
+          ? (request: GitHubPublicationPreflightRequest, timeoutMs?: number) => githubPublicationPreflight(
             request,
             timeoutWithinDeadline(timeoutMs, deadlineAt)
           )

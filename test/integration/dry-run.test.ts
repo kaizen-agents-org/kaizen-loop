@@ -21,6 +21,9 @@ async function runKaizen(options: Parameters<typeof runKaizenCore>[0]) {
   if (!options.runCommand) return runKaizenCore(options);
   const supplied = options.runCommand;
   const runCommand: CommandRunner = async (command, args, commandOptions) => {
+    if (options.scheduled && command === 'git' && args.join(' ') === 'remote get-url --push --all origin') {
+      return result(command, args, commandOptions?.cwd, 'https://github.com/o/r.git\n');
+    }
     if (command === 'git' && args[0] === 'ls-remote') {
       return result(command, args, commandOptions?.cwd, `${testVerifierCommit}\trefs/heads/main\n`);
     }
@@ -45,7 +48,16 @@ async function runKaizen(options: Parameters<typeof runKaizenCore>[0]) {
       runtime: { commit: testVerifierCommit, dirty: false, packageRoot: '/runtime/verifier/packages/core' }
     }));
   };
-  return runKaizenCore({ ...options, runCommand: trustedRunner(runCommand) });
+  return runKaizenCore({
+    ...options,
+    runCommand: options.scheduled
+      ? trustedRunner(runCommand, {
+        githubToken: false,
+        githubPublisher: async () => undefined,
+        githubPublicationPreflight: async () => undefined
+      })
+      : trustedRunner(runCommand)
+  });
 }
 
 describe('runKaizen dry-run', () => {

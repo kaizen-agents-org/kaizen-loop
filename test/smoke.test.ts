@@ -67,7 +67,11 @@ describe('runSandboxSmoke', () => {
       job: 'weekly-sandbox-smoke',
       dryRun: false,
       json: true,
-      runCommand: trustedRunner(runner)
+      runCommand: trustedRunner(runner, {
+        githubToken: false,
+        githubPublisher: async () => undefined,
+        githubPublicationPreflight: async () => undefined
+      })
     });
 
     if (!('kind' in artifact)) throw new Error('expected sandbox smoke artifact');

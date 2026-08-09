@@ -75,7 +75,7 @@ function launchdPlist(slug, job, launcher, schedulerPath) {
   <key>Label</key><string>com.kaizen-loop.${slug}.${job.name}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
+${path.extname(launcher) === '.sh' ? '    <string>/bin/sh</string>\n' : ''}
     <string>${escapeXml(launcher)}</string>
     <string>${escapeXml(process.execPath)}</string>
     <string>${escapeXml(slug)}</string>
@@ -86,6 +86,7 @@ ${schedule}
   <dict>
     <key>PATH</key><string>${escapeXml(schedulerPath)}</string>
     <key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>
+    <key>KAIZEN_GITHUB_BROKER_CAPABILITY</key><string></string>
   </dict>
   <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.out.log`))}</string>
   <key>StandardErrorPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.err.log`))}</string>
@@ -97,21 +98,25 @@ function cronMarker(slug) {
     return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 function commandLine(slug, job, launcher, schedulerPath) {
-    const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+    const interpreter = path.extname(launcher) === '.sh' ? '/bin/sh ' : '';
+    const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= ${interpreter}${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
     return command;
 }
 function pathWithExecutable(executable) {
     const executableDir = path.dirname(executable);
     const inherited = (process.env.PATH ?? '')
         .split(path.delimiter)
-        .filter((entry) => entry && entry !== executableDir);
-    return [executableDir, ...inherited].join(path.delimiter);
+        .filter(Boolean)
+        .map((entry) => path.resolve(entry));
+    return [...new Set([executableDir, ...inherited])].join(path.delimiter);
 }
 function requiredScheduledLauncher(trust = isTrustedExecutablePath) {
     const launcher = process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER;
     let resolvedLauncher;
     let trusted = false;
-    if (launcher && path.isAbsolute(launcher) && path.basename(launcher) === 'run-scheduled.sh') {
+    if (launcher &&
+        path.isAbsolute(launcher) &&
+        ['run-scheduled.sh', 'kaizen-scheduled-launcher'].includes(path.basename(launcher))) {
         try {
             resolvedLauncher = fsSync.realpathSync(launcher);
             trusted = resolvedLauncher === path.resolve(launcher) && trust(resolvedLauncher);
@@ -121,7 +126,7 @@ function requiredScheduledLauncher(trust = isTrustedExecutablePath) {
         }
     }
     if (!trusted) {
-        throw new ConfigError('Managed scheduling requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh.');
+        throw new ConfigError('Managed scheduling requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh or kaizen-scheduled-launcher.');
     }
     return resolvedLauncher;
 }
