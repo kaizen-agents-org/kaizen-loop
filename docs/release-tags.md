@@ -1,5 +1,10 @@
 # Release tag verification
 
+The organization-level [release tag guide](https://github.com/kaizen-agents-org/.github/blob/main/docs/release-tags.md)
+defines compatible component sets. Do not redefine compatibility here:
+`.github/onboarding/versions.json` is the source of truth for the set installed
+by the onboarding kit.
+
 Run the complete repository checks before creating a release tag:
 
 ```sh
@@ -9,6 +14,12 @@ npm run typecheck
 npm run build
 npm run check:dist
 ```
+
+`dist/` is committed and is the CLI shipped by the tag, so `check:dist` is a
+release gate rather than optional generated-file cleanup. Releases that change
+the runtime launcher, scheduler integration, or publication broker must also
+reinstall or resync those operator-managed assets from the candidate build and
+exercise a scheduled run; an old launcher can otherwise mask the tagged CLI.
 
 Then install the packed candidate in a temporary prefix and exercise a real,
 read-only GitHub operation. The selected project must already be registered, and
