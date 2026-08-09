@@ -22,7 +22,8 @@ private func dropPrivileges(_ config: SupervisorConfig) -> Never {
     if ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"] != nil {
         guard getuid() == config.runtimeUid, getgid() == config.runtimeGid else { exit(126) }
     } else {
-        guard initgroups(config.runtimeUser, config.runtimeGid) == 0,
+        guard let baseGid = Int32(exactly: config.runtimeGid),
+              initgroups(config.runtimeUser, baseGid) == 0,
               setgid(config.runtimeGid) == 0,
               setuid(config.runtimeUid) == 0 else {
             exit(126)
