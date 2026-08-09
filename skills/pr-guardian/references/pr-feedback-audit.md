@@ -14,7 +14,7 @@ gh pr checks <pr> --repo <owner/repo>
 
 Run this loop. It feeds each `pageInfo.endCursor` into the next request and stops only when `hasNextPage` is false:
 
-```bash
+```sh
 cursor=
 while :; do
   args=(
@@ -76,8 +76,7 @@ query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
         and (.comments | type == "object")
         and (.comments.nodes | type == "array")
         and all(.comments.nodes[];
-          has("fullDatabaseId")
-          and ((.fullDatabaseId == null) or (.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
+          ((.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
           and (.url | type == "string")
           and ((.author == null) or ((.author | type == "object") and (.author.login | type == "string")))
           and (.body | type == "string")
@@ -85,9 +84,7 @@ query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
           and (.outdated | type == "boolean"))
         and (.comments.pageInfo | type == "object")
         and (.comments.pageInfo.hasNextPage | type == "boolean")
-        and ((.comments.pageInfo.endCursor == null) or (.comments.pageInfo.endCursor | type == "string"))
-        and ((.comments.pageInfo.hasNextPage | not)
-          or ((.comments.pageInfo.endCursor | type == "string") and (.comments.pageInfo.endCursor | length > 0)))))
+        and ((.comments.pageInfo.endCursor == null) or (.comments.pageInfo.endCursor | type == "string"))))
   ' >/dev/null <<<"${page}"; then
     echo 'reviewThreads returned an incomplete response' >&2
     exit 1
@@ -106,7 +103,7 @@ done
 
 For every thread whose nested `comments.pageInfo.hasNextPage` is true, run the corresponding comment loop with that thread's GraphQL `id`:
 
-```bash
+```sh
 thread_id='<review-thread-id>'
 cursor=
 while :; do
@@ -138,8 +135,7 @@ query($threadId:ID!, $cursor:String) {
     | ($comments | type == "object")
       and ($comments.nodes | type == "array")
       and all($comments.nodes[];
-        has("fullDatabaseId")
-        and ((.fullDatabaseId == null) or (.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
+        ((.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
         and (.url | type == "string")
         and ((.author == null) or ((.author | type == "object") and (.author.login | type == "string")))
         and (.body | type == "string")
@@ -147,9 +143,7 @@ query($threadId:ID!, $cursor:String) {
         and (.outdated | type == "boolean"))
       and ($comments.pageInfo | type == "object")
       and ($comments.pageInfo.hasNextPage | type == "boolean")
-      and (($comments.pageInfo.endCursor == null) or ($comments.pageInfo.endCursor | type == "string"))
-      and (($comments.pageInfo.hasNextPage | not)
-        or (($comments.pageInfo.endCursor | type == "string") and ($comments.pageInfo.endCursor | length > 0))))
+      and (($comments.pageInfo.endCursor == null) or ($comments.pageInfo.endCursor | type == "string")))
   ' >/dev/null <<<"${page}"; then
     echo 'review comments returned an incomplete response' >&2
     exit 1
@@ -178,7 +172,7 @@ gh api --paginate 'repos/<owner>/<repo>/check-runs/<check-run-id>/annotations?pe
 
 ## Reply, then resolve
 
-For every addressed thread, reply to its first comment using `fullDatabaseId` after the fix is pushed and verified. A nullable `fullDatabaseId` does not invalidate the audit response, but if the first comment in a thread that requires a reply has a null ID, preserve its URL and report `blocked: unresolved required conversation` instead of resolving it without a reply:
+For every addressed thread, reply to its first comment using `fullDatabaseId` after the fix is pushed and verified:
 
 ```sh
 gh api --method POST \
