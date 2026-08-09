@@ -34,3 +34,10 @@ covered.
 For releases that change the issue-to-PR pipeline, also run `kaizen smoke` against
 the designated sandbox project and verify that it creates and validates a
 ready-for-review pull request.
+
+After creating the tag, update `kaizen-agents-org/.github`'s
+`onboarding/versions.json` to the new `kaizen-loop` tag and verify the complete
+pinned set through `onboarding/onboard.sh`. Run the smoke with the installed
+`kaizen` command, not this source checkout: this catches distribution skew where
+the installer records a pinned Verifier version but the pinned Kaizen CLI is too
+old to carry it into `verifier.expectedRef`.
