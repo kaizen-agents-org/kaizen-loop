@@ -22,7 +22,9 @@ export async function enableScheduler(options: {
   const jobs = schedulerJobs(options.config);
   const platform = options.platform ?? process.platform;
   const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher(options.launcherTrust);
-  if (jobs.length > 0) requireTrustedGitHubCliExecutable(options.runCommand);
+  const schedulerPath = jobs.length === 0
+    ? undefined
+    : pathWithExecutable(requireTrustedGitHubCliExecutable(options.runCommand));
   if (platform === 'darwin') {
     await fs.mkdir(projectStateDir(options.slug), { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
@@ -31,7 +33,7 @@ export async function enableScheduler(options: {
       const plistPath = launchdPlistPath(options.slug, job.name);
       paths.push(plistPath);
       await fs.mkdir(path.dirname(plistPath), { recursive: true });
-      await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher!));
+      await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher!, schedulerPath!));
       await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath]);
     }
     return { type: 'launchd', path: paths[0], paths, jobs };
@@ -44,7 +46,7 @@ export async function enableScheduler(options: {
   for (const job of jobs) {
     lines.push(`# ${marker} ${job.name}`);
     for (const cronTime of cronTimes(job.config.schedule)) {
-      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!, schedulerPath!)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
     }
   }
   await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
@@ -93,7 +95,7 @@ function launchdPlistPath(slug: string, jobName: string): string {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.${jobName}.plist`);
 }
 
-function launchdPlist(slug: string, job: SchedulerJob, launcher: string): string {
+function launchdPlist(slug: string, job: SchedulerJob, launcher: string, schedulerPath: string): string {
   const stateDir = projectStateDir(slug);
   const schedule = launchdSchedule(job.config.schedule);
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -113,7 +115,7 @@ function launchdPlist(slug: string, job: SchedulerJob, launcher: string): string
 ${schedule}
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>${escapeXml(process.env.PATH ?? '')}</string>
+    <key>PATH</key><string>${escapeXml(schedulerPath)}</string>
     <key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>
   </dict>
   <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.out.log`))}</string>
@@ -127,9 +129,17 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function commandLine(slug: string, job: SchedulerJob, launcher: string): string {
-  const command = `KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+function commandLine(slug: string, job: SchedulerJob, launcher: string, schedulerPath: string): string {
+  const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
   return command;
+}
+
+function pathWithExecutable(executable: string): string {
+  const executableDir = path.dirname(executable);
+  const inherited = (process.env.PATH ?? '')
+    .split(path.delimiter)
+    .filter((entry) => entry && entry !== executableDir);
+  return [executableDir, ...inherited].join(path.delimiter);
 }
 
 function requiredScheduledLauncher(trust = isTrustedExecutablePath): string {

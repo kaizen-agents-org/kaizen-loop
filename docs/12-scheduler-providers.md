@@ -221,6 +221,7 @@ interface SchedulerProvider {
 
 - crontab に Kaizen 管理マーカー付きの行を追加する
 - 各行は launchd と同じ operator-managed scheduled wrapper と共通 launcher を経由し、最新の `origin/main` build を実行する
+- `scheduler sync` で検証した trusted `gh` のディレクトリを各行の `PATH` 先頭へ固定し、非 login shell でも同じ実行ファイルを解決する
 - `schedule.type: daily` / `times` / `weekly` は cron の時刻指定へ展開する
 - `schedule.type: interval` は cron で表現できる範囲へ変換する
 - `schedule.type: rrule` は cron で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする
