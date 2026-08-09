@@ -76,7 +76,8 @@ query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
         and (.comments | type == "object")
         and (.comments.nodes | type == "array")
         and all(.comments.nodes[];
-          ((.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
+          has("fullDatabaseId")
+          and ((.fullDatabaseId == null) or (.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
           and (.url | type == "string")
           and ((.author == null) or ((.author | type == "object") and (.author.login | type == "string")))
           and (.body | type == "string")
@@ -135,7 +136,8 @@ query($threadId:ID!, $cursor:String) {
     | ($comments | type == "object")
       and ($comments.nodes | type == "array")
       and all($comments.nodes[];
-        ((.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
+        has("fullDatabaseId")
+        and ((.fullDatabaseId == null) or (.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
         and (.url | type == "string")
         and ((.author == null) or ((.author | type == "object") and (.author.login | type == "string")))
         and (.body | type == "string")
@@ -172,7 +174,7 @@ gh api --paginate 'repos/<owner>/<repo>/check-runs/<check-run-id>/annotations?pe
 
 ## Reply, then resolve
 
-For every addressed thread, reply to its first comment using `fullDatabaseId` after the fix is pushed and verified:
+For every addressed thread, reply to its first comment using `fullDatabaseId` after the fix is pushed and verified. A nullable `fullDatabaseId` does not invalidate the audit response, but if the first comment in a thread that requires a reply has a null ID, preserve its URL and report `blocked: unresolved required conversation` instead of resolving it without a reply:
 
 ```sh
 gh api --method POST \
