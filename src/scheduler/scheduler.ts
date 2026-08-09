@@ -106,7 +106,7 @@ function launchdPlist(slug: string, job: SchedulerJob, launcher: string, schedul
   <key>Label</key><string>com.kaizen-loop.${slug}.${job.name}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
+${path.extname(launcher) === '.sh' ? '    <string>/bin/sh</string>\n' : ''}
     <string>${escapeXml(launcher)}</string>
     <string>${escapeXml(process.execPath)}</string>
     <string>${escapeXml(slug)}</string>
@@ -130,7 +130,8 @@ function cronMarker(slug: string): string {
 }
 
 function commandLine(slug: string, job: SchedulerJob, launcher: string, schedulerPath: string): string {
-  const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh ${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+  const interpreter = path.extname(launcher) === '.sh' ? '/bin/sh ' : '';
+  const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= ${interpreter}${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
   return command;
 }
 
@@ -146,7 +147,11 @@ function requiredScheduledLauncher(trust = isTrustedExecutablePath): string {
   const launcher = process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER;
   let resolvedLauncher: string | undefined;
   let trusted = false;
-  if (launcher && path.isAbsolute(launcher) && path.basename(launcher) === 'run-scheduled.sh') {
+  if (
+    launcher &&
+    path.isAbsolute(launcher) &&
+    ['run-scheduled.sh', 'kaizen-scheduled-launcher'].includes(path.basename(launcher))
+  ) {
     try {
       resolvedLauncher = fsSync.realpathSync(launcher);
       trusted = resolvedLauncher === path.resolve(launcher) && trust(resolvedLauncher);
@@ -156,7 +161,7 @@ function requiredScheduledLauncher(trust = isTrustedExecutablePath): string {
   }
   if (!trusted) {
     throw new ConfigError(
-      'Managed scheduling requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh.'
+      'Managed scheduling requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh or kaizen-scheduled-launcher.'
     );
   }
   return resolvedLauncher!;

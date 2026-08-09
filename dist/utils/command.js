@@ -27,7 +27,12 @@ const GITHUB_CLI_AUTH_ENV_ALLOWLIST = [
     'GITHUB_ENTERPRISE_TOKEN'
 ];
 const GIT_CLI_AUTH_ENV_ALLOWLIST = ['SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
-const SUPERVISOR_CREDENTIAL_ENV = new Set([...GITHUB_CLI_AUTH_ENV_ALLOWLIST, ...GIT_CLI_AUTH_ENV_ALLOWLIST]);
+const SUPERVISOR_CREDENTIAL_ENV = new Set([
+    ...GITHUB_CLI_AUTH_ENV_ALLOWLIST,
+    ...GIT_CLI_AUTH_ENV_ALLOWLIST,
+    'KAIZEN_GITHUB_TOKEN_SOCKET',
+    'KAIZEN_GITHUB_BROKER_CAPABILITY'
+]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export class TrustedGitHubCliUnavailableError extends Error {
     reasonCode = 'trusted_github_cli_unavailable';
@@ -42,6 +47,7 @@ const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH)
 const INITIAL_GITHUB_AUTH_ENV = captureGitHubAuthEnv(process.argv.slice(2));
 const INITIAL_GITHUB_TOKEN = INITIAL_GITHUB_AUTH_ENV.GH_TOKEN || INITIAL_GITHUB_AUTH_ENV.GITHUB_TOKEN;
 const INITIAL_GITHUB_TOKEN_SOCKET = resolveConfiguredBrokerSocket(process.env.KAIZEN_GITHUB_TOKEN_SOCKET);
+const INITIAL_GITHUB_BROKER_CAPABILITY = resolveBrokerCapability(process.env.KAIZEN_GITHUB_BROKER_CAPABILITY);
 const INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS = publicationTimeoutMs(process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS);
 const activeChildren = new Set();
 const activePublicationSockets = new Set();
@@ -164,7 +170,10 @@ function initialTrustedExecutables() {
         ssh: INITIAL_SSH_EXECUTABLE,
         githubToken: INITIAL_GITHUB_TOKEN,
         githubPublisher: INITIAL_GITHUB_TOKEN_SOCKET
-            ? (request, timeoutMs) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, request, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
+            ? (request, timeoutMs) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, INITIAL_GITHUB_BROKER_CAPABILITY, request, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
+            : undefined,
+        githubPublicationPreflight: INITIAL_GITHUB_TOKEN_SOCKET
+            ? (timeoutMs) => requestGithubPublicationPreflight(INITIAL_GITHUB_TOKEN_SOCKET, INITIAL_GITHUB_BROKER_CAPABILITY, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
             : undefined
     };
 }
@@ -259,6 +268,10 @@ export function publicationGithubToken(command) {
 export function publicationGithubPublisher(command) {
     return command[TRUSTED_COMMAND_RUNNER]?.githubPublisher;
 }
+export function publicationGithubPreflight(command) {
+    return command[TRUSTED_COMMAND_RUNNER]
+        ?.githubPublicationPreflight;
+}
 export function withTrustedExecutables(command, executables) {
     const trustedCommand = (executable, args, options) => command(executable, args, options);
     Object.defineProperty(trustedCommand, TRUSTED_COMMAND_RUNNER, { value: Object.freeze({ ...executables }) });
@@ -308,7 +321,22 @@ function resolveConfiguredBrokerSocket(socketPath) {
     }
     return resolved;
 }
-function requestGithubPublication(socketPath, request, timeoutMs) {
+function resolveBrokerCapability(value) {
+    if (value === undefined)
+        return undefined;
+    if (!/^[a-f0-9]{64}$/.test(value)) {
+        throw new Error('KAIZEN_GITHUB_BROKER_CAPABILITY must be a 64-character lowercase hexadecimal value.');
+    }
+    delete process.env.KAIZEN_GITHUB_BROKER_CAPABILITY;
+    return value;
+}
+function requestGithubPublication(socketPath, capability, request, timeoutMs) {
+    return requestBroker(socketPath, { operation: 'git-push', capability, ...request }, timeoutMs);
+}
+function requestGithubPublicationPreflight(socketPath, capability, timeoutMs) {
+    return requestBroker(socketPath, { operation: 'preflight', capability }, timeoutMs);
+}
+function requestBroker(socketPath, request, timeoutMs) {
     installShutdownHooks();
     throwIfShutdownRequested();
     return new Promise((resolve, reject) => {
@@ -330,9 +358,8 @@ function requestGithubPublication(socketPath, request, timeoutMs) {
         absoluteTimeout = setTimeout(fail, timeoutMs);
         absoluteTimeout.unref();
         socket.setEncoding('utf8');
-        socket.on('connect', () => socket.end(`${JSON.stringify({
+        socket.on('connect', () => socket.write(`${JSON.stringify({
             version: 1,
-            operation: 'git-push',
             ...request
         })}\n`));
         socket.on('data', (chunk) => {
@@ -518,11 +545,15 @@ export function withRunDeadline(runCommand, deadlineAt) {
     const trustedExecutables = runCommand[TRUSTED_COMMAND_RUNNER];
     if (trustedExecutables) {
         const githubPublisher = trustedExecutables.githubPublisher;
+        const githubPublicationPreflight = trustedExecutables.githubPublicationPreflight;
         Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, {
             value: Object.freeze({
                 ...trustedExecutables,
                 githubPublisher: githubPublisher
                     ? (request, timeoutMs) => githubPublisher(request, timeoutWithinDeadline(timeoutMs, deadlineAt))
+                    : undefined,
+                githubPublicationPreflight: githubPublicationPreflight
+                    ? (timeoutMs) => githubPublicationPreflight(timeoutWithinDeadline(timeoutMs, deadlineAt))
                     : undefined
             })
         });

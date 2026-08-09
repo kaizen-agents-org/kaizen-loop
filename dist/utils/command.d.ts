@@ -6,6 +6,7 @@ export interface TrustedExecutables {
     ssh?: string;
     githubToken?: string;
     githubPublisher?: GitHubPublisher;
+    githubPublicationPreflight?: GitHubPublicationPreflight;
 }
 export declare class TrustedGitHubCliUnavailableError extends Error {
     readonly reasonCode: "trusted_github_cli_unavailable";
@@ -20,6 +21,7 @@ export interface GitHubPublicationRequest {
     forceWithLease?: string;
 }
 export type GitHubPublisher = (request: GitHubPublicationRequest, timeoutMs?: number) => Promise<void>;
+export type GitHubPublicationPreflight = (timeoutMs?: number) => Promise<void>;
 export declare const INITIAL_GIT_EXECUTABLE: string | undefined;
 export declare const INITIAL_GITHUB_CLI_EXECUTABLE: string | undefined;
 export interface CommandResult {
@@ -56,6 +58,7 @@ export declare function requireTrustedGitHubCliExecutable(command: CommandRunner
 export declare function publicationSshExecutable(command: CommandRunner): string | undefined;
 export declare function publicationGithubToken(command: CommandRunner): string | undefined;
 export declare function publicationGithubPublisher(command: CommandRunner): GitHubPublisher | undefined;
+export declare function publicationGithubPreflight(command: CommandRunner): GitHubPublicationPreflight | undefined;
 export declare function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner;
 export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
 export declare function isTrustedExecutablePath(executable: string, canWrite?: (candidate: string) => boolean, statPath?: (candidate: string) => Stats, effectiveUid?: number | undefined): boolean;

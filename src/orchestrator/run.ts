@@ -20,7 +20,13 @@ import {
   countConsecutiveRetryableBlocks,
   markedPullRequestNumbers
 } from '../report/comments.js';
-import { throwIfShutdownRequested, withRunDeadline, type CommandRunner } from '../utils/command.js';
+import {
+  publicationGithubPreflight,
+  publicationGithubToken,
+  throwIfShutdownRequested,
+  withRunDeadline,
+  type CommandRunner
+} from '../utils/command.js';
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
@@ -323,6 +329,11 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     let runFailed = false;
     let queueObservation: { backlogCount: number; eligibleCount: number } | undefined;
     try {
+      await preflightScheduledPublication({
+        scheduled: options.scheduled,
+        localPath: resolved.project.localPath,
+        runCommand
+      });
       let selection = await selectRunIssues();
       if (options.scheduled && config.guardian.enabled) {
         try {
@@ -516,6 +527,29 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     return summary;
   } finally {
     await lock.release();
+  }
+}
+
+export async function preflightScheduledPublication(options: {
+  scheduled: boolean;
+  localPath: string;
+  runCommand: CommandRunner;
+}): Promise<void> {
+  if (!options.scheduled || publicationGithubToken(options.runCommand)) return;
+  const remoteUrl = await new GitClient(options.runCommand, options.localPath).remoteUrl('origin');
+  if (!remoteUrl.startsWith('https://')) return;
+  const brokerPreflight = publicationGithubPreflight(options.runCommand);
+  if (!brokerPreflight) {
+    throw new Error(
+      'Scheduled HTTPS publication requires an authenticated publication broker before issue intake. Install the macOS publication broker and resync scheduler jobs.'
+    );
+  }
+  try {
+    await brokerPreflight();
+  } catch {
+    throw new Error(
+      'Scheduled HTTPS publication broker preflight failed before issue intake. Verify the root-owned broker, launcher registration, and repository allowlist.'
+    );
   }
 }
 

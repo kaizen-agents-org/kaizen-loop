@@ -1,4 +1,9 @@
-import { withTrustedExecutables, type CommandRunner, type GitHubPublicationRequest } from '../../src/utils/command.js';
+import {
+  withTrustedExecutables,
+  type CommandRunner,
+  type GitHubPublicationPreflight,
+  type GitHubPublicationRequest
+} from '../../src/utils/command.js';
 
 const TEST_GIT = '/trusted/bin/git';
 const TEST_GH = '/trusted/bin/gh';
@@ -9,6 +14,7 @@ export function trustedRunner(
   options: {
     githubToken?: string | false;
     githubPublisher?: ((request: GitHubPublicationRequest) => Promise<void>) | false;
+    githubPublicationPreflight?: GitHubPublicationPreflight | false;
   } = {}
 ): CommandRunner {
   const mapped: CommandRunner = (executable, args, options) => command(
@@ -21,6 +27,9 @@ export function trustedRunner(
     githubCli: TEST_GH,
     ssh: TEST_SSH,
     githubToken: options.githubToken === false ? undefined : options.githubToken ?? 'test-publication-token',
-    githubPublisher: options.githubPublisher === false ? undefined : options.githubPublisher
+    githubPublisher: options.githubPublisher === false ? undefined : options.githubPublisher,
+    githubPublicationPreflight: options.githubPublicationPreflight === false
+      ? undefined
+      : options.githubPublicationPreflight
   });
 }

@@ -24,6 +24,34 @@ afterEach(() => {
 });
 
 describe('enableScheduler', () => {
+  it('executes the native publication launcher directly after clearing inherited broker state', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const launcherDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-native-launcher-'));
+    const launcherCandidate = path.join(launcherDir, 'kaizen-scheduled-launcher');
+    await fs.writeFile(launcherCandidate, 'native launcher fixture', { mode: 0o700 });
+    const launcher = await fs.realpath(launcherCandidate);
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('KAIZEN_HOME', home);
+    vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', launcher);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command, args, exitCode: 0, stdout: '', stderr: '', durationMs: 1
+    }));
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    const scheduler = await enableScheduler({
+      slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
+      runCommand: runner, platform: 'darwin', launcherTrust: () => true
+    });
+
+    const plist = await fs.readFile(scheduler.paths![0], 'utf8');
+    expect(plist).toContain(`<string>${launcher}</string>`);
+    expect(plist).not.toContain('<string>/bin/sh</string>');
+    expect(plist).toContain('<key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>');
+  });
+
   it('rejects missing trusted GitHub CLI before replacing managed jobs', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('KAIZEN_HOME', home);
