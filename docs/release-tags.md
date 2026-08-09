@@ -3,6 +3,7 @@
 Run the complete repository checks before creating a release tag:
 
 ```sh
+set -euo pipefail
 npm test
 npm run typecheck
 npm run build
@@ -14,7 +15,9 @@ read-only GitHub operation. The selected project must already be registered, and
 `PATH` must contain a trusted `gh` executable accepted by `kaizen doctor`.
 
 ```sh
-project_slug="kaizen-agents-org-example"
+set -euo pipefail
+: "${KAIZEN_PROJECT_SLUG:?Set KAIZEN_PROJECT_SLUG to a registered project slug}"
+project_slug="$KAIZEN_PROJECT_SLUG"
 release_dir="$(mktemp -d)"
 npm pack --pack-destination "$release_dir"
 npm install --prefix "$release_dir/install" "$release_dir"/kaizen-loop-*.tgz

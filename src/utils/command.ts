@@ -501,21 +501,32 @@ function resolveExecutable(
 export function isTrustedExecutablePath(
   executable: string,
   canWrite: (candidate: string) => boolean = canCurrentUserWrite,
-  statPath: (candidate: string) => Stats = fs.statSync
+  statPath: (candidate: string) => Stats = fs.statSync,
+  effectiveUid: number | undefined = process.getuid?.()
 ): boolean {
+  let executableStat: Stats;
+  try {
+    executableStat = statPath(executable);
+  } catch {
+    return false;
+  }
   if (process.platform === 'win32') {
-    if (!statPath(executable).isFile()) return false;
+    if (!executableStat.isFile()) return false;
     const trustedRoots = ['ProgramFiles', 'ProgramW6432', 'SystemRoot']
       .map((key) => process.env[key])
       .filter((value): value is string => Boolean(value));
     return isWindowsExecutablePathTrusted(executable, trustedRoots, canWrite);
   }
 
-  const uid = process.getuid?.();
-  if (uid === undefined || uid === 0) return false;
+  if (effectiveUid === undefined || effectiveUid === 0) return false;
   let current = executable;
   while (true) {
-    const stat = statPath(current);
+    let stat: Stats;
+    try {
+      stat = current === executable ? executableStat : statPath(current);
+    } catch {
+      return false;
+    }
     if (current === executable && !stat.isFile()) return false;
     const stickyRootOwnedDirectory = stat.uid === 0 && stat.isDirectory() && (stat.mode & 0o1000) !== 0;
     const writable = (stat.mode & 0o022) !== 0 || canWrite(current);

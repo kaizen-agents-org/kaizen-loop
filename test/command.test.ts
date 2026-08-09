@@ -296,14 +296,20 @@ describe.runIf(process.platform !== 'win32')('isTrustedExecutablePath', () => {
       } as Stats;
     };
 
-    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat)).toBe(true);
+    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat, 501)).toBe(true);
 
     stats.set('/nix/store', { mode: 0o40775 });
-    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat)).toBe(false);
+    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat, 501)).toBe(false);
 
     stats.set('/nix/store', { mode: 0o41775 });
     stats.set('/nix/store/abc-github-cli', { mode: 0o40555, uid: 501 });
-    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat)).toBe(false);
+    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat, 501)).toBe(false);
+  });
+
+  it('rejects an executable when its metadata cannot be read', () => {
+    expect(isTrustedExecutablePath('/missing/gh', () => false, () => {
+      throw new Error('missing');
+    }, 501)).toBe(false);
   });
 });
 
