@@ -85,9 +85,7 @@ query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
           and (.outdated | type == "boolean"))
         and (.comments.pageInfo | type == "object")
         and (.comments.pageInfo.hasNextPage | type == "boolean")
-        and ((.comments.pageInfo.endCursor == null) or (.comments.pageInfo.endCursor | type == "string"))
-        and ((.comments.pageInfo.hasNextPage | not)
-          or ((.comments.pageInfo.endCursor | type == "string") and (.comments.pageInfo.endCursor | length > 0)))))
+        and ((.comments.pageInfo.endCursor == null) or (.comments.pageInfo.endCursor | type == "string"))))
   ' >/dev/null <<<"${page}"; then
     echo 'reviewThreads returned an incomplete response' >&2
     exit 1
@@ -147,9 +145,7 @@ query($threadId:ID!, $cursor:String) {
         and (.outdated | type == "boolean"))
       and ($comments.pageInfo | type == "object")
       and ($comments.pageInfo.hasNextPage | type == "boolean")
-      and (($comments.pageInfo.endCursor == null) or ($comments.pageInfo.endCursor | type == "string"))
-      and (($comments.pageInfo.hasNextPage | not)
-        or (($comments.pageInfo.endCursor | type == "string") and ($comments.pageInfo.endCursor | length > 0))))
+      and (($comments.pageInfo.endCursor == null) or ($comments.pageInfo.endCursor | type == "string")))
   ' >/dev/null <<<"${page}"; then
     echo 'review comments returned an incomplete response' >&2
     exit 1
