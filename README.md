@@ -160,6 +160,8 @@ sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
   --token-file /Library/Application\ Support/KaizenLoop/github-token \
   --repository owner/repo \
+  --scheduled-job owner-repo/maintenance \
+  --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --node "$(command -v node)"
 # Use an immutable Nix-store gh, or install a standalone administrator-owned copy
 # outside the broker-managed installation root.

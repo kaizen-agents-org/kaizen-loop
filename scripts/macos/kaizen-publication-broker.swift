@@ -14,6 +14,13 @@ private struct BrokerConfig: Decodable {
     let tokenFile: String
     let privateDirectory: String
     let allowedRepositories: [String: String]
+    let scheduledJobs: [ScheduledJobConfig]
+}
+
+private struct ScheduledJobConfig: Decodable {
+    let project: String
+    let job: String
+    let toolPath: String
 }
 
 private struct ProcessIdentity: Equatable {
@@ -180,12 +187,19 @@ private func connected(_ descriptor: Int32) -> Bool {
     return count > 0 || receiveError == EAGAIN || receiveError == EWOULDBLOCK
 }
 
-private func processGroupCreated(_ process: Process) -> Bool {
-    setpgid(process.processIdentifier, process.processIdentifier) == 0
+private func requireProcessGroup(_ process: Process) throws {
+    for _ in 0..<1_000 {
+        if getpgid(process.processIdentifier) == process.processIdentifier { return }
+        if !process.isRunning { break }
+        usleep(1_000)
+    }
+    process.terminate()
+    process.waitUntilExit()
+    throw NSError(domain: "KaizenPublicationBroker", code: 11)
 }
 
-private func signal(_ process: Process, groupCreated: Bool, _ signal: Int32) {
-    _ = kill(groupCreated ? -process.processIdentifier : process.processIdentifier, signal)
+private func signalGroup(_ process: Process, _ signal: Int32) {
+    _ = kill(-process.processIdentifier, signal)
 }
 
 private func runProcess(
@@ -202,12 +216,12 @@ private func runProcess(
     process.standardOutput = FileHandle.standardError
     process.standardError = FileHandle.standardError
     try process.run()
-    let groupCreated = processGroupCreated(process)
+    try requireProcessGroup(process)
     while process.isRunning {
         if let descriptor, !connected(descriptor) {
-            signal(process, groupCreated: groupCreated, SIGTERM)
+            signalGroup(process, SIGTERM)
             usleep(200_000)
-            if process.isRunning { signal(process, groupCreated: groupCreated, SIGKILL) }
+            if process.isRunning { signalGroup(process, SIGKILL) }
             process.waitUntilExit()
             throw NSError(domain: "KaizenPublicationBroker", code: 2)
         }
@@ -263,6 +277,7 @@ private func trustedRootPath(_ candidate: String, regularFile: Bool = true, exac
 
 private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> Bool {
     let testRoot = testingConfigPath().map { ($0 as NSString).deletingLastPathComponent }
+    let scheduledKeys = config.scheduledJobs.map { "\($0.project)/\($0.job)" }
     guard trustedRootPath(path, exactMode: 0o644),
           trustedRootPath(config.tokenFile, exactMode: 0o600),
           trustedRootPath(config.scheduledLauncherExecutable),
@@ -270,6 +285,12 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
           trustedRootPath(config.nodeExecutable),
           trustedRootPath(config.cliPath),
           trustedRootPath(config.gitExecutable),
+          Set(scheduledKeys).count == scheduledKeys.count,
+          config.scheduledJobs.allSatisfy({ entry in
+              entry.project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil &&
+              entry.job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil &&
+              validatedToolPath(entry.toolPath) != nil
+          }),
           config.allowedRepositories.allSatisfy({ repository, url in
               repository.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil &&
               (url == "https://github.com/\(repository).git" || (testRoot.map { url.hasPrefix("file://\($0)/") } ?? false))
@@ -286,28 +307,30 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
           let project = request["project"] as? String,
           let job = request["job"] as? String,
           let capability = request["capability"] as? String,
-          let toolPath = validatedToolPath(request["toolPath"] as? String),
+          let requestedToolPath = validatedToolPath(request["toolPath"] as? String),
           capability.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
           project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
           job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return false }
+    guard let registeredJob = config.scheduledJobs.first(where: { $0.project == project && $0.job == job }),
+          constantTimeEqual(registeredJob.toolPath, requestedToolPath) else { return false }
     guard try authenticateScheduledTrigger(descriptor, config: config) else { return false }
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: config.supervisorLauncherExecutable)
-    process.arguments = ["run", capability, project, job, toolPath]
+    process.arguments = ["run", capability, project, job, registeredJob.toolPath]
     process.environment = safeEnvironment()
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = FileHandle.standardError
     process.standardError = FileHandle.standardError
     try process.run()
-    let groupCreated = processGroupCreated(process)
+    try requireProcessGroup(process)
     registrations.expect(pid: process.processIdentifier, capability: capability)
     defer { registrations.remove(pid: process.processIdentifier) }
     while process.isRunning {
         if !connected(descriptor) {
-            signal(process, groupCreated: groupCreated, SIGTERM)
+            signalGroup(process, SIGTERM)
             usleep(200_000)
-            if process.isRunning { signal(process, groupCreated: groupCreated, SIGKILL) }
+            if process.isRunning { signalGroup(process, SIGKILL) }
             process.waitUntilExit()
             return false
         }
@@ -377,19 +400,19 @@ private func runGit(
         output.closeFile()
         try? FileManager.default.removeItem(atPath: outputPath)
     }
-    process.executableURL = URL(fileURLWithPath: config.gitExecutable)
-    process.arguments = ["-C", cwd] + args
+    process.executableURL = URL(fileURLWithPath: config.supervisorLauncherExecutable)
+    process.arguments = ["root-git", "-C", cwd] + args
     process.environment = safeEnvironment(extraEnvironment)
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = output
     process.standardError = FileHandle.standardError
     try process.run()
-    let groupCreated = processGroupCreated(process)
+    try requireProcessGroup(process)
     while process.isRunning {
         if let descriptor, !connected(descriptor) {
-            signal(process, groupCreated: groupCreated, SIGTERM)
+            signalGroup(process, SIGTERM)
             usleep(200_000)
-            if process.isRunning { signal(process, groupCreated: groupCreated, SIGKILL) }
+            if process.isRunning { signalGroup(process, SIGKILL) }
             process.waitUntilExit()
             throw NSError(domain: "KaizenPublicationBroker", code: 5)
         }
@@ -533,7 +556,7 @@ private func handlePublication(_ descriptor: Int32, config: BrokerConfig, reques
     return try publish(descriptor, config: config, request: request)
 }
 
-private func makeSocket(_ path: String, uid: uid_t, gid: gid_t) throws -> Int32 {
+private func makeSocket(_ path: String, uid: uid_t, gid: gid_t, mode: mode_t) throws -> Int32 {
     guard path.utf8.count < MemoryLayout<sockaddr_un>.size - 2 else {
         throw NSError(domain: "KaizenPublicationBroker", code: 10)
     }
@@ -560,7 +583,7 @@ private func makeSocket(_ path: String, uid: uid_t, gid: gid_t) throws -> Int32 
     guard result == 0, listen(descriptor, 32) == 0 else {
         let code = errno; close(descriptor); throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
     }
-    guard chown(path, uid, gid) == 0, chmod(path, 0o600) == 0 else {
+    guard chown(path, uid, gid) == 0, chmod(path, mode) == 0 else {
         close(descriptor); throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
     }
     return descriptor
@@ -589,9 +612,9 @@ do {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
     }
-    let socketOwner = config.runtimeUid
-    let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: socketOwner, gid: config.runtimeGid)
-    let publicationSocket = try makeSocket(config.publicationSocketPath, uid: socketOwner, gid: config.runtimeGid)
+    let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: config.runtimeUid, gid: config.runtimeGid, mode: 0o600)
+    let publicationOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
+    let publicationSocket = try makeSocket(config.publicationSocketPath, uid: publicationOwner, gid: config.runtimeGid, mode: 0o620)
     Thread.detachNewThread {
         serve(schedulerSocket) { descriptor in
             do {

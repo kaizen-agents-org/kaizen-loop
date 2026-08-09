@@ -108,7 +108,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
     await fs.writeFile(fixturePath, `
 const fs = require('node:fs');
 const net = require('node:net');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const socketPath = process.env.KAIZEN_GITHUB_TOKEN_SOCKET;
 const capability = process.env.KAIZEN_GITHUB_BROKER_CAPABILITY;
 function request(payload) {
@@ -129,8 +129,11 @@ const preflight = () => request({
 });
 (async () => {
   if (process.env.KAIZEN_BROKER_CHILD === '1') process.exit((await preflight()) ? 9 : 0);
-  fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
   const sleeping = process.argv.includes('sleep');
+  const descendant = sleeping
+    ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    : undefined;
+  fs.writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ supervisor: process.pid, descendant: descendant?.pid }));
   if (sleeping) setInterval(() => {}, 1000);
   const supervisor = await preflight();
   const child = spawnSync(process.execPath, [__filename], { env: { ...process.env, KAIZEN_BROKER_CHILD: '1' } });
@@ -169,6 +172,11 @@ const preflight = () => request({
 <key>tokenFile</key><string>${xml(path.join(root, 'token'))}</string>
 <key>privateDirectory</key><string>${xml(path.join(root, 'private'))}</string>
 <key>allowedRepositories</key><dict><key>o/r</key><string>${xml(`file://${remoteRepository}`)}</string></dict>
+<key>scheduledJobs</key><array>
+<dict><key>project</key><string>o-r</string><key>job</key><string>maintenance</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string></dict>
+<dict><key>project</key><string>o-r</string><key>job</key><string>publish</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string></dict>
+<dict><key>project</key><string>o-r</string><key>job</key><string>sleep</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string></dict>
+</array>
 </dict></plist>\n`;
     await fs.writeFile(configPath, plist);
     broker = spawn(brokerPath, [configPath], {
@@ -182,8 +190,9 @@ const preflight = () => request({
 
   afterAll(async () => {
     if (broker && broker.exitCode === null) {
+      const exited = new Promise<void>((resolve) => broker.once('exit', () => resolve()));
       broker.kill('SIGTERM');
-      await new Promise<void>((resolve) => broker.once('exit', () => resolve()));
+      await exited;
     }
     await fs.rm(root, { recursive: true, force: true });
   }, 30_000);
@@ -221,6 +230,15 @@ const preflight = () => request({
     ], { encoding: 'utf8' }).trim()).toBe(expectedSha);
   });
 
+  it('rejects a same-UID launcher request absent from the root-owned job registration', async () => {
+    const error = await new Promise<Error | null>((resolve) => {
+      execFile(scheduledPath, ['ignored-node', 'o-r', 'unconfigured'], {
+        env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: configPath }
+      }, (failure) => resolve(failure));
+    });
+    expect(error).not.toBeNull();
+  });
+
   it('treats scheduled-launcher disconnect as cancellation of the supervisor process group', async () => {
     await fs.rm(pidPath, { force: true });
     const launcher = spawn(scheduledPath, ['ignored-node', 'o-r', 'sleep'], {
@@ -232,9 +250,9 @@ const preflight = () => request({
       stdio: 'ignore'
     });
     await waitForPath(pidPath);
-    const supervisorPid = Number(await fs.readFile(pidPath, 'utf8'));
+    const pids = JSON.parse(await fs.readFile(pidPath, 'utf8')) as { supervisor: number; descendant: number };
     launcher.kill('SIGTERM');
-    await waitForExit(supervisorPid);
+    await Promise.all([waitForExit(pids.supervisor), waitForExit(pids.descendant)]);
   });
 
 });
@@ -257,6 +275,8 @@ describe('publication broker source contract', () => {
     expect(brokerSource).toContain('chmod(config.privateDirectory, 0o710)');
     expect(brokerSource).toContain('processPath(pid) == config.scheduledLauncherExecutable');
     expect(brokerSource).toContain('parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"');
+    expect(brokerSource).toContain('mode: 0o620');
+    expect(brokerSource).toContain('config.scheduledJobs.first');
     expect(installer).toContain('cp -p "$build_dir/config.backup" "$config_path"');
     expect(installer).toContain('launchctl bootstrap system "$daemon_path"');
   });

@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> [--repository <owner/repo> ...] [--node <absolute-node>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job> --tool-path <absolute-path-list> [--repository <owner/repo> ...] [--scheduled-job <project/job> ...] [--node <absolute-node>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -14,18 +14,23 @@ token_file=
 node_executable=
 source_root=
 repositories=
+scheduled_jobs=
+tool_path=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runtime-user) [ "$#" -ge 2 ] || usage; runtime_user=$2; shift 2 ;;
     --token-file) [ "$#" -ge 2 ] || usage; token_file=$2; shift 2 ;;
     --repository) [ "$#" -ge 2 ] || usage; repositories="${repositories}${repositories:+
 }$2"; shift 2 ;;
+    --scheduled-job) [ "$#" -ge 2 ] || usage; scheduled_jobs="${scheduled_jobs}${scheduled_jobs:+
+}$2"; shift 2 ;;
+    --tool-path) [ "$#" -ge 2 ] || usage; tool_path=$2; shift 2 ;;
     --node) [ "$#" -ge 2 ] || usage; node_executable=$2; shift 2 ;;
     --source) [ "$#" -ge 2 ] || usage; source_root=$2; shift 2 ;;
     *) usage ;;
   esac
 done
-[ -n "$runtime_user" ] && [ -n "$token_file" ] && [ -n "$repositories" ] || usage
+[ -n "$runtime_user" ] && [ -n "$token_file" ] && [ -n "$repositories" ] && [ -n "$scheduled_jobs" ] && [ -n "$tool_path" ] || usage
 
 case "$token_file" in /*) ;; *) echo "--token-file must be absolute." >&2; exit 2 ;; esac
 case "$runtime_user" in *[!A-Za-z0-9._-]*|'') echo "Invalid runtime user." >&2; exit 2 ;; esac
@@ -82,6 +87,19 @@ IFS='
 '
 for repository in $repositories; do
   echo "$repository" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || { echo "Invalid repository: $repository" >&2; exit 2; }
+done
+IFS=$old_ifs
+printf '%s\n' "$tool_path" | awk -F: '
+  length($0) > 16384 || NF > 128 { exit 1 }
+  { for (i = 1; i <= NF; i++) if ($i !~ /^\// || length($i) > 4096) exit 1 }
+' || { echo "--tool-path must contain only bounded absolute directories." >&2; exit 2; }
+IFS='
+'
+for scheduled_job in $scheduled_jobs; do
+  echo "$scheduled_job" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' || {
+    echo "Invalid scheduled job: $scheduled_job" >&2
+    exit 2
+  }
 done
 IFS=$old_ifs
 
@@ -146,6 +164,20 @@ IFS='
 '
 for repository in $repositories; do
   /usr/libexec/PlistBuddy -c "Add :allowedRepositories:$repository string https://github.com/$repository.git" "$config_stage"
+done
+IFS=$old_ifs
+/usr/bin/plutil -insert scheduledJobs -json '[]' "$config_stage"
+scheduled_index=0
+IFS='
+'
+for scheduled_job in $scheduled_jobs; do
+  scheduled_project=${scheduled_job%/*}
+  scheduled_name=${scheduled_job#*/}
+  /usr/bin/plutil -insert "scheduledJobs.$scheduled_index" -json '{}' "$config_stage"
+  /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.project" -string "$scheduled_project" "$config_stage"
+  /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.job" -string "$scheduled_name" "$config_stage"
+  /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.toolPath" -string "$tool_path" "$config_stage"
+  scheduled_index=$((scheduled_index + 1))
 done
 IFS=$old_ifs
 chown root:wheel "$config_stage"

@@ -26,6 +26,8 @@ sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
   --token-file /Library/Application\ Support/KaizenLoop/github-token \
   --repository kaizen-agents-org/kaizen-loop \
+  --scheduled-job kaizen-agents-org-kaizen-loop/maintenance \
+  --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --node "$(command -v node)"
 ```
 
@@ -36,7 +38,10 @@ token value, and
 unmarked existing installation and validates the Node, npm, and root-only token ownership chain.
 Add one `--repository owner/name` for every repository the broker may publish; the
 daemon maps these names to canonical `https://github.com/owner/name.git` URLs and never
-treats a client URL as authority.
+treats a client URL as authority. Add each authorized scheduler project/job pair with
+`--scheduled-job` and record its normalized executable search path with `--tool-path`.
+The root-owned registration prevents another LaunchAgent under the runtime UID from
+choosing a different job or toolchain.
 
 Configure scheduler jobs to invoke the installed launcher, then resync them:
 
