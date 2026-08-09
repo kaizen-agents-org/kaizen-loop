@@ -526,8 +526,11 @@ function emptySandboxSmokeMetrics() {
 }
 
 function summarizeRunIssues(summaries: RunSummary[]) {
-  const issues = summaries.flatMap((summary) => summary.issues ?? []);
-  const topLevelSkipped = summaries.reduce((sum, summary) => sum + (summary.skipped?.length ?? 0), 0);
+  const issues = summaries.flatMap((summary) => summary.issues ?? []).filter((issue) => issue.number > 0);
+  const topLevelSkipped = summaries.reduce(
+    (sum, summary) => sum + (summary.skipped?.filter((issue) => issue.number > 0).length ?? 0),
+    0
+  );
   const metrics = emptyRunMetrics();
   metrics.runs = summaries.length;
   metrics.processed = issues.length;

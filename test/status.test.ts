@@ -473,6 +473,12 @@ describe('statusProject', () => {
       result: 'partial',
       issues: [
         {
+          number: 0,
+          title: 'infrastructure sentinel',
+          outcome: 'infrastructure-failure',
+          reason: 'Trusted GitHub CLI unavailable'
+        },
+        {
           number: 1,
           title: 'passes',
           outcome: 'pr-created',
@@ -492,7 +498,10 @@ describe('statusProject', () => {
           reason: 'Verification failed: pnpm test'
         }
       ],
-      skipped: [{ number: 4, reason: 'maxIssuesPerNight reached' }]
+      skipped: [
+        { number: 0, reason: 'Trusted GitHub CLI unavailable' },
+        { number: 4, reason: 'maxIssuesPerNight reached' }
+      ]
     });
     await writeSummary(home, '2026-06-20T00-00-00Z', {
       version: 1,
