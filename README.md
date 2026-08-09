@@ -100,6 +100,12 @@ purpose. External adopters set it to the release tag pinned by
 up code that has not been released. A value starting with `v` is fetched and
 checked out as a tag; anything else is followed as a branch.
 
+The pinned installer also records the installed Verifier version under
+`$KAIZEN_HOME/toolchain/verifier/.installed-version`. `kaizen init` carries that
+version into `.kaizen/config.yml` as `verifier.expectedRef: refs/tags/<version>`,
+so freshness is checked against the installed release set rather than moving
+`main`. Existing installs without the stamp retain the `refs/heads/main` default.
+
 ## Quickstart
 
 ```sh

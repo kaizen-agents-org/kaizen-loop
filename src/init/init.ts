@@ -7,7 +7,7 @@ import { upsertProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
 import { hasSupervisorGitHubToken, type CommandRunner } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
-import { workspaceDir } from '../utils/paths.js';
+import { getKaizenHome, workspaceDir } from '../utils/paths.js';
 import { repoFromRemote, slugFromRepo } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
@@ -51,7 +51,7 @@ export async function initProject(options: InitOptions): Promise<InitResult> {
   const configPath = path.join(repoDir, '.kaizen', 'config.yml');
   const templatePath = path.join(repoDir, '.github', 'ISSUE_TEMPLATE', 'kaizen.yml');
 
-  let config = defaultConfigObject({ agent, schedule: options.schedule, ...commands });
+  let config = await createInitialConfig({ agent, schedule: options.schedule, ...commands });
   let profileName: string | undefined;
   let corrections: string[] = [];
   if (options.profile) {
@@ -95,6 +95,31 @@ export async function initProject(options: InitOptions): Promise<InitResult> {
   });
 
   return { slug, repo, configPath, profile: profileName, safetyFloorCorrections: corrections };
+}
+
+export async function createInitialConfig(options: {
+  agent: 'claude' | 'codex';
+  schedule?: string;
+  setup: string | null;
+  verify: string[];
+}, kaizenHome = getKaizenHome()): Promise<Record<string, unknown>> {
+  const expectedVerifierRef = await readInstalledVerifierRef(kaizenHome);
+  return defaultConfigObject({ ...options, expectedVerifierRef });
+}
+
+export async function readInstalledVerifierRef(kaizenHome = getKaizenHome()): Promise<string | undefined> {
+  const stamp = path.join(kaizenHome, 'toolchain', 'verifier', '.installed-version');
+  let version: string;
+  try {
+    version = (await fs.readFile(stamp, 'utf8')).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new ConfigError(`Unable to read installed Verifier version at ${stamp}: ${String(error)}`);
+  }
+  if (!/^v0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+    throw new ConfigError(`Invalid installed Verifier version at ${stamp}: expected one v0.x.y release tag.`);
+  }
+  return `refs/tags/${version}`;
 }
 
 function chooseAgent(preferred: 'claude' | 'codex' | undefined): 'claude' | 'codex' {

@@ -38,6 +38,7 @@ export function defaultConfigObject(options: {
   schedule?: string;
   setup: string | null;
   verify: string[];
+  expectedVerifierRef?: string;
 }): Record<string, unknown> {
   return {
     version: 1,
@@ -105,7 +106,7 @@ export function defaultConfigObject(options: {
       resultPath: '.kaizen/verifier/verify-result.json',
       timeoutMinutes: 15,
       expectedRepository: 'https://github.com/kaizen-agents-org/verifier.git',
-      expectedRef: 'refs/heads/main',
+      expectedRef: options.expectedVerifierRef ?? 'refs/heads/main',
       freshnessTimeoutSeconds: 30
     },
     guardian: {

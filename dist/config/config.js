@@ -93,7 +93,7 @@ export function defaultConfigObject(options) {
             resultPath: '.kaizen/verifier/verify-result.json',
             timeoutMinutes: 15,
             expectedRepository: 'https://github.com/kaizen-agents-org/verifier.git',
-            expectedRef: 'refs/heads/main',
+            expectedRef: options.expectedVerifierRef ?? 'refs/heads/main',
             freshnessTimeoutSeconds: 30
         },
         guardian: {

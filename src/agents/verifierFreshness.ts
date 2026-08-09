@@ -33,7 +33,8 @@ export async function resolveExpectedVerifierCommit(options: {
 }): Promise<string> {
   const repository = options.config.verifier.expectedRepository;
   const ref = options.config.verifier.expectedRef;
-  const result = await options.runCommand('git', ['ls-remote', '--exit-code', repository, ref], {
+  const candidates = ref.startsWith('refs/tags/') ? [ref, `${ref}^{}`] : [ref];
+  const result = await options.runCommand('git', ['ls-remote', '--exit-code', repository, ...candidates], {
     timeoutMs: options.config.verifier.freshnessTimeoutSeconds * 1_000,
     rejectOnNonZero: false,
     env: buildUntrustedEnv(process.env, options.config.safety.envAllowlist)
@@ -41,14 +42,20 @@ export async function resolveExpectedVerifierCommit(options: {
   if (result.exitCode !== 0) {
     throw new Error(`Could not resolve trusted verifier revision ${repository} ${ref}: ${result.stderr || result.stdout || `git exited with code ${result.exitCode}`}`);
   }
-  const exact = result.stdout
+  const resolved = result.stdout
     .trim()
     .split('\n')
-    .map((line) => line.trim().split(/\s+/, 2))
-    .find(([, candidateRef]) => candidateRef === ref);
-  const commit = exact?.[0];
-  if (!commit || !/^[0-9a-f]{40}$/i.test(commit)) {
+    .map((line) => line.trim().split(/\s+/, 2) as [string, string])
+    .filter(([, candidateRef]) => candidates.includes(candidateRef));
+  const exact = resolved.filter(([, candidateRef]) => candidateRef === ref);
+  const peeled = resolved.filter(([, candidateRef]) => candidateRef === `${ref}^{}`);
+  if (
+    exact.length !== 1 ||
+    peeled.length > 1 ||
+    [...exact, ...peeled].some(([commit]) => !/^[0-9a-f]{40}$/i.test(commit))
+  ) {
     throw new Error(`Trusted verifier revision ${repository} ${ref} did not resolve to one exact 40-character commit.`);
   }
+  const commit = (peeled[0] ?? exact[0])[0];
   return commit.toLowerCase();
 }

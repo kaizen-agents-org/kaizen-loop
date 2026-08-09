@@ -9,6 +9,7 @@ import type { CommandRunner } from '../src/utils/command.js';
 
 const oldCommit = 'a'.repeat(40);
 const currentCommit = 'b'.repeat(40);
+const tagObject = 'c'.repeat(40);
 
 describe('verifier freshness preflight', () => {
   it('rejects a self-consistent verifier checkout that is behind the trusted branch', async () => {
@@ -35,6 +36,81 @@ describe('verifier freshness preflight', () => {
 
     expect(failure).toBeUndefined();
     expect(diagnostic.freshness).toMatchObject({ expectedCommit: currentCommit, status: 'current' });
+  });
+
+  it('accepts a clean pinned release at the peeled tag commit', async () => {
+    const expectedRef = 'refs/tags/v0.1.0';
+    const { failure, diagnostic, runner } = await inspect({
+      expectedRef,
+      expectedCommit: oldCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit
+    });
+
+    expect(failure).toBeUndefined();
+    expect(diagnostic.freshness).toMatchObject({
+      ref: expectedRef,
+      expectedCommit: oldCommit,
+      status: 'current'
+    });
+    expect(runner).toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', '--exit-code', 'https://github.com/kaizen-agents-org/verifier.git', expectedRef, `${expectedRef}^{}`],
+      expect.any(Object)
+    );
+  });
+
+  it('accepts a clean pinned release at a lightweight tag commit', async () => {
+    const expectedRef = 'refs/tags/v0.1.0';
+    const { failure, diagnostic } = await inspect({
+      expectedRef,
+      expectedCommit: oldCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      lightweightTag: true
+    });
+
+    expect(failure).toBeUndefined();
+    expect(diagnostic.freshness).toMatchObject({ expectedCommit: oldCommit, status: 'current' });
+  });
+
+  it('rejects current main when a pinned release tag is expected', async () => {
+    const { failure } = await inspect({
+      expectedRef: 'refs/tags/v0.1.0',
+      expectedCommit: oldCommit,
+      buildCommit: currentCommit,
+      runtimeCommit: currentCommit
+    });
+
+    expect(failure).toContain(`obsolete build (expected ${oldCommit}`);
+  });
+
+  it('rejects a dirty verifier at the pinned release tag commit', async () => {
+    const { failure } = await inspect({
+      expectedRef: 'refs/tags/v0.1.0',
+      expectedCommit: oldCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      dirty: true
+    });
+
+    expect(failure).toContain('verifier build or runtime checkout is dirty');
+  });
+
+  it.each([
+    { remoteOutput: `${oldCommit}\trefs/tags/v0.1.0^{}\n`, label: 'a peeled tag without its exact tag' },
+    { remoteOutput: `${tagObject}\trefs/tags/v0.1.0\n${currentCommit}\trefs/tags/v0.1.0\n`, label: 'duplicate exact tag records' },
+    { remoteOutput: `not-a-sha\trefs/tags/v0.1.0\n${oldCommit}\trefs/tags/v0.1.0^{}\n`, label: 'a malformed exact tag object' }
+  ])('fails closed for $label', async ({ remoteOutput }) => {
+    const { failure } = await inspect({
+      expectedRef: 'refs/tags/v0.1.0',
+      expectedCommit: oldCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      remoteOutput
+    });
+
+    expect(failure).toContain('did not resolve to one exact 40-character commit');
   });
 
   it('fails closed when the trusted branch cannot be resolved', async () => {
@@ -230,9 +306,13 @@ describe('verifier freshness preflight', () => {
 
 async function inspect(options: {
   expectedCommit: string | null;
+  expectedRef?: string;
   buildCommit?: string;
   runtimeCommit?: string;
   legacy?: boolean;
+  dirty?: boolean;
+  lightweightTag?: boolean;
+  remoteOutput?: string;
   canonicalMainUpdate?: boolean;
   refreshFails?: boolean;
   buildFails?: boolean;
@@ -264,6 +344,8 @@ async function inspect(options: {
     ...(options.canonicalMainUpdate ? {
       safety: { operationMode: 'dogfood' },
       verifier: { update: { mode: 'canonical-main' } }
+    } : options.expectedRef ? {
+      verifier: { expectedRef: options.expectedRef }
     } : {})
   });
   let refreshed = false;
@@ -279,12 +361,19 @@ async function inspect(options: {
       }
       if (args[0] === 'checkout') return result(command, args, commandOptions?.cwd, '');
       if (args.join(' ') === 'rev-parse HEAD') return result(command, args, commandOptions?.cwd, `${currentCommit}\n`);
+      const expectedRef = options.expectedRef ?? 'refs/heads/main';
       return {
         command,
         args,
         cwd: commandOptions?.cwd,
         exitCode: options.expectedCommit ? 0 : 2,
-        stdout: options.expectedCommit ? `${options.expectedCommit}\trefs/heads/main\n` : '',
+        stdout: options.remoteOutput ?? (options.expectedCommit
+          ? options.expectedRef?.startsWith('refs/tags/')
+            ? options.lightweightTag
+              ? `${options.expectedCommit}\t${expectedRef}\n`
+              : `${tagObject}\t${expectedRef}\n${options.expectedCommit}\t${expectedRef}^{}\n`
+            : `${options.expectedCommit}\t${expectedRef}\n`
+          : ''),
         stderr: options.expectedCommit ? '' : 'remote unavailable',
         durationMs: 1
       };
@@ -338,8 +427,8 @@ async function inspect(options: {
         version: '0.0.0',
         status: options.buildCommit === options.runtimeCommit ? 'current' : 'stale',
         stale: options.buildCommit === options.runtimeCommit ? false : true,
-        build: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: false },
-        runtime: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.runtimeCommit, dirty: false, packageRoot: currentPackageRoot }
+        build: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.buildCommit, builtAt: '2026-08-03T00:00:00.000Z', dirty: options.dirty ?? false },
+        runtime: { commit: refreshed && !options.invalidAfterRefresh ? currentCommit : options.runtimeCommit, dirty: options.dirty ?? false, packageRoot: currentPackageRoot }
       }),
       stderr: '',
       durationMs: 1

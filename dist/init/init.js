@@ -7,7 +7,7 @@ import { upsertProject } from '../config/registry.js';
 import { GitHubClient } from '../github/client.js';
 import { hasSupervisorGitHubToken } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
-import { workspaceDir } from '../utils/paths.js';
+import { getKaizenHome, workspaceDir } from '../utils/paths.js';
 import { repoFromRemote, slugFromRepo } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
@@ -30,7 +30,7 @@ export async function initProject(options) {
     const commands = await detectCommands(repoDir);
     const configPath = path.join(repoDir, '.kaizen', 'config.yml');
     const templatePath = path.join(repoDir, '.github', 'ISSUE_TEMPLATE', 'kaizen.yml');
-    let config = defaultConfigObject({ agent, schedule: options.schedule, ...commands });
+    let config = await createInitialConfig({ agent, schedule: options.schedule, ...commands });
     let profileName;
     let corrections = [];
     if (options.profile) {
@@ -68,6 +68,26 @@ export async function initProject(options) {
         createdAt: new Date().toISOString()
     });
     return { slug, repo, configPath, profile: profileName, safetyFloorCorrections: corrections };
+}
+export async function createInitialConfig(options, kaizenHome = getKaizenHome()) {
+    const expectedVerifierRef = await readInstalledVerifierRef(kaizenHome);
+    return defaultConfigObject({ ...options, expectedVerifierRef });
+}
+export async function readInstalledVerifierRef(kaizenHome = getKaizenHome()) {
+    const stamp = path.join(kaizenHome, 'toolchain', 'verifier', '.installed-version');
+    let version;
+    try {
+        version = (await fs.readFile(stamp, 'utf8')).trim();
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return undefined;
+        throw new ConfigError(`Unable to read installed Verifier version at ${stamp}: ${String(error)}`);
+    }
+    if (!/^v0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+        throw new ConfigError(`Invalid installed Verifier version at ${stamp}: expected one v0.x.y release tag.`);
+    }
+    return `refs/tags/${version}`;
 }
 function chooseAgent(preferred) {
     return preferred ?? 'claude';
