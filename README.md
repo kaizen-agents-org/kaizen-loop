@@ -152,7 +152,7 @@ root-owned runtime chain.
 ```sh
 sudo install -d -o root -m 0755 /usr/local/libexec/kaizen-loop
 sudo install -o root -m 0755 scripts/run-scheduled.sh /usr/local/libexec/kaizen-loop/run-scheduled.sh
-# Install a standalone gh binary, not a user-owned wrapper or profile symlink.
+# Use an immutable Nix-store gh, or install a standalone administrator-owned copy.
 sudo install -o root -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-loop/gh
 export KAIZEN_CRON_SCHEDULED_LAUNCHER=/usr/local/libexec/kaizen-loop/run-scheduled.sh
 export PATH=/usr/local/libexec/kaizen-loop:$PATH
@@ -192,9 +192,11 @@ The CLI delegates external work instead of embedding tokens or provider SDKs:
 - `git` for workspace, branch, diff, commit, push, and worktree operations.
 - `gh` for issue, label, comment, and PR operations. Because authenticated calls happen after
   untrusted workspace execution, the resolved binary and every ancestor directory must be owned
-  by an administrator and not writable by the supervisor user, its groups, or other users.
-  User-owned Homebrew installations are intentionally rejected; install an administrator-managed
-  copy on the supervisor `PATH`. `kaizen doctor` fails closed when no trusted copy is available.
+  by an administrator and not writable by the supervisor user, its groups, or other users. A
+  root-owned sticky store directory is accepted when its resolved executable and descendants are
+  root-owned and immutable, which supports multi-user Nix store installations. User-owned Homebrew
+  installations remain rejected; install an administrator-managed copy on the supervisor `PATH`.
+  `kaizen doctor` fails closed when no trusted copy is available.
 - `builder-agent` on `PATH` when `.kaizen/config.yml` uses the default builder command.
 - `verifier` on `PATH` when `verifier.enabled: true`.
 - `codex` for the PR guardian workflow when `guardian.enabled: true`.
