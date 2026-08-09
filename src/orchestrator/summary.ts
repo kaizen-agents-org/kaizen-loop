@@ -37,7 +37,7 @@ export interface RunQueueSummary {
   health: {
     state: 'healthy' | 'idle' | 'degraded' | 'starved' | 'blocked';
     consecutiveZeroThroughputRuns: number;
-    reasonCode?: 'run_failed' | 'eligible_not_processed' | 'repeated_gate' | 'empty_queue';
+    reasonCode?: 'run_failed' | 'trusted_github_cli_unavailable' | 'eligible_not_processed' | 'repeated_gate' | 'empty_queue';
     since?: string;
     warning?: string;
   };
@@ -77,7 +77,9 @@ export function summarizeQueue(options: {
       skipReasons,
       'blocked',
       options.processedCount === 0 ? 1 : 0,
-      'run_failed',
+      failureReason?.startsWith('Trusted GitHub CLI executable was not found')
+        ? 'trusted_github_cli_unavailable'
+        : 'run_failed',
       options.processedCount === 0 ? options.observedAt : undefined,
       failureReason
         ? `Queue blocked because the run failed: ${failureReason}`

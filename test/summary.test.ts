@@ -124,6 +124,28 @@ describe('summarizeQueue', () => {
     expect(queue.health.warning).toContain('run failed');
   });
 
+  it('reports a stable reason code for trusted GitHub CLI infrastructure failure', () => {
+    const queue = summarizeQueue({
+      backlogCount: 0,
+      eligibleCount: 0,
+      processedCount: 0,
+      result: 'failed',
+      skipped: [{
+        number: 0,
+        reason: 'Trusted GitHub CLI executable was not found before untrusted work. Install gh in an immutable root-owned path.'
+      }],
+      previousSummaries: [],
+      starvationRuns: 2,
+      observedAt: '2026-08-09T02:00:00.000Z'
+    });
+
+    expect(queue.health).toMatchObject({
+      state: 'blocked',
+      reasonCode: 'trusted_github_cli_unavailable',
+      consecutiveZeroThroughputRuns: 1
+    });
+  });
+
   it('marks an unexplained successful eligible-zero-throughput run degraded', () => {
     const queue = summarizeQueue({
       backlogCount: 2,

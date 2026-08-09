@@ -184,7 +184,7 @@ export declare function listProjects(): Promise<{
             state: "blocked" | "degraded" | "starved";
             since: string | undefined;
             warning: string | undefined;
-            reasonCode: "run_failed" | "eligible_not_processed" | "repeated_gate" | "empty_queue" | undefined;
+            reasonCode: "trusted_github_cli_unavailable" | "run_failed" | "eligible_not_processed" | "repeated_gate" | "empty_queue" | undefined;
         }[];
         starvedRepositories: {
             slug: string;
@@ -199,7 +199,7 @@ export declare function listProjects(): Promise<{
             readonly queueHealth: {
                 state: "healthy" | "idle" | "degraded" | "starved" | "blocked";
                 consecutiveZeroThroughputRuns: number;
-                reasonCode?: "run_failed" | "eligible_not_processed" | "repeated_gate" | "empty_queue";
+                reasonCode?: "run_failed" | "trusted_github_cli_unavailable" | "eligible_not_processed" | "repeated_gate" | "empty_queue";
                 since?: string;
                 warning?: string;
             } | undefined;

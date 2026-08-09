@@ -6,9 +6,11 @@ import { configSchema } from '../src/config/schema.js';
 import { disableScheduler, enableScheduler as enableSchedulerImpl } from '../src/scheduler/scheduler.js';
 import type { RegistryProject } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { trustedRunner } from './helpers/trustedRunner.js';
 
 const enableScheduler: typeof enableSchedulerImpl = (options) => enableSchedulerImpl({
   ...options,
+  runCommand: trustedRunner(options.runCommand),
   launcherTrust: options.launcherTrust ?? (() => true)
 });
 
@@ -22,6 +24,22 @@ afterEach(() => {
 });
 
 describe('enableScheduler', () => {
+  it('rejects missing trusted GitHub CLI before replacing managed jobs', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const runner = vi.fn<CommandRunner>();
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableSchedulerImpl({
+      slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
+      runCommand: runner, platform: 'darwin', launcherTrust: () => true
+    })).rejects.toThrow('Install gh in an immutable root-owned path');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('rejects managed cron before writes when no trusted launcher is configured', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     vi.stubEnv('KAIZEN_HOME', home);

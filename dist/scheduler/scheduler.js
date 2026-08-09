@@ -2,13 +2,15 @@ import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { isTrustedExecutablePath } from '../utils/command.js';
+import { isTrustedExecutablePath, requireTrustedGitHubCliExecutable } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
 export async function enableScheduler(options) {
     const jobs = schedulerJobs(options.config);
     const platform = options.platform ?? process.platform;
     const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher(options.launcherTrust);
+    if (jobs.length > 0)
+        requireTrustedGitHubCliExecutable(options.runCommand);
     if (platform === 'darwin') {
         await fs.mkdir(projectStateDir(options.slug), { recursive: true });
         await removeLaunchdPlists(options.slug, options.runCommand);

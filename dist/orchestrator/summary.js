@@ -6,7 +6,9 @@ export function summarizeQueue(options) {
         .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason));
     if (options.result === 'failed') {
         const failureReason = options.skipped.find((item) => item.number === 0)?.reason;
-        return queueSummary(options, skipReasons, 'blocked', options.processedCount === 0 ? 1 : 0, 'run_failed', options.processedCount === 0 ? options.observedAt : undefined, failureReason
+        return queueSummary(options, skipReasons, 'blocked', options.processedCount === 0 ? 1 : 0, failureReason?.startsWith('Trusted GitHub CLI executable was not found')
+            ? 'trusted_github_cli_unavailable'
+            : 'run_failed', options.processedCount === 0 ? options.observedAt : undefined, failureReason
             ? `Queue blocked because the run failed: ${failureReason}`
             : 'Queue blocked because the run failed.');
     }
