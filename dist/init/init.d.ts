@@ -16,3 +16,10 @@ export interface InitResult {
     safetyFloorCorrections: string[];
 }
 export declare function initProject(options: InitOptions): Promise<InitResult>;
+export declare function createInitialConfig(options: {
+    agent: 'claude' | 'codex';
+    schedule?: string;
+    setup: string | null;
+    verify: string[];
+}, kaizenHome?: string): Promise<Record<string, unknown>>;
+export declare function readInstalledVerifierRef(kaizenHome?: string): Promise<string | undefined>;

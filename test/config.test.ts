@@ -118,9 +118,25 @@ describe('configSchema', () => {
     })).toThrow('require the trusted Kaizen Verifier');
   });
 
-  it.each(['refs/heads/release.', 'refs/heads/.hidden'])('rejects Git-invalid trusted verifier ref %s', (expectedRef) => {
+  it.each([
+    'v0.1.0',
+    'refs/remotes/origin/main',
+    'refs/heads/release.',
+    'refs/heads/.hidden',
+    'refs/tags/release..1',
+    'refs/tags/release.lock',
+    'refs/tags/release.lock/v1',
+    'refs/tags/v0.1.0:refs/tags/other'
+  ])('rejects Git-invalid trusted verifier ref %s', (expectedRef) => {
     expect(() => configSchema.parse({ version: 1, verifier: { expectedRef } }))
-      .toThrow('expectedRef must be a canonical branch ref');
+      .toThrow('expectedRef must be a canonical branch or tag ref');
+  });
+
+  it('accepts a release tag as the trusted verifier ref', () => {
+    expect(configSchema.parse({
+      version: 1,
+      verifier: { expectedRef: 'refs/tags/v0.1.0' }
+    }).verifier.expectedRef).toBe('refs/tags/v0.1.0');
   });
 
   it('rejects invalid scheduler values', () => {

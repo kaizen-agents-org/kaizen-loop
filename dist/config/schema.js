@@ -183,9 +183,9 @@ export const configSchema = z
             .refine((value) => value.startsWith('https://'), 'expectedRepository must use HTTPS')
             .default('https://github.com/kaizen-agents-org/verifier.git'),
         expectedRef: z.string()
-            .regex(/^refs\/heads\/[A-Za-z0-9._/-]+$/)
+            .regex(/^refs\/(?:heads|tags)\/[A-Za-z0-9._/-]+$/, 'expectedRef must be a canonical branch or tag ref')
             .refine((value) => !value.includes('..') && !value.includes('//') && !value.endsWith('/') &&
-            value.split('/').every((component) => !component.startsWith('.') && !component.endsWith('.')), 'expectedRef must be a canonical branch ref')
+            value.split('/').every((component) => !component.startsWith('.') && !component.endsWith('.') && !component.endsWith('.lock')), 'expectedRef must be a canonical branch or tag ref')
             .default('refs/heads/main'),
         freshnessTimeoutSeconds: z.number().int().positive().max(300).default(30),
         update: z.object({

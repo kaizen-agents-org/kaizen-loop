@@ -11,4 +11,5 @@ export declare function defaultConfigObject(options: {
     schedule?: string;
     setup: string | null;
     verify: string[];
+    expectedVerifierRef?: string;
 }): Record<string, unknown>;
