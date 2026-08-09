@@ -426,15 +426,17 @@ describe('withRunDeadline', () => {
 
   it('caps authenticated broker preflight at the remaining run deadline', async () => {
     const runner = vi.fn<CommandRunner>();
-    const preflight = vi.fn(async (_timeoutMs?: number) => {});
+    const preflight = vi.fn(async (_request: { pushUrl: string; expectedRepo: string }, _timeoutMs?: number) => {});
     const trustedRunner = withTrustedExecutables(runner, { githubPublicationPreflight: preflight });
     const deadlineRunner = withRunDeadline(trustedRunner, Date.now() + 1_000);
+    const request = { pushUrl: 'https://github.com/o/r.git', expectedRepo: 'o/r' };
 
-    await publicationGithubPreflight(deadlineRunner)!();
+    await publicationGithubPreflight(deadlineRunner)!(request);
 
     expect(preflight).toHaveBeenCalledOnce();
-    expect(preflight.mock.calls[0][0]).toBeGreaterThan(0);
-    expect(preflight.mock.calls[0][0]).toBeLessThanOrEqual(1_000);
+    expect(preflight.mock.calls[0][0]).toEqual(request);
+    expect(preflight.mock.calls[0][1]).toBeGreaterThan(0);
+    expect(preflight.mock.calls[0][1]).toBeLessThanOrEqual(1_000);
   });
 
   it('bounds command timeouts by the remaining run deadline', async () => {

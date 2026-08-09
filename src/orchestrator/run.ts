@@ -332,6 +332,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
       await preflightScheduledPublication({
         scheduled: options.scheduled,
         localPath: resolved.project.localPath,
+        expectedRepo: resolved.project.repo,
         runCommand
       });
       let selection = await selectRunIssues();
@@ -533,10 +534,15 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 export async function preflightScheduledPublication(options: {
   scheduled: boolean;
   localPath: string;
+  expectedRepo: string;
   runCommand: CommandRunner;
 }): Promise<void> {
   if (!options.scheduled || publicationGithubToken(options.runCommand)) return;
-  const remoteUrl = await new GitClient(options.runCommand, options.localPath).remoteUrl('origin');
+  const pushUrls = await new GitClient(options.runCommand, options.localPath).publicationPushUrls();
+  if (pushUrls.length !== 1) {
+    throw new Error(`Scheduled publication requires exactly one origin push URL; found ${pushUrls.length}.`);
+  }
+  const remoteUrl = pushUrls[0];
   if (!remoteUrl.startsWith('https://')) return;
   const brokerPreflight = publicationGithubPreflight(options.runCommand);
   if (!brokerPreflight) {
@@ -545,7 +551,7 @@ export async function preflightScheduledPublication(options: {
     );
   }
   try {
-    await brokerPreflight();
+    await brokerPreflight({ pushUrl: remoteUrl, expectedRepo: options.expectedRepo });
   } catch {
     throw new Error(
       'Scheduled HTTPS publication broker preflight failed before issue intake. Verify the root-owned broker, launcher registration, and repository allowlist.'

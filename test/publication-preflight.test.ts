@@ -9,7 +9,7 @@ function remoteRunner(url: string): CommandRunner {
     args,
     cwd: '/repo',
     exitCode: 0,
-    stdout: args.join(' ') === 'remote get-url origin' ? `${url}\n` : '',
+    stdout: args.join(' ') === 'remote get-url --push --all origin' ? `${url}\n` : '',
     stderr: '',
     durationMs: 1
   }));
@@ -22,6 +22,7 @@ describe('scheduled publication preflight', () => {
     await expect(preflightScheduledPublication({
       scheduled: true,
       localPath: '/repo',
+      expectedRepo: 'o/r',
       runCommand: trustedRunner(command, {
         githubToken: false,
         githubPublisher: false,
@@ -40,6 +41,7 @@ describe('scheduled publication preflight', () => {
     await preflightScheduledPublication({
       scheduled: true,
       localPath: '/repo',
+      expectedRepo: 'o/r',
       runCommand: trustedRunner(command, {
         githubToken: false,
         githubPublisher: vi.fn(async () => undefined),
@@ -47,7 +49,10 @@ describe('scheduled publication preflight', () => {
       })
     });
 
-    expect(preflight).toHaveBeenCalledOnce();
+    expect(preflight).toHaveBeenCalledWith({
+      pushUrl: 'https://github.com/o/r.git',
+      expectedRepo: 'o/r'
+    });
   });
 
   it('does not require the HTTPS broker for manual or SSH publication', async () => {
@@ -55,6 +60,7 @@ describe('scheduled publication preflight', () => {
     await preflightScheduledPublication({
       scheduled: false,
       localPath: '/repo',
+      expectedRepo: 'o/r',
       runCommand: trustedRunner(manual, { githubToken: false, githubPublicationPreflight: false })
     });
     expect(manual).not.toHaveBeenCalled();
@@ -63,8 +69,26 @@ describe('scheduled publication preflight', () => {
     await preflightScheduledPublication({
       scheduled: true,
       localPath: '/repo',
+      expectedRepo: 'o/r',
       runCommand: trustedRunner(ssh, { githubToken: false, githubPublicationPreflight: false })
     });
     expect(ssh).toHaveBeenCalledOnce();
+  });
+
+  it('uses the publication URL instead of the fetch URL', async () => {
+    const command = remoteRunner('https://github.com/o/r.git');
+    const preflight = vi.fn(async () => undefined);
+
+    await preflightScheduledPublication({
+      scheduled: true,
+      localPath: '/repo',
+      expectedRepo: 'o/r',
+      runCommand: trustedRunner(command, {
+        githubToken: false,
+        githubPublicationPreflight: preflight
+      })
+    });
+
+    expect(command).toHaveBeenCalledWith('git', ['remote', 'get-url', '--push', '--all', 'origin'], expect.anything());
   });
 });

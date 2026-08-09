@@ -20,8 +20,12 @@ export interface GitHubPublicationRequest {
     expectedSha: string;
     forceWithLease?: string;
 }
+export interface GitHubPublicationPreflightRequest {
+    pushUrl: string;
+    expectedRepo: string;
+}
 export type GitHubPublisher = (request: GitHubPublicationRequest, timeoutMs?: number) => Promise<void>;
-export type GitHubPublicationPreflight = (timeoutMs?: number) => Promise<void>;
+export type GitHubPublicationPreflight = (request: GitHubPublicationPreflightRequest, timeoutMs?: number) => Promise<void>;
 export declare const INITIAL_GIT_EXECUTABLE: string | undefined;
 export declare const INITIAL_GITHUB_CLI_EXECUTABLE: string | undefined;
 export interface CommandResult {

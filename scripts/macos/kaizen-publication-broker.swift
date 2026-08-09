@@ -318,7 +318,15 @@ private func runGit(
     allowedExitCodes: Set<Int32> = [0]
 ) throws -> String {
     let process = Process()
-    let output = Pipe()
+    let outputPath = (config.privateDirectory as NSString).appendingPathComponent("git-output-\(UUID().uuidString)")
+    guard FileManager.default.createFile(atPath: outputPath, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 6)
+    }
+    let output = try FileHandle(forWritingTo: URL(fileURLWithPath: outputPath))
+    defer {
+        output.closeFile()
+        try? FileManager.default.removeItem(atPath: outputPath)
+    }
     process.executableURL = URL(fileURLWithPath: config.gitExecutable)
     process.arguments = ["-C", cwd] + args
     process.environment = safeEnvironment(extraEnvironment)
@@ -337,7 +345,8 @@ private func runGit(
         }
         usleep(50_000)
     }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
+    output.closeFile()
+    let data = try Data(contentsOf: URL(fileURLWithPath: outputPath))
     guard process.terminationReason == .exit && allowedExitCodes.contains(process.terminationStatus) else {
         throw NSError(domain: "KaizenPublicationBroker", code: 6)
     }
@@ -458,7 +467,15 @@ private func handlePublication(_ descriptor: Int32, config: BrokerConfig, reques
         return registrations.isExpected(pid: pid, capability: capability)
     }
     if operation == "preflight" {
-        guard exactKeys(request, ["version", "operation", "capability"]) else { return false }
+        guard exactKeys(request, ["version", "operation", "capability", "pushUrl", "expectedRepo"]),
+              let pushUrl = request["pushUrl"] as? String,
+              let expectedRepo = request["expectedRepo"] as? String,
+              let configuredUrl = config.allowedRepositories[expectedRepo],
+              configuredUrl == pushUrl,
+              (configuredUrl == "https://github.com/\(expectedRepo).git" ||
+                  (testingConfigPath().map { configuredUrl.hasPrefix("file://\(($0 as NSString).deletingLastPathComponent)/") } ?? false)) else {
+            return false
+        }
         return try authenticateSupervisor(descriptor, config: config, capability: capability)
     }
     return try publish(descriptor, config: config, request: request)
@@ -512,7 +529,8 @@ do {
     guard validateRootConfiguration(config, path: path) else { throw NSError(domain: "KaizenPublicationBroker", code: 8) }
     try FileManager.default.createDirectory(atPath: config.privateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     if testingConfigPath() == nil {
-        guard chown(config.privateDirectory, 0, 0) == 0, chmod(config.privateDirectory, 0o700) == 0 else {
+        guard chown(config.privateDirectory, 0, config.runtimeGid) == 0,
+              chmod(config.privateDirectory, 0o710) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
     }

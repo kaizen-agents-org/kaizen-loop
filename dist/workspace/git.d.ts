@@ -5,6 +5,7 @@ export declare class GitClient {
     constructor(run: CommandRunner, cwd: string);
     root(): Promise<string>;
     remoteUrl(name?: string): Promise<string>;
+    publicationPushUrls(): Promise<string[]>;
     currentBranch(): Promise<string>;
     revParse(ref: string): Promise<string>;
     clone(remote: string, target: string): Promise<void>;

@@ -61,8 +61,15 @@ export interface GitHubPublicationRequest {
   expectedSha: string;
   forceWithLease?: string;
 }
+export interface GitHubPublicationPreflightRequest {
+  pushUrl: string;
+  expectedRepo: string;
+}
 export type GitHubPublisher = (request: GitHubPublicationRequest, timeoutMs?: number) => Promise<void>;
-export type GitHubPublicationPreflight = (timeoutMs?: number) => Promise<void>;
+export type GitHubPublicationPreflight = (
+  request: GitHubPublicationPreflightRequest,
+  timeoutMs?: number
+) => Promise<void>;
 export const INITIAL_GIT_EXECUTABLE = resolveTrustedExecutable('git', process.env.PATH);
 export const INITIAL_GITHUB_CLI_EXECUTABLE = resolveTrustedExecutable('gh', process.env.PATH);
 const INITIAL_SSH_EXECUTABLE = resolveTrustedExecutable('ssh', process.env.PATH);
@@ -237,9 +244,10 @@ function initialTrustedExecutables(): TrustedExecutables {
       )
       : undefined,
     githubPublicationPreflight: INITIAL_GITHUB_TOKEN_SOCKET
-      ? (timeoutMs?: number) => requestGithubPublicationPreflight(
+      ? (request: GitHubPublicationPreflightRequest, timeoutMs?: number) => requestGithubPublicationPreflight(
         INITIAL_GITHUB_TOKEN_SOCKET,
         INITIAL_GITHUB_BROKER_CAPABILITY,
+        request,
         Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS)
       )
       : undefined
@@ -456,9 +464,10 @@ function requestGithubPublication(
 function requestGithubPublicationPreflight(
   socketPath: string,
   capability: string | undefined,
+  request: GitHubPublicationPreflightRequest,
   timeoutMs: number
 ): Promise<void> {
-  return requestBroker(socketPath, { operation: 'preflight', capability }, timeoutMs);
+  return requestBroker(socketPath, { operation: 'preflight', capability, ...request }, timeoutMs);
 }
 
 function requestBroker(
@@ -696,7 +705,10 @@ export function withRunDeadline(runCommand: CommandRunner, deadlineAt: number): 
           )
           : undefined,
         githubPublicationPreflight: githubPublicationPreflight
-          ? (timeoutMs?: number) => githubPublicationPreflight(timeoutWithinDeadline(timeoutMs, deadlineAt))
+          ? (request: GitHubPublicationPreflightRequest, timeoutMs?: number) => githubPublicationPreflight(
+            request,
+            timeoutWithinDeadline(timeoutMs, deadlineAt)
+          )
           : undefined
       })
     });

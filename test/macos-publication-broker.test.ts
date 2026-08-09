@@ -114,7 +114,11 @@ function request(payload) {
     socket.on('error', () => resolve(false));
   });
 }
-const preflight = () => request({ operation: 'preflight' });
+const preflight = () => request({
+  operation: 'preflight',
+  pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
+  expectedRepo: 'o/r'
+});
 (async () => {
   if (process.env.KAIZEN_BROKER_CHILD === '1') process.exit((await preflight()) ? 9 : 0);
   fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
@@ -233,8 +237,10 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('token file mode must be 0600');
     expect(installer).not.toMatch(/cat .*token_file|echo .*token_file/);
     expect(installer).toContain('Refusing to replace an installation without the Kaizen publication broker marker');
-    expect(installer).toContain('install -o root -g wheel -m 0600 "$config_stage" "$config_path"');
+    expect(installer).toContain('install -o root -g wheel -m 0644 "$config_stage" "$config_path"');
     expect(installer).toContain('install -o root -g wheel -m 0644 "$daemon_stage" "$daemon_path"');
+    expect(brokerSource).toContain('chown(config.privateDirectory, 0, config.runtimeGid)');
+    expect(brokerSource).toContain('chmod(config.privateDirectory, 0o710)');
     expect(installer).toContain('cp -p "$build_dir/config.backup" "$config_path"');
     expect(installer).toContain('launchctl bootstrap system "$daemon_path"');
   });

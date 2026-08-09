@@ -59,6 +59,7 @@ export declare function runKaizen(options: RunOptions): Promise<RunSummary | {
 export declare function preflightScheduledPublication(options: {
     scheduled: boolean;
     localPath: string;
+    expectedRepo: string;
     runCommand: CommandRunner;
 }): Promise<void>;
 export declare function preflightVerifier(options: {

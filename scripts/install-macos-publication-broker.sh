@@ -146,7 +146,7 @@ for repository in $repositories; do
 done
 IFS=$old_ifs
 chown root:wheel "$config_stage"
-chmod 0600 "$config_stage"
+chmod 0644 "$config_stage"
 
 daemon_stage="$build_dir/publication-broker-daemon.plist"
 /usr/libexec/PlistBuddy -c 'Clear dict' "$daemon_stage"
@@ -167,7 +167,7 @@ if [ -f "$daemon_path" ]; then cp -p "$daemon_path" "$build_dir/daemon.backup"; 
 launchctl bootout system/org.kaizen-agents.publication-broker 2>/dev/null || true
 if [ -d "$install_root" ]; then mv "$install_root" "$backup"; fi
 mv "$stage" "$install_root"
-install -o root -g wheel -m 0600 "$config_stage" "$config_path"
+install -o root -g wheel -m 0644 "$config_stage" "$config_path"
 install -o root -g wheel -m 0644 "$daemon_stage" "$daemon_path"
 if ! launchctl bootstrap system "$daemon_path"; then
   rm -rf "$install_root"

@@ -173,7 +173,7 @@ function initialTrustedExecutables() {
             ? (request, timeoutMs) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, INITIAL_GITHUB_BROKER_CAPABILITY, request, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
             : undefined,
         githubPublicationPreflight: INITIAL_GITHUB_TOKEN_SOCKET
-            ? (timeoutMs) => requestGithubPublicationPreflight(INITIAL_GITHUB_TOKEN_SOCKET, INITIAL_GITHUB_BROKER_CAPABILITY, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
+            ? (request, timeoutMs) => requestGithubPublicationPreflight(INITIAL_GITHUB_TOKEN_SOCKET, INITIAL_GITHUB_BROKER_CAPABILITY, request, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
             : undefined
     };
 }
@@ -333,8 +333,8 @@ function resolveBrokerCapability(value) {
 function requestGithubPublication(socketPath, capability, request, timeoutMs) {
     return requestBroker(socketPath, { operation: 'git-push', capability, ...request }, timeoutMs);
 }
-function requestGithubPublicationPreflight(socketPath, capability, timeoutMs) {
-    return requestBroker(socketPath, { operation: 'preflight', capability }, timeoutMs);
+function requestGithubPublicationPreflight(socketPath, capability, request, timeoutMs) {
+    return requestBroker(socketPath, { operation: 'preflight', capability, ...request }, timeoutMs);
 }
 function requestBroker(socketPath, request, timeoutMs) {
     installShutdownHooks();
@@ -553,7 +553,7 @@ export function withRunDeadline(runCommand, deadlineAt) {
                     ? (request, timeoutMs) => githubPublisher(request, timeoutWithinDeadline(timeoutMs, deadlineAt))
                     : undefined,
                 githubPublicationPreflight: githubPublicationPreflight
-                    ? (timeoutMs) => githubPublicationPreflight(timeoutWithinDeadline(timeoutMs, deadlineAt))
+                    ? (request, timeoutMs) => githubPublicationPreflight(request, timeoutWithinDeadline(timeoutMs, deadlineAt))
                     : undefined
             })
         });

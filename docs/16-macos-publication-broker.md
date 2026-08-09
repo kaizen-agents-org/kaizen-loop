@@ -28,9 +28,10 @@ sudo scripts/install-macos-publication-broker.sh \
 ```
 
 The installer compiles and installs three root-owned executables, an immutable copy of
-the built Kaizen runtime, a mode-`0600` broker configuration, and
+the built Kaizen runtime, a root-owned mode-`0644` broker configuration containing no
+token value, and
 `/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist`. It refuses an
-unmarked existing installation and validates the Node, npm, and token ownership chain.
+unmarked existing installation and validates the Node, npm, and root-only token ownership chain.
 Add one `--repository owner/name` for every repository the broker may publish; the
 daemon maps these names to canonical `https://github.com/owner/name.git` URLs and never
 treats a client URL as authority.
