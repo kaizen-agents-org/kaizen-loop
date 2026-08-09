@@ -39,25 +39,24 @@ private func dropPrivileges(_ config: SupervisorConfig) -> Never {
         }
     }
     let arguments = CommandLine.arguments
-    if arguments.count == 6 && arguments[1] == "run",
-       let toolPath = validatedToolPath(arguments[5]) {
+    if arguments.count == 7 && arguments[1] == "run",
+       let toolPath = validatedToolPath(arguments[5]),
+       let publicationTimeoutMs = Int(arguments[6]),
+       (10_000...3_600_000).contains(publicationTimeoutMs) {
         let capability = arguments[2]
         let project = arguments[3]
         let job = arguments[4]
         guard registerSupervisor(socketPath: config.publicationSocketPath, capability: capability) else { exit(126) }
-        var environment = [
+        let environment = [
             "HOME=\(config.runtimeHome)",
             "USER=\(config.runtimeUser)",
             "LOGNAME=\(config.runtimeUser)",
             "PATH=\(toolPath)",
             "KAIZEN_HOME=\(config.runtimeHome)/.kaizen",
             "KAIZEN_GITHUB_TOKEN_SOCKET=\(config.publicationSocketPath)",
-            "KAIZEN_GITHUB_BROKER_CAPABILITY=\(capability)"
+            "KAIZEN_GITHUB_BROKER_CAPABILITY=\(capability)",
+            "KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS=\(publicationTimeoutMs)"
         ]
-        if let timeout = ProcessInfo.processInfo.environment["KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS"],
-           let milliseconds = Int(timeout), (10_000...3_600_000).contains(milliseconds) {
-            environment.append("KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS=\(milliseconds)")
-        }
         let argv = [config.nodeExecutable, config.cliPath, "run", "--project", project, "--scheduled", "--job", job]
         exec(config.nodeExecutable, argv, environment)
     }

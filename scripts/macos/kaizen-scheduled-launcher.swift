@@ -4,6 +4,16 @@ import Security
 
 private struct LauncherConfig: Decodable {
     let schedulerSocketPath: String
+    let scheduledJobs: [ScheduledJobConfig]
+}
+
+private struct ScheduledJobConfig: Decodable {
+    let project: String
+    let job: String
+    let toolPath: String
+    let hour: Int
+    let minute: Int
+    let publicationTimeoutMs: Int
 }
 
 private struct ScheduledRunRequest: Encodable {
@@ -66,37 +76,41 @@ private func exchange(_ descriptor: Int32, request: Data) throws -> Bool {
     return object?.count == 1 && object?["ok"] as? Bool == true
 }
 
-guard CommandLine.arguments.count == 4 else {
-    FileHandle.standardError.write(Data("usage: kaizen-scheduled-launcher <ignored-node> <project> <job>\n".utf8))
-    exit(2)
-}
-let project = CommandLine.arguments[2]
-let job = CommandLine.arguments[3]
-guard project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
-      job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else {
-    FileHandle.standardError.write(Data("invalid project or job identifier\n".utf8))
-    exit(2)
-}
-
-do {
-    let config = try PropertyListDecoder().decode(LauncherConfig.self, from: Data(contentsOf: URL(fileURLWithPath: configPath())))
+private func sendScheduledRun(_ config: LauncherConfig, project: String, job: String) throws -> Bool {
     var random = [UInt8](repeating: 0, count: 32)
     let randomCount = random.count
     let randomStatus = random.withUnsafeMutableBytes {
         SecRandomCopyBytes(kSecRandomDefault, randomCount, $0.baseAddress!)
     }
-    guard randomStatus == errSecSuccess else {
-        throw NSError(domain: "KaizenScheduledLauncher", code: 2)
-    }
+    guard randomStatus == errSecSuccess else { throw NSError(domain: "KaizenScheduledLauncher", code: 2) }
     let capability = random.map { String(format: "%02x", $0) }.joined()
     let descriptor = try connectUnixSocket(config.schedulerSocketPath)
     defer { close(descriptor) }
-    let ok = try exchange(descriptor, request: JSONEncoder().encode(ScheduledRunRequest(
+    return try exchange(descriptor, request: JSONEncoder().encode(ScheduledRunRequest(
         project: project,
         job: job,
         capability: capability
     )))
-    exit(ok ? 0 : 1)
+}
+
+do {
+    let config = try PropertyListDecoder().decode(LauncherConfig.self, from: Data(contentsOf: URL(fileURLWithPath: configPath())))
+    let isTest = ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"] != nil
+    if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "dispatch" && geteuid() == 0 {
+        let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
+        let due = config.scheduledJobs.filter { $0.hour == now.hour && $0.minute == now.minute }
+        guard !due.isEmpty else { throw NSError(domain: "KaizenScheduledLauncher", code: 3) }
+        for entry in due {
+            guard try sendScheduledRun(config, project: entry.project, job: entry.job) else {
+                throw NSError(domain: "KaizenScheduledLauncher", code: 4)
+            }
+        }
+        exit(0)
+    }
+    guard isTest, CommandLine.arguments.count == 4 else {
+        throw NSError(domain: "KaizenScheduledLauncher", code: 5)
+    }
+    exit(try sendScheduledRun(config, project: CommandLine.arguments[2], job: CommandLine.arguments[3]) ? 0 : 1)
 } catch {
     FileHandle.standardError.write(Data("Kaizen scheduled publication launcher failed.\n".utf8))
     exit(1)

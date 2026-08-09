@@ -138,23 +138,19 @@ repository as the unprivileged runtime user, then takes ownership, removes untru
 Git configuration, revalidates the repository and SHA, performs the authenticated Git
 push under its separate root identity, and returns only a boolean acknowledgement.
 The token never enters a Kaizen or same-UID Git child environment. Publication
-uses a 30-minute absolute broker publication deadline by default; set
-`KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS` at supervisor startup to 10000–3600000 ms.
+uses a 30-minute absolute broker publication deadline by default; pass
+`--publication-timeout-ms` to the installer to set 10000–3600000 ms.
 The broker treats socket disconnect as cancellation and terminates its import/push
 process group. Because a remote may accept a Git update immediately before a local
 disconnect, an unacknowledged publication is reported as an ambiguous failure and is
 not automatically retried.
 Publication rejects refs containing Git LFS pointers because it cannot safely run repository
 pre-push hooks or upload LFS objects with a separate trusted credential path.
-`KAIZEN_CRON_SCHEDULED_LAUNCHER` must name the absolute, operator-managed launcher
-installed outside `KAIZEN_HOME`;
-`scheduler sync` installs only job definitions and never creates or refreshes it.
-Managed jobs intentionally do not inherit `KAIZEN_GITHUB_TOKEN_SOCKET`. Scheduled HTTPS
-publication uses the installed broker daemon to start a fully root-owned runtime chain
-and inject the socket only after the user-owned launchd environment has been cleared.
-The broker accepts a start only when the peer PID belongs to the root-registered
-`com.kaizen-loop.<project>.<job>` launchd job and uses the registered tool path and
-publication timeout instead of caller-supplied values.
+Broker-backed jobs are registered with a time in the root-owned installer configuration.
+The installer creates a system LaunchDaemon dispatcher; do not create a duplicate user
+LaunchAgent with `scheduler sync` for those jobs. Scheduled HTTPS publication starts a
+fully root-owned runtime chain and injects the socket only after the root dispatcher has
+authorized the registered job.
 
 ```sh
 sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop
@@ -163,17 +159,15 @@ sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
   --token-file /Library/Application\ Support/KaizenLoop/github-token \
   --repository owner/repo \
-  --scheduled-job owner-repo/maintenance \
+  --scheduled-job owner-repo/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --node "$(command -v node)"
 # Use an immutable Nix-store gh, or install a standalone administrator-owned copy
 # outside the broker-managed installation root.
 sudo install -d -o root -g wheel -m 0755 /usr/local/libexec/kaizen-gh
 sudo install -o root -g wheel -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-gh/gh
-export KAIZEN_CRON_SCHEDULED_LAUNCHER=/usr/local/libexec/kaizen-loop/bin/kaizen-scheduled-launcher
 export PATH=/usr/local/libexec/kaizen-gh:$PATH
 kaizen init --agent codex --schedule 02:00
-kaizen scheduler sync
 export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"
 kaizen doctor
 kaizen report "Fix stale config reload" --body "Observed during local dogfooding" --priority P2 --queue
@@ -184,13 +178,9 @@ kaizen goal create "Improve onboarding reliability" --success "npm test and npm 
 kaizen goal run <goal-id> --yes --json
 ```
 
-After upgrading from a release that self-installed the scheduled launcher, install
-the broker and operator-managed launcher above and rerun `kaizen scheduler sync`
-for each registered project. Scheduler synchronization never writes or replaces
-`KAIZEN_CRON_SCHEDULED_LAUNCHER`. It also verifies the trusted `gh` executable
-before removing or replacing existing jobs. When the executable is absent,
-install the administrator-managed copy, start Kaizen with its directory first on
-`PATH`, and rerun scheduler synchronization.
+After upgrading from a user LaunchAgent installation, remove the duplicate user job and
+install the root broker/dispatcher registration above. Re-run the installer whenever a
+registered time, job, tool path, or publication timeout changes.
 
 For a third-party installation, start with the [third-party adopter guide](./docs/15-third-party-adopter-guide.md). Its recommended GitHub Actions path adds `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs. The lower-level workflow contract is documented in [docs/14-github-actions.md](./docs/14-github-actions.md).
 

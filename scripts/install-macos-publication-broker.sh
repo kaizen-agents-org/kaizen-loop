@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job> --tool-path <absolute-path-list> [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job> ...] [--node <absolute-node>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -36,8 +36,8 @@ done
 
 case "$token_file" in /*) ;; *) echo "--token-file must be absolute." >&2; exit 2 ;; esac
 case "$runtime_user" in *[!A-Za-z0-9._-]*|'') echo "Invalid runtime user." >&2; exit 2 ;; esac
-case "$publication_timeout_ms" in *[!0-9]*|'') echo "Invalid publication timeout." >&2; exit 2 ;; esac
-[ "$publication_timeout_ms" -ge 10000 ] && [ "$publication_timeout_ms" -le 3600000 ] || { echo "Publication timeout must be between 10000 and 3600000 milliseconds." >&2; exit 2; }
+case "$publication_timeout_ms" in *[!0-9]*|'') usage ;; esac
+[ "$publication_timeout_ms" -ge 10000 ] && [ "$publication_timeout_ms" -le 3600000 ] || usage
 runtime_uid=$(id -u "$runtime_user")
 runtime_gid=$(id -g "$runtime_user")
 runtime_home=$(dscl . -read "/Users/$runtime_user" NFSHomeDirectory | sed 's/^NFSHomeDirectory: //')
@@ -100,7 +100,7 @@ printf '%s\n' "$tool_path" | awk -F: '
 IFS='
 '
 for scheduled_job in $scheduled_jobs; do
-  echo "$scheduled_job" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' || {
+  echo "$scheduled_job" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}@([01][0-9]|2[0-3]):[0-5][0-9]$' || {
     echo "Invalid scheduled job: $scheduled_job" >&2
     exit 2
   }
@@ -111,6 +111,7 @@ install_root=/usr/local/libexec/kaizen-loop
 config_dir='/Library/Application Support/KaizenLoop'
 config_path="$config_dir/publication-broker.plist"
 daemon_path=/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
+schedule_daemon_path=/Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
 install -d -o root -g wheel -m 0755 /usr/local/libexec
 trusted_root_path /usr/local/libexec || { echo "/usr/local/libexec must be root-owned and group/other non-writable." >&2; exit 1; }
 if [ -d "$config_dir" ]; then
@@ -175,12 +176,18 @@ scheduled_index=0
 IFS='
 '
 for scheduled_job in $scheduled_jobs; do
-  scheduled_project=${scheduled_job%/*}
-  scheduled_name=${scheduled_job#*/}
+  scheduled_identity=${scheduled_job%@*}
+  scheduled_time=${scheduled_job##*@}
+  scheduled_project=${scheduled_identity%/*}
+  scheduled_name=${scheduled_identity#*/}
+  scheduled_hour=${scheduled_time%:*}
+  scheduled_minute=${scheduled_time#*:}
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index" -json '{}' "$config_stage"
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.project" -string "$scheduled_project" "$config_stage"
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.job" -string "$scheduled_name" "$config_stage"
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.toolPath" -string "$tool_path" "$config_stage"
+  /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.hour" -integer "$scheduled_hour" "$config_stage"
+  /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.minute" -integer "$scheduled_minute" "$config_stage"
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.publicationTimeoutMs" -integer "$publication_timeout_ms" "$config_stage"
   scheduled_index=$((scheduled_index + 1))
 done
@@ -200,16 +207,49 @@ daemon_stage="$build_dir/publication-broker-daemon.plist"
 chown root:wheel "$daemon_stage"
 chmod 0644 "$daemon_stage"
 
+schedule_daemon_stage="$build_dir/scheduled-publication-daemon.plist"
+schedule_times="$build_dir/schedule-times"
+: > "$schedule_times"
+IFS='
+'
+for scheduled_job in $scheduled_jobs; do
+  scheduled_time=${scheduled_job##*@}
+  if ! grep -Fqx "$scheduled_time" "$schedule_times"; then printf '%s\n' "$scheduled_time" >> "$schedule_times"; fi
+done
+IFS=$old_ifs
+/usr/libexec/PlistBuddy -c 'Clear dict' "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c 'Add :Label string org.kaizen-agents.scheduled-publication' "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c 'Add :ProgramArguments array' "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :ProgramArguments:0 string $install_root/bin/kaizen-scheduled-launcher" "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c 'Add :ProgramArguments:1 string dispatch' "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c 'Add :StartCalendarInterval array' "$schedule_daemon_stage"
+schedule_index=0
+while IFS=: read -r scheduled_hour scheduled_minute; do
+  /usr/libexec/PlistBuddy -c "Add :StartCalendarInterval:$schedule_index dict" "$schedule_daemon_stage"
+  /usr/libexec/PlistBuddy -c "Add :StartCalendarInterval:$schedule_index:Hour integer $scheduled_hour" "$schedule_daemon_stage"
+  /usr/libexec/PlistBuddy -c "Add :StartCalendarInterval:$schedule_index:Minute integer $scheduled_minute" "$schedule_daemon_stage"
+  schedule_index=$((schedule_index + 1))
+done < "$schedule_times"
+/usr/libexec/PlistBuddy -c 'Add :ProcessType string Background' "$schedule_daemon_stage"
+chown root:wheel "$schedule_daemon_stage"
+chmod 0644 "$schedule_daemon_stage"
+
 had_config=false
 had_daemon=false
+had_schedule_daemon=false
 if [ -f "$config_path" ]; then cp -p "$config_path" "$build_dir/config.backup"; had_config=true; fi
 if [ -f "$daemon_path" ]; then cp -p "$daemon_path" "$build_dir/daemon.backup"; had_daemon=true; fi
+if [ -f "$schedule_daemon_path" ]; then cp -p "$schedule_daemon_path" "$build_dir/schedule-daemon.backup"; had_schedule_daemon=true; fi
 launchctl bootout system/org.kaizen-agents.publication-broker 2>/dev/null || true
+launchctl bootout system/org.kaizen-agents.scheduled-publication 2>/dev/null || true
 if [ -d "$install_root" ]; then mv "$install_root" "$backup"; fi
 mv "$stage" "$install_root"
 install -o root -g wheel -m 0644 "$config_stage" "$config_path"
 install -o root -g wheel -m 0644 "$daemon_stage" "$daemon_path"
-if ! launchctl bootstrap system "$daemon_path"; then
+install -o root -g wheel -m 0644 "$schedule_daemon_stage" "$schedule_daemon_path"
+if ! launchctl bootstrap system "$daemon_path" || ! launchctl bootstrap system "$schedule_daemon_path"; then
+  launchctl bootout system/org.kaizen-agents.scheduled-publication 2>/dev/null || true
+  launchctl bootout system/org.kaizen-agents.publication-broker 2>/dev/null || true
   rm -rf "$install_root"
   if [ -d "$backup" ]; then mv "$backup" "$install_root"; fi
   if [ "$had_config" = true ]; then cp -p "$build_dir/config.backup" "$config_path"; else rm -f "$config_path"; fi
@@ -219,10 +259,16 @@ if ! launchctl bootstrap system "$daemon_path"; then
   else
     rm -f "$daemon_path"
   fi
+  if [ "$had_schedule_daemon" = true ]; then
+    cp -p "$build_dir/schedule-daemon.backup" "$schedule_daemon_path"
+    launchctl bootstrap system "$schedule_daemon_path" 2>/dev/null || true
+  else
+    rm -f "$schedule_daemon_path"
+  fi
   echo "LaunchDaemon bootstrap failed; the prior runtime and configuration were restored." >&2
   exit 1
 fi
 if [ -d "$backup" ]; then rm -rf "$backup"; fi
 trap - EXIT HUP INT TERM
 rm -rf "$build_dir"
-echo "Installed the Kaizen publication broker. Set KAIZEN_CRON_SCHEDULED_LAUNCHER=$install_root/bin/kaizen-scheduled-launcher and run kaizen scheduler sync."
+echo "Installed the Kaizen publication broker and root-owned scheduled dispatcher. Do not install a duplicate user LaunchAgent for these jobs."

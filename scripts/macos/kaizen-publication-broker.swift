@@ -21,6 +21,8 @@ private struct ScheduledJobConfig: Decodable {
     let project: String
     let job: String
     let toolPath: String
+    let hour: Int
+    let minute: Int
     let publicationTimeoutMs: Int
 }
 
@@ -135,49 +137,13 @@ private func parentPid(_ pid: pid_t) -> pid_t? {
     return pid_t(info.pbi_ppid)
 }
 
-private func registeredLaunchAgentOwns(
-    pid: pid_t,
-    config: BrokerConfig,
-    project: String,
-    job: String
-) throws -> Bool {
-    if testingConfigPath() != nil { return true }
-    let outputPath = (config.privateDirectory as NSString).appendingPathComponent("launchctl-\(UUID().uuidString)")
-    guard FileManager.default.createFile(atPath: outputPath, contents: nil, attributes: [.posixPermissions: 0o600]) else {
-        return false
-    }
-    defer { try? FileManager.default.removeItem(atPath: outputPath) }
-    let output = try FileHandle(forWritingTo: URL(fileURLWithPath: outputPath))
-    defer { output.closeFile() }
-    let label = "com.kaizen-loop.\(project).\(job)"
-    let process = try spawnProcess(
-        executable: "/bin/launchctl",
-        arguments: ["print", "gui/\(config.runtimeUid)/\(label)"],
-        environment: safeEnvironment(),
-        standardOutput: output.fileDescriptor
-    )
-    process.waitUntilExit()
-    output.closeFile()
-    guard process.exitedNormally, process.terminationStatus == 0 else { return false }
-    let data = try Data(contentsOf: URL(fileURLWithPath: outputPath), options: [.mappedIfSafe])
-    guard data.count <= 65_536 else { return false }
-    return String(decoding: data, as: UTF8.self)
-        .split(separator: "\n")
-        .contains { $0.trimmingCharacters(in: .whitespaces) == "pid = \(pid)" }
-}
-
-private func authenticateScheduledTrigger(
-    _ descriptor: Int32,
-    config: BrokerConfig,
-    project: String,
-    job: String
-) throws -> Bool {
+private func authenticateScheduledTrigger(_ descriptor: Int32, config: BrokerConfig) throws -> Bool {
     let (uid, _, pid) = try peerCredentials(descriptor)
-    guard uid == config.runtimeUid,
+    let expectedUid: uid_t = testingConfigPath() == nil ? 0 : config.runtimeUid
+    guard uid == expectedUid,
           processPath(pid) == config.scheduledLauncherExecutable else { return false }
     if testingConfigPath() != nil { return true }
-    guard parentPid(pid) == 1, processPath(1) == "/sbin/launchd" else { return false }
-    return try registeredLaunchAgentOwns(pid: pid, config: config, project: project, job: job)
+    return parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"
 }
 
 private func readRequest(_ descriptor: Int32) throws -> [String: Any] {
@@ -421,6 +387,7 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
               entry.project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil &&
               entry.job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil &&
               validatedToolPath(entry.toolPath) != nil &&
+              (0...23).contains(entry.hour) && (0...59).contains(entry.minute) &&
               (10_000...3_600_000).contains(entry.publicationTimeoutMs)
           }),
           config.allowedRepositories.allSatisfy({ repository, url in
@@ -443,14 +410,12 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
           project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
           job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return false }
     guard let registeredJob = config.scheduledJobs.first(where: { $0.project == project && $0.job == job }) else { return false }
-    guard try authenticateScheduledTrigger(descriptor, config: config, project: project, job: job) else { return false }
+    guard try authenticateScheduledTrigger(descriptor, config: config) else { return false }
 
     let process = try spawnProcess(
         executable: config.supervisorLauncherExecutable,
-        arguments: ["run", capability, project, job, registeredJob.toolPath],
-        environment: safeEnvironment([
-            "KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS": String(registeredJob.publicationTimeoutMs)
-        ])
+        arguments: ["run", capability, project, job, registeredJob.toolPath, String(registeredJob.publicationTimeoutMs)],
+        environment: safeEnvironment()
     )
     registrations.expect(pid: process.processIdentifier, capability: capability)
     defer { registrations.remove(pid: process.processIdentifier) }
@@ -731,9 +696,10 @@ do {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
     }
-    let socketOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
-    let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: socketOwner, gid: config.runtimeGid, mode: 0o620)
-    let publicationSocket = try makeSocket(config.publicationSocketPath, uid: socketOwner, gid: config.runtimeGid, mode: 0o620)
+    let schedulerOwner: uid_t = testingConfigPath() == nil ? 0 : config.runtimeUid
+    let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: schedulerOwner, gid: config.runtimeGid, mode: 0o600)
+    let publicationOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
+    let publicationSocket = try makeSocket(config.publicationSocketPath, uid: publicationOwner, gid: config.runtimeGid, mode: 0o620)
     Thread.detachNewThread {
         serve(schedulerSocket) { descriptor in
             do {

@@ -26,7 +26,7 @@ sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
   --token-file /Library/Application\ Support/KaizenLoop/github-token \
   --repository kaizen-agents-org/kaizen-loop \
-  --scheduled-job kaizen-agents-org-kaizen-loop/maintenance \
+  --scheduled-job kaizen-agents-org-kaizen-loop/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --node "$(command -v node)"
 ```
@@ -39,27 +39,16 @@ unmarked existing installation and validates the Node, npm, and root-only token 
 Add one `--repository owner/name` for every repository the broker may publish; the
 daemon maps these names to canonical `https://github.com/owner/name.git` URLs and never
 treats a client URL as authority. Add each authorized scheduler project/job pair with
-`--scheduled-job` and record its normalized executable search path with `--tool-path`.
+`--scheduled-job project/job@HH:MM` and record its fixed executable search path with `--tool-path`.
 The root-owned registration prevents another LaunchAgent under the runtime UID from
-choosing a different job or toolchain. The broker also confirms that the connecting
-PID belongs to the registered `com.kaizen-loop.<project>.<job>` launchd job. Use
-`--publication-timeout-ms` to pin a value from 10000 through 3600000 in the same
-root-owned registration; the default is 1800000.
+choosing a different job or toolchain.
 
-Configure scheduler jobs to invoke the installed launcher, then resync them:
-
-```sh
-export KAIZEN_CRON_SCHEDULED_LAUNCHER=/usr/local/libexec/kaizen-loop/bin/kaizen-scheduled-launcher
-kaizen scheduler sync
-```
-
-The user LaunchAgent or cron environment clears any inherited broker socket. The root
-daemon starts the fixed root-owned runtime with a small environment and injects the
-publication socket and a one-run, non-credential capability only after that clear
-boundary. The supervisor receives the bounded `PATH` and publication timeout from the
-root-owned job registration rather than the user LaunchAgent environment. Kaizen
-captures and removes the capability at startup; its normal
-untrusted child environment allowlist contains neither value.
+The installer creates `org.kaizen-agents.scheduled-publication` as a system
+LaunchDaemon with the registered calendar times. Do not install duplicate user
+LaunchAgents for these jobs. The root dispatcher starts the fixed root-owned runtime
+with the registered `PATH` and publication timeout, then injects the publication socket
+and a one-run, non-credential capability. Kaizen captures and removes the capability at
+startup; its normal untrusted child environment allowlist contains neither value.
 
 ## Broker validation
 
@@ -102,13 +91,16 @@ re-bootstrap the daemon:
 
 ```sh
 sudo launchctl bootstrap system /Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
 ```
 
 To uninstall, first stop the daemon, then remove only the broker-owned paths:
 
 ```sh
 sudo launchctl bootout system/org.kaizen-agents.publication-broker
+sudo launchctl bootout system/org.kaizen-agents.scheduled-publication
 sudo rm /Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
+sudo rm /Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
 sudo rm /Library/Application\ Support/KaizenLoop/publication-broker.plist
 sudo rm -R /usr/local/libexec/kaizen-loop
 sudo rm -R /var/db/kaizen-loop/publication
