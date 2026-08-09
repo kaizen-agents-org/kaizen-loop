@@ -164,12 +164,15 @@ const preflight = () => request({ operation: 'preflight' });
       stdio: ['ignore', 'ignore', 'pipe']
     });
     await Promise.all([waitForPath(schedulerSocket), waitForPath(publicationSocket)]);
-  });
+  }, 120_000);
 
   afterAll(async () => {
-    broker?.kill('SIGTERM');
+    if (broker && broker.exitCode === null) {
+      broker.kill('SIGTERM');
+      await new Promise<void>((resolve) => broker.once('exit', () => resolve()));
+    }
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   it('authenticates the broker-spawned supervisor and rejects its same-UID Node child', async () => {
     await new Promise<void>((resolve, reject) => {
