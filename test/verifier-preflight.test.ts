@@ -404,7 +404,11 @@ async function inspect(options: {
       if (args[0] === 'ls-remote' && options.localGitRemote) {
         const localArgs = [...args];
         localArgs[2] = options.localGitRemote;
-        const remote = await execFileAsync('git', localArgs, { cwd: commandOptions?.cwd });
+        localArgs.unshift('-c', 'protocol.file.allow=always');
+        const remote = await execFileAsync('git', localArgs, {
+          cwd: commandOptions?.cwd,
+          env: isolatedGitEnv(path.join(options.localGitRemote, 'isolated.gitconfig'))
+        });
         return result(command, args, commandOptions?.cwd, remote.stdout);
       }
       const expectedRef = config.verifier.expectedRef;
@@ -519,11 +523,7 @@ async function createVerifierRemote(): Promise<{
       ...args
     ], {
       cwd: repo,
-      env: {
-        ...process.env,
-        GIT_CONFIG_GLOBAL: isolatedConfig,
-        GIT_CONFIG_SYSTEM: isolatedConfig
-      }
+      env: isolatedGitEnv(isolatedConfig)
     });
     return stdout.trim();
   };
@@ -539,6 +539,15 @@ async function createVerifierRemote(): Promise<{
   await git('commit', '-am', 'advance main');
   const mainCommit = await git('rev-parse', 'HEAD');
   return { repo, releaseCommit, mainCommit };
+}
+
+function isolatedGitEnv(configFile: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: configFile,
+    GIT_CONFIG_SYSTEM: configFile,
+    GIT_CONFIG_COUNT: '0'
+  };
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
