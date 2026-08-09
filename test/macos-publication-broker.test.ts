@@ -190,9 +190,18 @@ const preflight = () => request({
 
   afterAll(async () => {
     if (broker && broker.exitCode === null) {
-      const exited = new Promise<void>((resolve) => broker.once('exit', () => resolve()));
-      broker.kill('SIGTERM');
+      let resolveExited!: () => void;
+      const exited = new Promise<void>((resolve) => {
+        resolveExited = resolve;
+        broker.once('exit', resolve);
+      });
+      if (broker.exitCode === null) broker.kill('SIGTERM');
+      else resolveExited();
+      const escalation = setTimeout(() => {
+        if (broker.exitCode === null) broker.kill('SIGKILL');
+      }, 5_000);
       await exited;
+      clearTimeout(escalation);
     }
     await fs.rm(root, { recursive: true, force: true });
   }, 30_000);
