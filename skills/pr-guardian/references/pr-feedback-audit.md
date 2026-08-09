@@ -14,7 +14,7 @@ gh pr checks <pr> --repo <owner/repo>
 
 Run this loop. It feeds each `pageInfo.endCursor` into the next request and stops only when `hasNextPage` is false:
 
-```sh
+```bash
 cursor=
 while :; do
   args=(
@@ -104,7 +104,7 @@ done
 
 For every thread whose nested `comments.pageInfo.hasNextPage` is true, run the corresponding comment loop with that thread's GraphQL `id`:
 
-```sh
+```bash
 thread_id='<review-thread-id>'
 cursor=
 while :; do
