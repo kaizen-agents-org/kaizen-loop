@@ -3,10 +3,11 @@
 Scheduled HTTPS publication uses a root LaunchDaemon so a GitHub token never enters
 the Kaizen supervisor, builder, verifier, or another process running as the scheduler
 user. The installed scheduler launcher asks the daemon to start one configured Kaizen
-supervisor. The daemon records that process's PID and macOS audit token before the
-launcher drops privileges and `exec`s Node. Publication and preflight requests must
-come from that exact process identity and carry its one-run capability. A child,
-sibling, stale PID, or reused PID does not match the registered audit identity.
+supervisor. The daemon records the launcher's PID and one-run capability, waits for its
+readiness handshake, and then binds the post-`exec` Node process's macOS audit token on
+the first preflight. Publication requests must come from that exact process identity
+and carry the same capability. A child, sibling, stale PID, or reused PID does not
+match the registered audit identity.
 
 ## Install
 

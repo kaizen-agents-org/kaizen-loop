@@ -36,6 +36,12 @@ private final class RegistrationStore: @unchecked Sendable {
         pending[pid] = capability
     }
 
+    func isExpected(pid: pid_t, capability: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let expected = pending[pid] else { return false }
+        return constantTimeEqual(expected, capability)
+    }
+
     func promote(identity: ProcessIdentity, capability: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard let expected = pending.removeValue(forKey: identity.pid), constantTimeEqual(expected, capability) else { return false }
@@ -266,7 +272,9 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
 private func authenticateSupervisor(_ descriptor: Int32, config: BrokerConfig, capability: String) throws -> Bool {
     let (uid, _, pid) = try peerCredentials(descriptor)
     guard uid == config.runtimeUid else { return false }
-    return registrations.matches(try identity(descriptor, pid: pid), capability: capability)
+    let processIdentity = try identity(descriptor, pid: pid)
+    return registrations.matches(processIdentity, capability: capability)
+        || registrations.promote(identity: processIdentity, capability: capability)
 }
 
 private func validateTreeAndTakeOwnership(_ root: String) throws {
@@ -447,7 +455,7 @@ private func handlePublication(_ descriptor: Int32, config: BrokerConfig, reques
         guard exactKeys(request, ["version", "operation", "capability"]) else { return false }
         let (uid, _, pid) = try peerCredentials(descriptor)
         guard uid == config.runtimeUid else { return false }
-        return registrations.promote(identity: try identity(descriptor, pid: pid), capability: capability)
+        return registrations.isExpected(pid: pid, capability: capability)
     }
     if operation == "preflight" {
         guard exactKeys(request, ["version", "operation", "capability"]) else { return false }
