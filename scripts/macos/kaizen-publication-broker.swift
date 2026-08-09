@@ -187,19 +187,123 @@ private func connected(_ descriptor: Int32) -> Bool {
     return count > 0 || receiveError == EAGAIN || receiveError == EWOULDBLOCK
 }
 
-private func requireProcessGroup(_ process: Process) throws {
-    for _ in 0..<1_000 {
-        if getpgid(process.processIdentifier) == process.processIdentifier { return }
-        if !process.isRunning { break }
-        usleep(1_000)
+private final class SpawnedProcess {
+    let processIdentifier: pid_t
+    private var waitStatus: Int32?
+
+    init(processIdentifier: pid_t) { self.processIdentifier = processIdentifier }
+
+    var isRunning: Bool {
+        guard waitStatus == nil else { return false }
+        var status: Int32 = 0
+        while true {
+            let result = waitpid(processIdentifier, &status, WNOHANG)
+            if result == processIdentifier { waitStatus = status; return false }
+            if result == 0 { return true }
+            if result < 0 && errno == EINTR { continue }
+            return false
+        }
     }
-    process.terminate()
-    process.waitUntilExit()
-    throw NSError(domain: "KaizenPublicationBroker", code: 11)
+
+    func waitUntilExit() {
+        guard waitStatus == nil else { return }
+        var status: Int32 = 0
+        while true {
+            let result = waitpid(processIdentifier, &status, 0)
+            if result == processIdentifier { waitStatus = status; return }
+            if result < 0 && errno == EINTR { continue }
+            return
+        }
+    }
+
+    var exitedNormally: Bool {
+        waitUntilExit()
+        return waitStatus.map { $0 & 0x7f == 0 } ?? false
+    }
+
+    var terminationStatus: Int32 {
+        waitUntilExit()
+        return waitStatus.map { ($0 >> 8) & 0xff } ?? -1
+    }
 }
 
-private func signalGroup(_ process: Process, _ signal: Int32) {
-    _ = kill(-process.processIdentifier, signal)
+private func withCStringArray<Result>(
+    _ values: [String],
+    _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) throws -> Result
+) throws -> Result {
+    guard values.allSatisfy({ !$0.contains("\0") }) else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 11)
+    }
+    let pointers = values.map { strdup($0) }
+    guard pointers.allSatisfy({ $0 != nil }) else {
+        pointers.forEach { free($0) }
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOMEM))
+    }
+    defer { pointers.forEach { free($0) } }
+    var terminated = pointers + [nil]
+    return try terminated.withUnsafeMutableBufferPointer { buffer in
+        try body(buffer.baseAddress!)
+    }
+}
+
+private func spawnProcess(
+    executable: String,
+    arguments: [String],
+    environment: [String: String],
+    standardOutput: Int32 = STDERR_FILENO
+) throws -> SpawnedProcess {
+    var actions: posix_spawn_file_actions_t?
+    let actionsResult = posix_spawn_file_actions_init(&actions)
+    guard actionsResult == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(actionsResult)) }
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    var attributes: posix_spawnattr_t?
+    let attributesResult = posix_spawnattr_init(&attributes)
+    guard attributesResult == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(attributesResult)) }
+    defer { posix_spawnattr_destroy(&attributes) }
+    let nullDescriptor = open("/dev/null", O_RDONLY | O_CLOEXEC)
+    guard nullDescriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    defer { close(nullDescriptor) }
+    for (source, destination) in [
+        (nullDescriptor, STDIN_FILENO),
+        (standardOutput, STDOUT_FILENO),
+        (STDERR_FILENO, STDERR_FILENO)
+    ] {
+        let result = posix_spawn_file_actions_adddup2(&actions, source, destination)
+        guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(result)) }
+    }
+    let flags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
+    let flagsResult = posix_spawnattr_setflags(&attributes, flags)
+    guard flagsResult == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(flagsResult)) }
+    let groupResult = posix_spawnattr_setpgroup(&attributes, 0)
+    guard groupResult == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(groupResult)) }
+    var pid: pid_t = 0
+    let environmentValues = environment.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }
+    let result = try withCStringArray([executable] + arguments) { argv in
+        try withCStringArray(environmentValues) { environmentPointers in
+            posix_spawn(&pid, executable, &actions, &attributes, argv, environmentPointers)
+        }
+    }
+    guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(result)) }
+    return SpawnedProcess(processIdentifier: pid)
+}
+
+private func signalProcessGroup(_ process: SpawnedProcess, _ signal: Int32) throws {
+    if kill(-process.processIdentifier, signal) == 0 { return }
+    let code = errno
+    if code == ESRCH { return }
+    throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+}
+
+private func processGroupExists(_ process: SpawnedProcess) -> Bool {
+    if kill(-process.processIdentifier, 0) == 0 { return true }
+    return errno == EPERM
+}
+
+private func cancelProcessGroup(_ process: SpawnedProcess) throws {
+    try signalProcessGroup(process, SIGTERM)
+    usleep(200_000)
+    if processGroupExists(process) { try signalProcessGroup(process, SIGKILL) }
+    process.waitUntilExit()
 }
 
 private func runProcess(
@@ -207,22 +311,11 @@ private func runProcess(
     arguments: [String],
     environment: [String: String],
     cancelOnDisconnect descriptor: Int32?
-) throws -> Process {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    process.environment = environment
-    process.standardInput = FileHandle.nullDevice
-    process.standardOutput = FileHandle.standardError
-    process.standardError = FileHandle.standardError
-    try process.run()
-    try requireProcessGroup(process)
+) throws -> SpawnedProcess {
+    let process = try spawnProcess(executable: executable, arguments: arguments, environment: environment)
     while process.isRunning {
         if let descriptor, !connected(descriptor) {
-            signalGroup(process, SIGTERM)
-            usleep(200_000)
-            if process.isRunning { signalGroup(process, SIGKILL) }
-            process.waitUntilExit()
+            try cancelProcessGroup(process)
             throw NSError(domain: "KaizenPublicationBroker", code: 2)
         }
         usleep(50_000)
@@ -315,28 +408,21 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
           constantTimeEqual(registeredJob.toolPath, requestedToolPath) else { return false }
     guard try authenticateScheduledTrigger(descriptor, config: config) else { return false }
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: config.supervisorLauncherExecutable)
-    process.arguments = ["run", capability, project, job, registeredJob.toolPath]
-    process.environment = safeEnvironment()
-    process.standardInput = FileHandle.nullDevice
-    process.standardOutput = FileHandle.standardError
-    process.standardError = FileHandle.standardError
-    try process.run()
-    try requireProcessGroup(process)
+    let process = try spawnProcess(
+        executable: config.supervisorLauncherExecutable,
+        arguments: ["run", capability, project, job, registeredJob.toolPath],
+        environment: safeEnvironment()
+    )
     registrations.expect(pid: process.processIdentifier, capability: capability)
     defer { registrations.remove(pid: process.processIdentifier) }
     while process.isRunning {
         if !connected(descriptor) {
-            signalGroup(process, SIGTERM)
-            usleep(200_000)
-            if process.isRunning { signalGroup(process, SIGKILL) }
-            process.waitUntilExit()
+            try cancelProcessGroup(process)
             return false
         }
         usleep(50_000)
     }
-    return process.terminationReason == .exit && process.terminationStatus == 0
+    return process.exitedNormally && process.terminationStatus == 0
 }
 
 private func authenticateSupervisor(_ descriptor: Int32, config: BrokerConfig, capability: String) throws -> Bool {
@@ -390,7 +476,6 @@ private func runGit(
     extraEnvironment: [String: String] = [:],
     allowedExitCodes: Set<Int32> = [0]
 ) throws -> String {
-    let process = Process()
     let outputPath = (config.privateDirectory as NSString).appendingPathComponent("git-output-\(UUID().uuidString)")
     guard FileManager.default.createFile(atPath: outputPath, contents: nil, attributes: [.posixPermissions: 0o600]) else {
         throw NSError(domain: "KaizenPublicationBroker", code: 6)
@@ -400,27 +485,22 @@ private func runGit(
         output.closeFile()
         try? FileManager.default.removeItem(atPath: outputPath)
     }
-    process.executableURL = URL(fileURLWithPath: config.supervisorLauncherExecutable)
-    process.arguments = ["root-git", "-C", cwd] + args
-    process.environment = safeEnvironment(extraEnvironment)
-    process.standardInput = FileHandle.nullDevice
-    process.standardOutput = output
-    process.standardError = FileHandle.standardError
-    try process.run()
-    try requireProcessGroup(process)
+    let process = try spawnProcess(
+        executable: config.gitExecutable,
+        arguments: ["-C", cwd] + args,
+        environment: safeEnvironment(extraEnvironment),
+        standardOutput: output.fileDescriptor
+    )
     while process.isRunning {
         if let descriptor, !connected(descriptor) {
-            signalGroup(process, SIGTERM)
-            usleep(200_000)
-            if process.isRunning { signalGroup(process, SIGKILL) }
-            process.waitUntilExit()
+            try cancelProcessGroup(process)
             throw NSError(domain: "KaizenPublicationBroker", code: 5)
         }
         usleep(50_000)
     }
     output.closeFile()
     let data = try Data(contentsOf: URL(fileURLWithPath: outputPath))
-    guard process.terminationReason == .exit && allowedExitCodes.contains(process.terminationStatus) else {
+    guard process.exitedNormally && allowedExitCodes.contains(process.terminationStatus) else {
         throw NSError(domain: "KaizenPublicationBroker", code: 6)
     }
     return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -612,9 +692,9 @@ do {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
     }
-    let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: config.runtimeUid, gid: config.runtimeGid, mode: 0o600)
-    let publicationOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
-    let publicationSocket = try makeSocket(config.publicationSocketPath, uid: publicationOwner, gid: config.runtimeGid, mode: 0o620)
+    let socketOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
+    let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: socketOwner, gid: config.runtimeGid, mode: 0o620)
+    let publicationSocket = try makeSocket(config.publicationSocketPath, uid: socketOwner, gid: config.runtimeGid, mode: 0o620)
     Thread.detachNewThread {
         serve(schedulerSocket) { descriptor in
             do {

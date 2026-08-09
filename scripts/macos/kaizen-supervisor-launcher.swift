@@ -127,12 +127,6 @@ private func exec(_ executable: String, _ arguments: [String], _ environment: [S
 do {
     let config = try PropertyListDecoder().decode(SupervisorConfig.self, from: Data(contentsOf: URL(fileURLWithPath: configPath())))
     guard geteuid() == 0 || ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"] != nil else { exit(126) }
-    guard setpgid(0, 0) == 0 else { exit(126) }
-    if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "root-git" {
-        let arguments = [config.gitExecutable] + Array(CommandLine.arguments.dropFirst(2))
-        let environment = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
-        exec(config.gitExecutable, arguments, environment)
-    }
     dropPrivileges(config)
 } catch {
     exit(126)

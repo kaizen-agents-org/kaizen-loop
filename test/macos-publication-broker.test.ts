@@ -277,6 +277,10 @@ describe('publication broker source contract', () => {
     expect(brokerSource).toContain('parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"');
     expect(brokerSource).toContain('mode: 0o620');
     expect(brokerSource).toContain('config.scheduledJobs.first');
+    expect(brokerSource).toContain('POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT');
+    expect(brokerSource).toContain('kill(-process.processIdentifier, signal)');
+    expect(installer).toContain('Add :schedulerSocketPath string /opt/kaizen/run/scheduler.sock');
+    expect(installer).toContain('Add :publicationSocketPath string /opt/kaizen/run/publication.sock');
     expect(installer).toContain('cp -p "$build_dir/config.backup" "$config_path"');
     expect(installer).toContain('launchctl bootstrap system "$daemon_path"');
   });
