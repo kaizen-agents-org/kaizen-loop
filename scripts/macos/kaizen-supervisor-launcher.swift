@@ -18,6 +18,15 @@ private func configPath() -> String {
     return "/Library/Application Support/KaizenLoop/publication-broker.plist"
 }
 
+private func validatedToolPath(_ value: String) -> String? {
+    guard !value.isEmpty, value.utf8.count <= 16_384,
+          !value.contains("\0"), !value.contains("\n"), !value.contains("\r") else { return nil }
+    let directories = value.split(separator: ":", omittingEmptySubsequences: false)
+    guard directories.count <= 128,
+          directories.allSatisfy({ !$0.isEmpty && $0.hasPrefix("/") && $0.utf8.count <= 4_096 }) else { return nil }
+    return value
+}
+
 private func dropPrivileges(_ config: SupervisorConfig) -> Never {
     if ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"] != nil {
         guard getuid() == config.runtimeUid, getgid() == config.runtimeGid else { exit(126) }
@@ -30,7 +39,8 @@ private func dropPrivileges(_ config: SupervisorConfig) -> Never {
         }
     }
     let arguments = CommandLine.arguments
-    if arguments.count == 5 && arguments[1] == "run" {
+    if arguments.count == 6 && arguments[1] == "run",
+       let toolPath = validatedToolPath(arguments[5]) {
         let capability = arguments[2]
         let project = arguments[3]
         let job = arguments[4]
@@ -39,7 +49,7 @@ private func dropPrivileges(_ config: SupervisorConfig) -> Never {
             "HOME=\(config.runtimeHome)",
             "USER=\(config.runtimeUser)",
             "LOGNAME=\(config.runtimeUser)",
-            "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH=\(toolPath)",
             "KAIZEN_HOME=\(config.runtimeHome)/.kaizen",
             "KAIZEN_GITHUB_TOKEN_SOCKET=\(config.publicationSocketPath)",
             "KAIZEN_GITHUB_BROKER_CAPABILITY=\(capability)"

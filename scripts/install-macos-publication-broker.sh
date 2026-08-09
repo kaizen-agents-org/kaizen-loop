@@ -93,6 +93,8 @@ install -d -o root -g wheel -m 0755 /usr/local/libexec
 trusted_root_path /usr/local/libexec || { echo "/usr/local/libexec must be root-owned and group/other non-writable." >&2; exit 1; }
 if [ -d "$config_dir" ]; then
   trusted_root_path "$config_dir" || { echo "$config_dir must be root-owned and group/other non-writable." >&2; exit 1; }
+  chown root:wheel "$config_dir"
+  chmod 0755 "$config_dir"
 else
   install -d -o root -g wheel -m 0755 "$config_dir"
 fi

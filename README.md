@@ -154,7 +154,7 @@ publication uses the installed broker daemon to start a fully root-owned runtime
 and inject the socket only after the user-owned launchd environment has been cleared.
 
 ```sh
-sudo install -d -o root -g wheel -m 0700 /Library/Application\ Support/KaizenLoop
+sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop
 sudo sh -c 'umask 077; /bin/cat > /Library/Application\ Support/KaizenLoop/github-token'
 sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \

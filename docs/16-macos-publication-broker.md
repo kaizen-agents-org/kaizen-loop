@@ -18,7 +18,7 @@ the file must be a non-symlink regular file with mode `0600`.
 ```sh
 npm ci
 npm run build
-sudo install -d -o root -g wheel -m 0700 /Library/Application\ Support/KaizenLoop
+sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop
 sudo sh -c 'umask 077; /bin/cat > /Library/Application\ Support/KaizenLoop/github-token'
 sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
@@ -46,8 +46,10 @@ kaizen scheduler sync
 The user LaunchAgent or cron environment clears any inherited broker socket. The root
 daemon starts the fixed root-owned runtime with a small environment and injects the
 publication socket and a one-run, non-credential capability only after that clear
-boundary. Kaizen captures and removes the capability at startup; its normal untrusted
-child environment allowlist contains neither value.
+boundary. The scheduled launcher forwards only a bounded list of absolute `PATH`
+directories so the supervisor can resolve the operator-configured `gh`, builder, and
+verifier executables. Kaizen captures and removes the capability at startup; its normal
+untrusted child environment allowlist contains neither value.
 
 ## Broker validation
 

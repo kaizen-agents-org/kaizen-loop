@@ -55,6 +55,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
   let broker: ChildProcess;
   let brokerStderr = '';
   let evidencePath: string;
+  let scheduledToolPath: string;
   let pidPath: string;
   let sourceRepository: string;
   let remoteRepository: string;
@@ -69,6 +70,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
     schedulerSocket = path.join(root, 'scheduler.sock');
     publicationSocket = path.join(root, 'publication.sock');
     evidencePath = path.join(root, 'evidence.json');
+    scheduledToolPath = `${path.join(root, 'tools')}:/usr/bin:/bin`;
     pidPath = path.join(root, 'supervisor.pid');
     sourceRepository = path.join(root, 'source.git');
     remoteRepository = path.join(root, 'remote.git');
@@ -143,7 +145,7 @@ const preflight = () => request({
       expectedSha: ${JSON.stringify(expectedSha)}
     });
   }
-  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published }));
+  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, toolPath: process.env.PATH }));
   if (sleeping) return;
   process.exit(supervisor && child.status === 0 && (!process.argv.includes('publish') || published) ? 0 : 1);
 })().catch(() => process.exit(1));
@@ -189,28 +191,30 @@ const preflight = () => request({
   it('authenticates the broker-spawned supervisor and rejects its same-UID Node child', async () => {
     await new Promise<void>((resolve, reject) => {
       execFile(scheduledPath, ['ignored-node', 'o-r', 'maintenance'], {
-        env: { ...process.env, KAIZEN_BROKER_TEST_CONFIG: configPath }
+        env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: configPath }
       }, (error) => error ? reject(new Error(`${error.message}\n${brokerStderr}`)) : resolve());
     });
 
     expect(JSON.parse(await fs.readFile(evidencePath, 'utf8'))).toEqual({
       supervisor: true,
       childRejected: true,
-      published: false
+      published: false,
+      toolPath: scheduledToolPath
     });
   });
 
   it('publishes the revalidated commit through the scheduled root-broker path', async () => {
     await new Promise<void>((resolve, reject) => {
       execFile(scheduledPath, ['ignored-node', 'o-r', 'publish'], {
-        env: { ...process.env, KAIZEN_BROKER_TEST_CONFIG: configPath }
+        env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: configPath }
       }, (error) => error ? reject(new Error(`${error.message}\n${brokerStderr}`)) : resolve());
     });
 
     expect(JSON.parse(await fs.readFile(evidencePath, 'utf8'))).toEqual({
       supervisor: true,
       childRejected: true,
-      published: true
+      published: true,
+      toolPath: scheduledToolPath
     });
     expect(execFileSync('/usr/bin/git', [
       '--git-dir', remoteRepository, 'rev-parse', 'refs/heads/kaizen/test'
@@ -222,6 +226,7 @@ const preflight = () => request({
     const launcher = spawn(scheduledPath, ['ignored-node', 'o-r', 'sleep'], {
       env: {
         ...process.env,
+        PATH: scheduledToolPath,
         KAIZEN_BROKER_TEST_CONFIG: configPath
       },
       stdio: 'ignore'
@@ -247,6 +252,7 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('Refusing to replace an installation without the Kaizen publication broker marker');
     expect(installer).toContain('install -o root -g wheel -m 0644 "$config_stage" "$config_path"');
     expect(installer).toContain('install -o root -g wheel -m 0644 "$daemon_stage" "$daemon_path"');
+    expect(installer).toContain('chmod 0755 "$config_dir"');
     expect(brokerSource).toContain('chown(config.privateDirectory, 0, config.runtimeGid)');
     expect(brokerSource).toContain('chmod(config.privateDirectory, 0o710)');
     expect(installer).toContain('cp -p "$build_dir/config.backup" "$config_path"');

@@ -209,6 +209,15 @@ private func safeEnvironment(_ extra: [String: String] = [:]) -> [String: String
     return environment
 }
 
+private func validatedToolPath(_ value: String?) -> String? {
+    guard let value, !value.isEmpty, value.utf8.count <= 16_384,
+          !value.contains("\0"), !value.contains("\n"), !value.contains("\r") else { return nil }
+    let directories = value.split(separator: ":", omittingEmptySubsequences: false)
+    guard directories.count <= 128,
+          directories.allSatisfy({ !$0.isEmpty && $0.hasPrefix("/") && $0.utf8.count <= 4_096 }) else { return nil }
+    return value
+}
+
 private func trustedRootPath(_ candidate: String, regularFile: Bool = true, exactMode: mode_t? = nil) -> Bool {
     guard testingConfigPath() == nil else { return true }
     var first = stat()
@@ -249,12 +258,13 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
 }
 
 private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, request: [String: Any]) throws -> Bool {
-    guard exactKeys(request, ["version", "operation", "project", "job", "capability"]),
+    guard exactKeys(request, ["version", "operation", "project", "job", "capability", "toolPath"]),
           request["version"] as? Int == 1,
           request["operation"] as? String == "scheduled-run",
           let project = request["project"] as? String,
           let job = request["job"] as? String,
           let capability = request["capability"] as? String,
+          let toolPath = validatedToolPath(request["toolPath"] as? String),
           capability.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
           project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
           job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return false }
@@ -263,7 +273,7 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: config.supervisorLauncherExecutable)
-    process.arguments = ["run", capability, project, job]
+    process.arguments = ["run", capability, project, job, toolPath]
     process.environment = safeEnvironment()
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = FileHandle.standardError
