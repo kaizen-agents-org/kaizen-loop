@@ -114,7 +114,7 @@ private func identity(_ descriptor: Int32, pid: pid_t) throws -> ProcessIdentity
 }
 
 private func processPath(_ pid: pid_t) -> String? {
-    var buffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+    var buffer = [CChar](repeating: 0, count: 4_096)
     let count = proc_pidpath(pid, &buffer, UInt32(buffer.count))
     guard count > 0 else { return nil }
     return String(cString: buffer)
