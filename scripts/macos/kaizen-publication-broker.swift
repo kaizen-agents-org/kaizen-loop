@@ -176,8 +176,8 @@ private func authenticateScheduledTrigger(
     guard uid == config.runtimeUid,
           processPath(pid) == config.scheduledLauncherExecutable else { return false }
     if testingConfigPath() != nil { return true }
-    return parentPid(pid) == 1 && processPath(1) == "/sbin/launchd" &&
-        (try registeredLaunchAgentOwns(pid: pid, config: config, project: project, job: job))
+    guard parentPid(pid) == 1, processPath(1) == "/sbin/launchd" else { return false }
+    return try registeredLaunchAgentOwns(pid: pid, config: config, project: project, job: job)
 }
 
 private func readRequest(_ descriptor: Int32) throws -> [String: Any] {
