@@ -542,12 +542,16 @@ async function createVerifierRemote(): Promise<{
 }
 
 function isolatedGitEnv(configFile: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: configFile,
-    GIT_CONFIG_SYSTEM: configFile,
-    GIT_CONFIG_COUNT: '0'
-  };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.GIT_CONFIG;
+  delete env.GIT_CONFIG_PARAMETERS;
+  for (const key of Object.keys(env)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete env[key];
+  }
+  env.GIT_CONFIG_GLOBAL = configFile;
+  env.GIT_CONFIG_SYSTEM = configFile;
+  env.GIT_CONFIG_COUNT = '0';
+  return env;
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
