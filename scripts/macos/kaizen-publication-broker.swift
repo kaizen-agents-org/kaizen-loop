@@ -173,7 +173,7 @@ private func runProcess(
 }
 
 private func safeEnvironment(_ extra: [String: String] = [:]) -> [String: String] {
-    let environment = [
+    var environment = [
         "HOME": "/var/empty",
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -236,7 +236,7 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
           capability.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
           project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
           job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return false }
-    let (uid, _, pid) = try peerCredentials(descriptor)
+    let (uid, _, _) = try peerCredentials(descriptor)
     guard uid == config.runtimeUid else { return false }
 
     let process = Process()
@@ -409,7 +409,7 @@ private func publish(_ descriptor: Int32, config: BrokerConfig, request: [String
     }
 
     let helper = "!f() { test \"$1\" = get || exit 0; printf '%s\\n' username=x-access-token; printf '%s\\n' password=\"$(/bin/cat \(shellQuote(config.tokenFile)))\"; }; f"
-    var environment = [
+    let environment = [
         "GIT_ALLOW_PROTOCOL": testingConfigPath() == nil ? "https" : "file",
         "GIT_CONFIG_COUNT": "4",
         "GIT_CONFIG_KEY_0": "credential.helper",
