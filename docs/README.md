@@ -22,6 +22,7 @@ Kaizen Loop は、対象プロジェクトに「日中ドッグフーディン�
 | [13-sandbox-smoke.md](./13-sandbox-smoke.md) | sandbox issue-to-PR smoke run と readiness review 用 artifact |
 | [14-github-actions.md](./14-github-actions.md) | ephemeral reusable workflow、provider secret、publish trust boundary |
 | [15-third-party-adopter-guide.md](./15-third-party-adopter-guide.md) | 第三者リポジトリへの安全な導入、運用、トラブルシューティング、削除手順 |
+| [release-tags.md](./release-tags.md) | リリースタグ作成前の配布物・GitHub 接続検証 |
 
 ## 確定済みの設計方針
 

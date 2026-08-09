@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import type { Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -272,6 +273,37 @@ describe.runIf(process.platform !== 'win32')('isTrustedExecutablePath', () => {
     expect(isTrustedExecutablePath(executable)).toBe(false);
 
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('accepts a root-owned executable below a sticky root-owned store', () => {
+    const executable = '/nix/store/abc-github-cli/bin/gh';
+    const stats = new Map<string, { mode: number; uid?: number; file?: boolean }>([
+      [executable, { mode: 0o100555, file: true }],
+      ['/nix/store/abc-github-cli/bin', { mode: 0o40555 }],
+      ['/nix/store/abc-github-cli', { mode: 0o40555 }],
+      ['/nix/store', { mode: 0o41775 }],
+      ['/nix', { mode: 0o40755 }],
+      ['/', { mode: 0o40755 }]
+    ]);
+    const stat = (candidate: string) => {
+      const entry = stats.get(candidate);
+      if (!entry) throw new Error(`missing fake stat for ${candidate}`);
+      return {
+        uid: entry.uid ?? 0,
+        mode: entry.mode,
+        isFile: () => Boolean(entry.file),
+        isDirectory: () => !entry.file
+      } as Stats;
+    };
+
+    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat)).toBe(true);
+
+    stats.set('/nix/store', { mode: 0o40775 });
+    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat)).toBe(false);
+
+    stats.set('/nix/store', { mode: 0o41775 });
+    stats.set('/nix/store/abc-github-cli', { mode: 0o40555, uid: 501 });
+    expect(isTrustedExecutablePath(executable, (candidate) => candidate === '/nix/store', stat)).toBe(false);
   });
 });
 

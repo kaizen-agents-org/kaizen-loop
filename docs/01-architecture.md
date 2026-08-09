@@ -185,9 +185,10 @@ kaizen run --project <slug> --scheduled --job issue-watch
 `kaizen doctor` がすべて検査する:
 
 - `git` ≥ 2.30
-- `gh` CLI(`gh auth status` が通り、実体と全祖先ディレクトリが管理者所有かつ supervisor
-  ユーザー・所属グループ・他ユーザーから書き込み不可であること)。同一 UID の非信頼コードから
-  認証済み実行ファイルを保護できないため、ユーザー所有の Homebrew 版は fail closed で拒否する。
+- `gh` CLI(`gh auth status` が通り、実体と全祖先ディレクトリが管理者所有であること)。通常の祖先は
+  supervisor ユーザー・所属グループ・他ユーザーから書き込み不可とし、root 所有の sticky store は
+  その配下の実体が root 所有かつ immutable な場合に限り受理する。これにより multi-user Nix store は
+  利用できるが、同一 UID の非信頼コードから保護できないユーザー所有の Homebrew 版は fail closed で拒否する。
 - `builder-agent`
 - `verifier`(`verifier.enabled: true` の場合)
 - Node.js ≥ 20

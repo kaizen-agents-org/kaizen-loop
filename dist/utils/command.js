@@ -49,11 +49,11 @@ const PROCESS_TERMINATION_GRACE_MS = 250;
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal;
 export const COMMAND_RUNNER_INJECTION = Symbol.for('kaizen.commandRunnerInjection');
-export function processCommandRunner(defaultRunner) {
+export function processCommandRunner(defaultRunner, executables = initialTrustedExecutables()) {
     return globalThis[COMMAND_RUNNER_INJECTION]
-        ?? defaultRunner;
+        ?? withTrustedExecutables(defaultRunner, executables);
 }
-export const runCommand = async (command, args, options = {}) => {
+const executeCommand = async (command, args, options = {}) => {
     throwIfShutdownRequested();
     const started = Date.now();
     const env = await envWithKaizenTemp(options.env ?? buildAllowlistedEnv(process.env, DEFAULT_ENV_ALLOWLIST), options.cwd);
@@ -156,8 +156,9 @@ export const runCommand = async (command, args, options = {}) => {
         child.stdin.end();
     });
 };
-Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
-    value: Object.freeze({
+export const runCommand = withTrustedExecutables(executeCommand, initialTrustedExecutables());
+function initialTrustedExecutables() {
+    return {
         git: INITIAL_GIT_EXECUTABLE,
         githubCli: INITIAL_GITHUB_CLI_EXECUTABLE,
         ssh: INITIAL_SSH_EXECUTABLE,
@@ -165,8 +166,8 @@ Object.defineProperty(runCommand, TRUSTED_COMMAND_RUNNER, {
         githubPublisher: INITIAL_GITHUB_TOKEN_SOCKET
             ? (request, timeoutMs) => requestGithubPublication(INITIAL_GITHUB_TOKEN_SOCKET, request, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
             : undefined
-    })
-});
+    };
+}
 export function buildAllowlistedEnv(source, allowlist, extra = {}) {
     const env = {};
     for (const key of allowlist) {
@@ -393,9 +394,9 @@ function resolveExecutable(command, searchPath, accept) {
     }
     return undefined;
 }
-export function isTrustedExecutablePath(executable, canWrite = canCurrentUserWrite) {
+export function isTrustedExecutablePath(executable, canWrite = canCurrentUserWrite, statPath = fs.statSync) {
     if (process.platform === 'win32') {
-        if (!fs.statSync(executable).isFile())
+        if (!statPath(executable).isFile())
             return false;
         const trustedRoots = ['ProgramFiles', 'ProgramW6432', 'SystemRoot']
             .map((key) => process.env[key])
@@ -407,10 +408,12 @@ export function isTrustedExecutablePath(executable, canWrite = canCurrentUserWri
         return false;
     let current = executable;
     while (true) {
-        const stat = fs.statSync(current);
+        const stat = statPath(current);
         if (current === executable && !stat.isFile())
             return false;
-        if (stat.uid !== 0 || (stat.mode & 0o022) !== 0 || canWrite(current)) {
+        const stickyRootOwnedDirectory = stat.uid === 0 && stat.isDirectory() && (stat.mode & 0o1000) !== 0;
+        const writable = (stat.mode & 0o022) !== 0 || canWrite(current);
+        if (stat.uid !== 0 || (writable && !stickyRootOwnedDirectory)) {
             return false;
         }
         const parent = path.dirname(current);
