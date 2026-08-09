@@ -66,7 +66,8 @@ private let maximumRequestBytes = 65_536
 private let registrations = RegistrationStore()
 
 private func testingConfigPath() -> String? {
-    guard let value = ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"],
+    guard geteuid() != 0,
+          let value = ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"],
           value.hasPrefix("/private/tmp/kaizen-broker-test-") || value.hasPrefix("/tmp/kaizen-broker-test-") else { return nil }
     return value
 }
@@ -113,11 +114,17 @@ private func identity(_ descriptor: Int32, pid: pid_t) throws -> ProcessIdentity
 }
 
 private func readRequest(_ descriptor: Int32) throws -> [String: Any] {
-    var timeout = timeval(tv_sec: 10, tv_usec: 0)
-    _ = setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    let deadline = Date().addingTimeInterval(10)
     var data = Data()
     var byte: UInt8 = 0
     while data.count <= maximumRequestBytes {
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { throw NSError(domain: "KaizenPublicationBroker", code: 9) }
+        var timeout = timeval(
+            tv_sec: Int(remaining),
+            tv_usec: Int32((remaining - floor(remaining)) * 1_000_000)
+        )
+        _ = setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         let count = Darwin.read(descriptor, &byte, 1)
         if count <= 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         if byte == 0x0a { break }
@@ -145,9 +152,18 @@ private func connected(_ descriptor: Int32) -> Bool {
     _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
     var byte: UInt8 = 0
     let count = recv(descriptor, &byte, 1, MSG_PEEK)
+    let receiveError = errno
     _ = fcntl(descriptor, F_SETFL, flags)
     if count == 0 { return false }
-    return count > 0 || errno == EAGAIN || errno == EWOULDBLOCK
+    return count > 0 || receiveError == EAGAIN || receiveError == EWOULDBLOCK
+}
+
+private func processGroupCreated(_ process: Process) -> Bool {
+    setpgid(process.processIdentifier, process.processIdentifier) == 0
+}
+
+private func signal(_ process: Process, groupCreated: Bool, _ signal: Int32) {
+    _ = kill(groupCreated ? -process.processIdentifier : process.processIdentifier, signal)
 }
 
 private func runProcess(
@@ -164,12 +180,12 @@ private func runProcess(
     process.standardOutput = FileHandle.standardError
     process.standardError = FileHandle.standardError
     try process.run()
-    _ = setpgid(process.processIdentifier, process.processIdentifier)
+    let groupCreated = processGroupCreated(process)
     while process.isRunning {
         if let descriptor, !connected(descriptor) {
-            _ = kill(-process.processIdentifier, SIGTERM)
+            signal(process, groupCreated: groupCreated, SIGTERM)
             usleep(200_000)
-            if process.isRunning { _ = kill(-process.processIdentifier, SIGKILL) }
+            if process.isRunning { signal(process, groupCreated: groupCreated, SIGKILL) }
             process.waitUntilExit()
             throw NSError(domain: "KaizenPublicationBroker", code: 2)
         }
@@ -216,7 +232,7 @@ private func trustedRootPath(_ candidate: String, regularFile: Bool = true, exac
 
 private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> Bool {
     let testRoot = testingConfigPath().map { ($0 as NSString).deletingLastPathComponent }
-    guard trustedRootPath(path, exactMode: 0o600),
+    guard trustedRootPath(path, exactMode: 0o644),
           trustedRootPath(config.tokenFile, exactMode: 0o600),
           trustedRootPath(config.scheduledLauncherExecutable),
           trustedRootPath(config.supervisorLauncherExecutable),
@@ -253,14 +269,14 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
     process.standardOutput = FileHandle.standardError
     process.standardError = FileHandle.standardError
     try process.run()
-    _ = setpgid(process.processIdentifier, process.processIdentifier)
+    let groupCreated = processGroupCreated(process)
     registrations.expect(pid: process.processIdentifier, capability: capability)
     defer { registrations.remove(pid: process.processIdentifier) }
     while process.isRunning {
         if !connected(descriptor) {
-            _ = kill(-process.processIdentifier, SIGTERM)
+            signal(process, groupCreated: groupCreated, SIGTERM)
             usleep(200_000)
-            if process.isRunning { _ = kill(-process.processIdentifier, SIGKILL) }
+            if process.isRunning { signal(process, groupCreated: groupCreated, SIGKILL) }
             process.waitUntilExit()
             return false
         }
@@ -279,34 +295,37 @@ private func authenticateSupervisor(_ descriptor: Int32, config: BrokerConfig, c
 
 private func validateTreeAndTakeOwnership(_ root: String) throws {
     let manager = FileManager.default
+    let owner: uid_t = testingConfigPath() == nil ? 0 : getuid()
+    let group: gid_t = testingConfigPath() == nil ? 0 : getgid()
+    let rootDescriptor = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    guard rootDescriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    defer { close(rootDescriptor) }
+    var rootStatus = stat()
+    guard fstat(rootDescriptor, &rootStatus) == 0,
+          (rootStatus.st_mode & S_IFMT) == S_IFDIR,
+          fchown(rootDescriptor, owner, group) == 0,
+          fchmod(rootDescriptor, 0o700) == 0 else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 4)
+    }
     guard let enumerator = manager.enumerator(atPath: root) else { throw NSError(domain: "KaizenPublicationBroker", code: 3) }
-    var paths = [root]
-    while let relative = enumerator.nextObject() as? String { paths.append((root as NSString).appendingPathComponent(relative)) }
-    for candidate in paths {
+    while let relative = enumerator.nextObject() as? String {
+        let candidate = (root as NSString).appendingPathComponent(relative)
+        let descriptor = open(candidate, O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw NSError(domain: "KaizenPublicationBroker", code: 4) }
+        defer { close(descriptor) }
         var status = stat()
-        guard lstat(candidate, &status) == 0,
-              (status.st_mode & S_IFMT) != S_IFLNK,
-              !((status.st_mode & S_IFMT) == S_IFREG && status.st_nlink != 1) else {
+        guard fstat(descriptor, &status) == 0,
+              ((status.st_mode & S_IFMT) == S_IFDIR || (status.st_mode & S_IFMT) == S_IFREG),
+              !((status.st_mode & S_IFMT) == S_IFREG && status.st_nlink != 1),
+              fchown(descriptor, owner, group) == 0,
+              fchmod(descriptor, (status.st_mode & S_IFMT) == S_IFDIR ? 0o700 : 0o600) == 0 else {
             throw NSError(domain: "KaizenPublicationBroker", code: 4)
         }
     }
-    if testingConfigPath() != nil {
-        let owner = getuid()
-        let group = getgid()
-        for candidate in paths.reversed() {
-            guard chown(candidate, owner, group) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
-            var status = stat(); guard lstat(candidate, &status) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
-            _ = chmod(candidate, (status.st_mode & S_IFMT) == S_IFDIR ? 0o700 : 0o600)
-        }
-        return
-    }
-    let owner: uid_t = 0
-    let group: gid_t = 0
-    for candidate in paths.reversed() {
-        guard chown(candidate, owner, group) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
-        var status = stat(); guard lstat(candidate, &status) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
-        _ = chmod(candidate, (status.st_mode & S_IFMT) == S_IFDIR ? 0o700 : 0o600)
-    }
+}
+
+private func logBrokerError(_ context: String, _ error: Error) {
+    FileHandle.standardError.write(Data("Kaizen publication broker \(context): \(error)\n".utf8))
 }
 
 private func runGit(
@@ -334,12 +353,12 @@ private func runGit(
     process.standardOutput = output
     process.standardError = FileHandle.standardError
     try process.run()
-    _ = setpgid(process.processIdentifier, process.processIdentifier)
+    let groupCreated = processGroupCreated(process)
     while process.isRunning {
         if let descriptor, !connected(descriptor) {
-            _ = kill(-process.processIdentifier, SIGTERM)
+            signal(process, groupCreated: groupCreated, SIGTERM)
             usleep(200_000)
-            if process.isRunning { _ = kill(-process.processIdentifier, SIGKILL) }
+            if process.isRunning { signal(process, groupCreated: groupCreated, SIGKILL) }
             process.waitUntilExit()
             throw NSError(domain: "KaizenPublicationBroker", code: 5)
         }
@@ -414,7 +433,9 @@ private func publish(_ descriptor: Int32, config: BrokerConfig, request: [String
         descriptor: descriptor,
         allowedExitCodes: [0, 1]
     )
-    for candidate in lfsCandidates.split(separator: "\n").prefix(1_000) {
+    let candidateLines = lfsCandidates.split(separator: "\n")
+    guard candidateLines.count <= 1_000 else { return false }
+    for candidate in candidateLines {
         let prefix = "\(parts[0]):"
         let value = String(candidate)
         let candidatePath = value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : value
@@ -482,6 +503,9 @@ private func handlePublication(_ descriptor: Int32, config: BrokerConfig, reques
 }
 
 private func makeSocket(_ path: String, uid: uid_t, gid: gid_t) throws -> Int32 {
+    guard path.utf8.count < MemoryLayout<sockaddr_un>.size - 2 else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 10)
+    }
     let manager = FileManager.default
     let directory = (path as NSString).deletingLastPathComponent
     try manager.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
@@ -505,7 +529,7 @@ private func makeSocket(_ path: String, uid: uid_t, gid: gid_t) throws -> Int32 
     guard result == 0, listen(descriptor, 32) == 0 else {
         let code = errno; close(descriptor); throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
     }
-    guard chown(path, uid, gid) == 0, chmod(path, 0o660) == 0 else {
+    guard chown(path, uid, gid) == 0, chmod(path, 0o600) == 0 else {
         close(descriptor); throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
     }
     return descriptor
@@ -534,20 +558,28 @@ do {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
     }
-    let socketOwner: uid_t = testingConfigPath() == nil ? 0 : config.runtimeUid
+    let socketOwner = config.runtimeUid
     let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: socketOwner, gid: config.runtimeGid)
     let publicationSocket = try makeSocket(config.publicationSocketPath, uid: socketOwner, gid: config.runtimeGid)
     Thread.detachNewThread {
         serve(schedulerSocket) { descriptor in
-            let ok = (try? handleScheduledRun(descriptor, config: config, request: readRequest(descriptor))) ?? false
-            respond(descriptor, ok)
+            do {
+                respond(descriptor, try handleScheduledRun(descriptor, config: config, request: readRequest(descriptor)))
+            } catch {
+                logBrokerError("rejected a scheduled request", error)
+                respond(descriptor, false)
+            }
         }
     }
     serve(publicationSocket) { descriptor in
-        let ok = (try? handlePublication(descriptor, config: config, request: readRequest(descriptor))) ?? false
-        respond(descriptor, ok)
+        do {
+            respond(descriptor, try handlePublication(descriptor, config: config, request: readRequest(descriptor)))
+        } catch {
+            logBrokerError("rejected a publication request", error)
+            respond(descriptor, false)
+        }
     }
 } catch {
-    FileHandle.standardError.write(Data("Kaizen publication broker failed to start.\n".utf8))
+    logBrokerError("failed to start", error)
     exit(1)
 }

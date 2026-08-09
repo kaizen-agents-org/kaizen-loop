@@ -66,11 +66,41 @@ Before authenticated push, the broker:
    credential helper that reads the token from the root-only file; and
 6. replies with only `{"ok":true}` or `{"ok":false}`.
 
+Publication rejects a ref that contains Git LFS pointer files, including a ref whose
+candidate count exceeds the inspection bound. The separate trusted credential path
+cannot run repository pre-push hooks or upload LFS objects; rejection remains the
+boolean `{"ok":false}` response.
+
+Publication uses a 30-minute absolute deadline by default. Set
+`KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS` at supervisor startup to a value between
+10000 and 3600000 milliseconds.
+
 The broker monitors the client during import and push and terminates the subprocess
 group when the client disconnects. GitHub ref updates are not transactional with the
 local socket: a disconnect after the remote accepted an update is an ambiguous result.
 Kaizen therefore reports failure and does not automatically retry an unacknowledged
 publication.
+
+## Recovery and uninstall
+
+If installation is interrupted during the runtime swap, inspect
+`/usr/local/libexec/kaizen-loop.backup.*`, choose the backup created by that attempt,
+move it back to `/usr/local/libexec/kaizen-loop` when the install root is absent, and
+re-bootstrap the daemon:
+
+```sh
+sudo launchctl bootstrap system /Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
+```
+
+To uninstall, first stop the daemon, then remove only the broker-owned paths:
+
+```sh
+sudo launchctl bootout system/org.kaizen-agents.publication-broker
+sudo rm /Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
+sudo rm /Library/Application\ Support/KaizenLoop/publication-broker.plist
+sudo rm -R /usr/local/libexec/kaizen-loop
+sudo rm -R /var/db/kaizen-loop/publication
+```
 
 ## Verification
 

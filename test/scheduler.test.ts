@@ -50,6 +50,7 @@ describe('enableScheduler', () => {
     expect(plist).toContain(`<string>${launcher}</string>`);
     expect(plist).not.toContain('<string>/bin/sh</string>');
     expect(plist).toContain('<key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>');
+    expect(plist).toContain('<key>KAIZEN_GITHUB_BROKER_CAPABILITY</key><string></string>');
   });
 
   it('rejects missing trusted GitHub CLI before replacing managed jobs', async () => {
@@ -293,7 +294,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain(`'${await fs.realpath(process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER!)}'`);
     expect(crontabInput).toContain("PATH='/trusted/bin:");
-    expect(crontabInput).toContain('KAIZEN_GITHUB_TOKEN_SOCKET= /bin/sh');
+    expect(crontabInput).toContain('KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= /bin/sh');
     expect(crontabInput).not.toContain('GH_TOKEN=');
     expect(crontabInput).not.toContain('publication-token');
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");

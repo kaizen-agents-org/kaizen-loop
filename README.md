@@ -161,10 +161,12 @@ sudo scripts/install-macos-publication-broker.sh \
   --token-file /Library/Application\ Support/KaizenLoop/github-token \
   --repository owner/repo \
   --node "$(command -v node)"
-# Use an immutable Nix-store gh, or install a standalone administrator-owned copy.
-sudo install -o root -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-loop/gh
+# Use an immutable Nix-store gh, or install a standalone administrator-owned copy
+# outside the broker-managed installation root.
+sudo install -d -o root -g wheel -m 0755 /usr/local/libexec/kaizen-gh
+sudo install -o root -g wheel -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-gh/gh
 export KAIZEN_CRON_SCHEDULED_LAUNCHER=/usr/local/libexec/kaizen-loop/bin/kaizen-scheduled-launcher
-export PATH=/usr/local/libexec/kaizen-loop:$PATH
+export PATH=/usr/local/libexec/kaizen-gh:$PATH
 kaizen init --agent codex --schedule 02:00
 kaizen scheduler sync
 export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"

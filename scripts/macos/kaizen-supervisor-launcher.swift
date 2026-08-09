@@ -79,11 +79,24 @@ private func registerSupervisor(socketPath: String, capability: String) -> Bool 
         } == 0
         if connected {
             let request = "{\"version\":1,\"operation\":\"supervisor-register\",\"capability\":\"\(capability)\"}\n"
-            _ = request.withCString { Darwin.write(descriptor, $0, request.utf8.count) }
-            var response = [UInt8](repeating: 0, count: 64)
-            let count = Darwin.read(descriptor, &response, response.count)
+            let requestData = Array(request.utf8)
+            var sent = 0
+            while sent < requestData.count {
+                let count = requestData.withUnsafeBytes {
+                    Darwin.write(descriptor, $0.baseAddress!.advanced(by: sent), requestData.count - sent)
+                }
+                if count <= 0 { break }
+                sent += count
+            }
+            var response = Data()
+            var buffer = [UInt8](repeating: 0, count: 64)
+            while sent == requestData.count && response.count <= 4_096 && !response.contains(0x0a) {
+                let count = Darwin.read(descriptor, &buffer, buffer.count)
+                if count <= 0 { break }
+                response.append(buffer, count: count)
+            }
             close(descriptor)
-            if count > 0, String(decoding: response.prefix(count), as: UTF8.self) == "{\"ok\":true}\n" { return true }
+            if String(data: response, encoding: .utf8) == "{\"ok\":true}\n" { return true }
         } else {
             close(descriptor)
         }

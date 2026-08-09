@@ -437,6 +437,12 @@ describe('withRunDeadline', () => {
     expect(preflight.mock.calls[0][0]).toEqual(request);
     expect(preflight.mock.calls[0][1]).toBeGreaterThan(0);
     expect(preflight.mock.calls[0][1]).toBeLessThanOrEqual(1_000);
+
+    await publicationGithubPreflight(deadlineRunner)!(request, 50);
+    expect(preflight.mock.calls[1][1]).toBe(50);
+
+    await publicationGithubPreflight(deadlineRunner)!(request, 60_000);
+    expect(preflight.mock.calls[2][1]).toBeLessThanOrEqual(1_000);
   });
 
   it('bounds command timeouts by the remaining run deadline', async () => {

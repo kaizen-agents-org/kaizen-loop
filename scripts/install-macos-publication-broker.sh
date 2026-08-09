@@ -106,6 +106,7 @@ build_dir=$(mktemp -d /private/tmp/kaizen-broker-build.XXXXXX)
 stage="$install_root.new.$$"
 backup="$install_root.backup.$$"
 cleanup() {
+  if [ -d "$backup" ] && [ ! -e "$install_root" ]; then mv "$backup" "$install_root"; fi
   rm -rf "$build_dir"
   if [ -d "$stage" ]; then rm -rf "$stage"; fi
 }
@@ -125,18 +126,18 @@ chmod 0755 "$stage/bin/"* "$stage/runtime/dist/cli.js"
 
 config_stage="$build_dir/publication-broker.plist"
 /usr/libexec/PlistBuddy -c 'Clear dict' "$config_stage"
-/usr/libexec/PlistBuddy -c "Add :runtimeUser string $runtime_user" "$config_stage"
+/usr/bin/plutil -insert runtimeUser -string "$runtime_user" "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :runtimeUid integer $runtime_uid" "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :runtimeGid integer $runtime_gid" "$config_stage"
-/usr/libexec/PlistBuddy -c "Add :runtimeHome string $runtime_home" "$config_stage"
+/usr/bin/plutil -insert runtimeHome -string "$runtime_home" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :schedulerSocketPath string /var/run/kaizen-loop/scheduler.sock' "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :publicationSocketPath string /var/run/kaizen-loop/publication.sock' "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :scheduledLauncherExecutable string $install_root/bin/kaizen-scheduled-launcher" "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :supervisorLauncherExecutable string $install_root/bin/kaizen-supervisor-launcher" "$config_stage"
-/usr/libexec/PlistBuddy -c "Add :nodeExecutable string $node_executable" "$config_stage"
+/usr/bin/plutil -insert nodeExecutable -string "$node_executable" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :gitExecutable string /usr/bin/git' "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :cliPath string $install_root/runtime/dist/cli.js" "$config_stage"
-/usr/libexec/PlistBuddy -c "Add :tokenFile string $token_file" "$config_stage"
+/usr/bin/plutil -insert tokenFile -string "$token_file" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :privateDirectory string /var/db/kaizen-loop/publication' "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :allowedRepositories dict' "$config_stage"
 IFS='

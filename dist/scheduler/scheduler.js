@@ -86,6 +86,7 @@ ${schedule}
   <dict>
     <key>PATH</key><string>${escapeXml(schedulerPath)}</string>
     <key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>
+    <key>KAIZEN_GITHUB_BROKER_CAPABILITY</key><string></string>
   </dict>
   <key>StandardOutPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.out.log`))}</string>
   <key>StandardErrorPath</key><string>${escapeXml(path.join(stateDir, `${job.name}.launchd.err.log`))}</string>
@@ -98,7 +99,7 @@ function cronMarker(slug) {
 }
 function commandLine(slug, job, launcher, schedulerPath) {
     const interpreter = path.extname(launcher) === '.sh' ? '/bin/sh ' : '';
-    const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= ${interpreter}${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+    const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= ${interpreter}${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
     return command;
 }
 function pathWithExecutable(executable) {

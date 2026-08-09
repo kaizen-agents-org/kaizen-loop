@@ -537,7 +537,10 @@ export async function preflightScheduledPublication(options: {
   expectedRepo: string;
   runCommand: CommandRunner;
 }): Promise<void> {
-  if (!options.scheduled || publicationGithubToken(options.runCommand)) return;
+  if (!options.scheduled) return;
+  if (publicationGithubToken(options.runCommand)) {
+    throw new Error('Scheduled publication refuses ambient GitHub tokens; use the authenticated publication broker.');
+  }
   const pushUrls = await new GitClient(options.runCommand, options.localPath).publicationPushUrls();
   if (pushUrls.length !== 1) {
     throw new Error(`Scheduled publication requires exactly one origin push URL; found ${pushUrls.length}.`);

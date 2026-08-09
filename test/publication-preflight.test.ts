@@ -28,10 +28,36 @@ describe('scheduled publication preflight', () => {
         githubPublisher: false,
         githubPublicationPreflight: false
       })
-    })).rejects.toThrow('before issue intake');
+    })).rejects.toThrow('requires an authenticated publication broker');
 
     expect(command).toHaveBeenCalledTimes(1);
     expect(command).not.toHaveBeenCalledWith('gh', expect.anything(), expect.anything());
+  });
+
+  it('fails before issue intake when the registered broker rejects preflight', async () => {
+    const command = remoteRunner('https://github.com/o/r.git');
+
+    await expect(preflightScheduledPublication({
+      scheduled: true,
+      localPath: '/repo',
+      expectedRepo: 'o/r',
+      runCommand: trustedRunner(command, {
+        githubToken: false,
+        githubPublicationPreflight: vi.fn(async () => { throw new Error('socket refused'); })
+      })
+    })).rejects.toThrow('broker preflight failed before issue intake');
+  });
+
+  it('rejects ambient tokens for scheduled publication', async () => {
+    const command = remoteRunner('git@github.com:o/r.git');
+
+    await expect(preflightScheduledPublication({
+      scheduled: true,
+      localPath: '/repo',
+      expectedRepo: 'o/r',
+      runCommand: trustedRunner(command, { githubToken: 'ambient-token' })
+    })).rejects.toThrow('refuses ambient GitHub tokens');
+    expect(command).not.toHaveBeenCalled();
   });
 
   it('requires the broker to authenticate the current registered supervisor', async () => {

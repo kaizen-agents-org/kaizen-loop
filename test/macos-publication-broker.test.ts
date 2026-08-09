@@ -53,6 +53,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
   let schedulerSocket: string;
   let publicationSocket: string;
   let broker: ChildProcess;
+  let brokerStderr = '';
   let evidencePath: string;
   let pidPath: string;
   let sourceRepository: string;
@@ -77,11 +78,16 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
       ['kaizen-scheduled-launcher.swift', scheduledPath, 'scheduled-cache'],
       ['kaizen-supervisor-launcher.swift', supervisorPath, 'supervisor-cache']
     ]) {
-      execFileSync('swiftc', [
-        '-module-cache-path', path.join(root, cache),
-        path.join(sourceRoot, 'scripts', 'macos', source),
-        '-o', output
-      ], { stdio: 'pipe' });
+      try {
+        execFileSync('swiftc', [
+          '-module-cache-path', path.join(root, cache),
+          path.join(sourceRoot, 'scripts', 'macos', source),
+          '-o', output
+        ], { stdio: 'pipe' });
+      } catch (error) {
+        const details = (error as { stderr?: Buffer }).stderr?.toString() ?? String(error);
+        throw new Error(`swiftc failed for ${source}:\n${details}`);
+      }
     }
 
     const workRepository = path.join(root, 'work');
@@ -167,6 +173,8 @@ const preflight = () => request({
       env: { ...process.env, KAIZEN_BROKER_TEST_CONFIG: configPath },
       stdio: ['ignore', 'ignore', 'pipe']
     });
+    broker.stderr?.setEncoding('utf8');
+    broker.stderr?.on('data', (chunk: string) => { brokerStderr += chunk; });
     await Promise.all([waitForPath(schedulerSocket), waitForPath(publicationSocket)]);
   }, 120_000);
 
@@ -182,7 +190,7 @@ const preflight = () => request({
     await new Promise<void>((resolve, reject) => {
       execFile(scheduledPath, ['ignored-node', 'o-r', 'maintenance'], {
         env: { ...process.env, KAIZEN_BROKER_TEST_CONFIG: configPath }
-      }, (error) => error ? reject(error) : resolve());
+      }, (error) => error ? reject(new Error(`${error.message}\n${brokerStderr}`)) : resolve());
     });
 
     expect(JSON.parse(await fs.readFile(evidencePath, 'utf8'))).toEqual({
@@ -196,7 +204,7 @@ const preflight = () => request({
     await new Promise<void>((resolve, reject) => {
       execFile(scheduledPath, ['ignored-node', 'o-r', 'publish'], {
         env: { ...process.env, KAIZEN_BROKER_TEST_CONFIG: configPath }
-      }, (error) => error ? reject(error) : resolve());
+      }, (error) => error ? reject(new Error(`${error.message}\n${brokerStderr}`)) : resolve());
     });
 
     expect(JSON.parse(await fs.readFile(evidencePath, 'utf8'))).toEqual({
