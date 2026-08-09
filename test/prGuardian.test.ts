@@ -2886,15 +2886,24 @@ function reviewThreadsResponse(threads: Array<{ path: string; line: number; auth
               hasNextPage: false,
               endCursor: null
             },
-            nodes: threads.map((thread) => ({
+            nodes: threads.map((thread, index) => ({
+              id: `thread-${index + 1}`,
               isResolved: false,
               isOutdated: thread.isOutdated ?? false,
               path: thread.path,
               line: thread.line,
               comments: {
+                pageInfo: {
+                  hasNextPage: false,
+                  endCursor: null
+                },
                 nodes: [
                   {
+                    fullDatabaseId: String(index + 1),
+                    url: `https://example.invalid/review-comments/${index + 1}`,
                     body: thread.body,
+                    createdAt: '2026-01-01T00:00:00Z',
+                    outdated: thread.isOutdated ?? false,
                     author: {
                       login: thread.author
                     }

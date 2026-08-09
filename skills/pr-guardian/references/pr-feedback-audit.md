@@ -14,7 +14,7 @@ gh pr checks <pr> --repo <owner/repo>
 
 Run this loop. It feeds each `pageInfo.endCursor` into the next request and stops only when `hasNextPage` is false:
 
-```sh
+```bash
 cursor=
 while :; do
   args=(
@@ -56,7 +56,41 @@ query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
   if [[ -n "${cursor}" ]]; then
     args+=(-f "cursor=${cursor}")
   fi
-  page="$(gh "${args[@]}")"
+  if ! page="$(gh "${args[@]}")"; then
+    echo 'failed to fetch pull request review threads' >&2
+    exit 1
+  fi
+  if ! jq -e '
+    (.errors == null)
+    and (.data.repository.pullRequest.reviewThreads as $threads
+    | ($threads | type == "object")
+      and ($threads.nodes | type == "array")
+      and ($threads.pageInfo | type == "object")
+      and ($threads.pageInfo.hasNextPage | type == "boolean")
+      and (($threads.pageInfo.endCursor == null) or ($threads.pageInfo.endCursor | type == "string"))
+      and all($threads.nodes[];
+        (.id | type == "string")
+        and (.isResolved | type == "boolean")
+        and (.isOutdated | type == "boolean")
+        and (.path | type == "string")
+        and (.comments | type == "object")
+        and (.comments.nodes | type == "array")
+        and all(.comments.nodes[];
+          ((.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
+          and (.url | type == "string")
+          and ((.author == null) or ((.author | type == "object") and (.author.login | type == "string")))
+          and (.body | type == "string")
+          and (.createdAt | type == "string")
+          and (.outdated | type == "boolean"))
+        and (.comments.pageInfo | type == "object")
+        and (.comments.pageInfo.hasNextPage | type == "boolean")
+        and ((.comments.pageInfo.endCursor == null) or (.comments.pageInfo.endCursor | type == "string"))
+        and ((.comments.pageInfo.hasNextPage | not)
+          or ((.comments.pageInfo.endCursor | type == "string") and (.comments.pageInfo.endCursor | length > 0)))))
+  ' >/dev/null <<<"${page}"; then
+    echo 'reviewThreads returned an incomplete response' >&2
+    exit 1
+  fi
   jq -c '.data.repository.pullRequest.reviewThreads.nodes[]' <<<"${page}"
   if [[ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")" != true ]]; then
     break
@@ -71,7 +105,7 @@ done
 
 For every thread whose nested `comments.pageInfo.hasNextPage` is true, run the corresponding comment loop with that thread's GraphQL `id`:
 
-```sh
+```bash
 thread_id='<review-thread-id>'
 cursor=
 while :; do
@@ -93,7 +127,31 @@ query($threadId:ID!, $cursor:String) {
   if [[ -n "${cursor}" ]]; then
     args+=(-f "cursor=${cursor}")
   fi
-  page="$(gh "${args[@]}")"
+  if ! page="$(gh "${args[@]}")"; then
+    echo 'failed to fetch review thread comments' >&2
+    exit 1
+  fi
+  if ! jq -e '
+    (.errors == null)
+    and (.data.node.comments as $comments
+    | ($comments | type == "object")
+      and ($comments.nodes | type == "array")
+      and all($comments.nodes[];
+        ((.fullDatabaseId | type) == "string" or (.fullDatabaseId | type) == "number")
+        and (.url | type == "string")
+        and ((.author == null) or ((.author | type == "object") and (.author.login | type == "string")))
+        and (.body | type == "string")
+        and (.createdAt | type == "string")
+        and (.outdated | type == "boolean"))
+      and ($comments.pageInfo | type == "object")
+      and ($comments.pageInfo.hasNextPage | type == "boolean")
+      and (($comments.pageInfo.endCursor == null) or ($comments.pageInfo.endCursor | type == "string"))
+      and (($comments.pageInfo.hasNextPage | not)
+        or (($comments.pageInfo.endCursor | type == "string") and ($comments.pageInfo.endCursor | length > 0))))
+  ' >/dev/null <<<"${page}"; then
+    echo 'review comments returned an incomplete response' >&2
+    exit 1
+  fi
   jq -c '.data.node.comments.nodes[]' <<<"${page}"
   if [[ "$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"${page}")" != true ]]; then
     break
