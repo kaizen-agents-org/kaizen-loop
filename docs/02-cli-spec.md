@@ -102,7 +102,6 @@ kaizen run [--project <slug>] [--scheduled] [--issue <番号>] [--dry-run]
 | `--dry-run` | Issue 取得・除外フィルタ・優先順位による選択までを実行し、**ワークスペース変更・push・コメントは行わない**。リスク判定は実 diff が必要なため実行しない |
 | `--max-issues <N>` | この実行に限り処理上限を上書き |
 | `--agent <agent>` | builder-agent へ渡す希望バックエンドを上書き(`claude` または `codex`) |
-| `--agent` | この実行に限りエージェントを上書き |
 
 `--scheduled` は常に registry の専用 workspace にある `.kaizen/config.yml` を運用設定として使う。通常の手動実行は開発 checkout の設定を使う。scheduled実行ではprojectの有効状態やdry-runの有無にかかわらず、workspace設定が欠落または不正な場合は開発checkoutへfallbackせず失敗するため、先に `kaizen fleet refresh --sync` でworkspaceを復旧する。
 
