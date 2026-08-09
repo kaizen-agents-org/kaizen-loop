@@ -152,6 +152,9 @@ installed outside `KAIZEN_HOME`;
 Managed jobs intentionally do not inherit `KAIZEN_GITHUB_TOKEN_SOCKET`. Scheduled HTTPS
 publication uses the installed broker daemon to start a fully root-owned runtime chain
 and inject the socket only after the user-owned launchd environment has been cleared.
+The broker accepts a start only when the peer PID belongs to the root-registered
+`com.kaizen-loop.<project>.<job>` launchd job and uses the registered tool path and
+publication timeout instead of caller-supplied values.
 
 ```sh
 sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop

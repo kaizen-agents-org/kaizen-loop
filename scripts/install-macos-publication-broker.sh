@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job> --tool-path <absolute-path-list> [--repository <owner/repo> ...] [--scheduled-job <project/job> ...] [--node <absolute-node>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job> --tool-path <absolute-path-list> [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job> ...] [--node <absolute-node>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -16,6 +16,7 @@ source_root=
 repositories=
 scheduled_jobs=
 tool_path=
+publication_timeout_ms=1800000
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runtime-user) [ "$#" -ge 2 ] || usage; runtime_user=$2; shift 2 ;;
@@ -25,6 +26,7 @@ while [ "$#" -gt 0 ]; do
     --scheduled-job) [ "$#" -ge 2 ] || usage; scheduled_jobs="${scheduled_jobs}${scheduled_jobs:+
 }$2"; shift 2 ;;
     --tool-path) [ "$#" -ge 2 ] || usage; tool_path=$2; shift 2 ;;
+    --publication-timeout-ms) [ "$#" -ge 2 ] || usage; publication_timeout_ms=$2; shift 2 ;;
     --node) [ "$#" -ge 2 ] || usage; node_executable=$2; shift 2 ;;
     --source) [ "$#" -ge 2 ] || usage; source_root=$2; shift 2 ;;
     *) usage ;;
@@ -34,6 +36,8 @@ done
 
 case "$token_file" in /*) ;; *) echo "--token-file must be absolute." >&2; exit 2 ;; esac
 case "$runtime_user" in *[!A-Za-z0-9._-]*|'') echo "Invalid runtime user." >&2; exit 2 ;; esac
+case "$publication_timeout_ms" in *[!0-9]*|'') echo "Invalid publication timeout." >&2; exit 2 ;; esac
+[ "$publication_timeout_ms" -ge 10000 ] && [ "$publication_timeout_ms" -le 3600000 ] || { echo "Publication timeout must be between 10000 and 3600000 milliseconds." >&2; exit 2; }
 runtime_uid=$(id -u "$runtime_user")
 runtime_gid=$(id -g "$runtime_user")
 runtime_home=$(dscl . -read "/Users/$runtime_user" NFSHomeDirectory | sed 's/^NFSHomeDirectory: //')
@@ -177,6 +181,7 @@ for scheduled_job in $scheduled_jobs; do
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.project" -string "$scheduled_project" "$config_stage"
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.job" -string "$scheduled_name" "$config_stage"
   /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.toolPath" -string "$tool_path" "$config_stage"
+  /usr/bin/plutil -insert "scheduledJobs.$scheduled_index.publicationTimeoutMs" -integer "$publication_timeout_ms" "$config_stage"
   scheduled_index=$((scheduled_index + 1))
 done
 IFS=$old_ifs

@@ -148,7 +148,13 @@ const preflight = () => request({
       expectedSha: ${JSON.stringify(expectedSha)}
     });
   }
-  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, toolPath: process.env.PATH }));
+  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({
+    supervisor,
+    childRejected: child.status === 0,
+    published,
+    toolPath: process.env.PATH,
+    publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS
+  }));
   if (sleeping) return;
   process.exit(supervisor && child.status === 0 && (!process.argv.includes('publish') || published) ? 0 : 1);
 })().catch(() => process.exit(1));
@@ -173,9 +179,9 @@ const preflight = () => request({
 <key>privateDirectory</key><string>${xml(path.join(root, 'private'))}</string>
 <key>allowedRepositories</key><dict><key>o/r</key><string>${xml(`file://${remoteRepository}`)}</string></dict>
 <key>scheduledJobs</key><array>
-<dict><key>project</key><string>o-r</string><key>job</key><string>maintenance</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string></dict>
-<dict><key>project</key><string>o-r</string><key>job</key><string>publish</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string></dict>
-<dict><key>project</key><string>o-r</string><key>job</key><string>sleep</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string></dict>
+<dict><key>project</key><string>o-r</string><key>job</key><string>maintenance</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string><key>publicationTimeoutMs</key><integer>123456</integer></dict>
+<dict><key>project</key><string>o-r</string><key>job</key><string>publish</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string><key>publicationTimeoutMs</key><integer>123456</integer></dict>
+<dict><key>project</key><string>o-r</string><key>job</key><string>sleep</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string><key>publicationTimeoutMs</key><integer>123456</integer></dict>
 </array>
 </dict></plist>\n`;
     await fs.writeFile(configPath, plist);
@@ -220,7 +226,8 @@ const preflight = () => request({
       supervisor: true,
       childRejected: true,
       published: false,
-      toolPath: scheduledToolPath
+      toolPath: scheduledToolPath,
+      publicationTimeout: '123456'
     });
   });
 
@@ -235,7 +242,8 @@ const preflight = () => request({
       supervisor: true,
       childRejected: true,
       published: true,
-      toolPath: scheduledToolPath
+      toolPath: scheduledToolPath,
+      publicationTimeout: '123456'
     });
     expect(execFileSync('/usr/bin/git', [
       '--git-dir', remoteRepository, 'rev-parse', 'refs/heads/kaizen/test'
@@ -289,6 +297,8 @@ describe('publication broker source contract', () => {
     expect(brokerSource).toContain('parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"');
     expect(brokerSource).toContain('mode: 0o620');
     expect(brokerSource).toContain('config.scheduledJobs.first');
+    expect(brokerSource).toContain('launchctl-');
+    expect(brokerSource).toContain('pid = \\(pid)');
     expect(brokerSource).toContain('POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT');
     expect(brokerSource).toContain('kill(-process.processIdentifier, signal)');
     expect(installer).toContain('Add :schedulerSocketPath string /opt/kaizen/run/scheduler.sock');

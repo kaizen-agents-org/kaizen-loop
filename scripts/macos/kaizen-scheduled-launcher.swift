@@ -12,16 +12,6 @@ private struct ScheduledRunRequest: Encodable {
     let project: String
     let job: String
     let capability: String
-    let toolPath: String
-}
-
-private func validatedToolPath(_ value: String?) -> String? {
-    guard let value, !value.isEmpty, value.utf8.count <= 16_384,
-          !value.contains("\0"), !value.contains("\n"), !value.contains("\r") else { return nil }
-    let directories = value.split(separator: ":", omittingEmptySubsequences: false)
-    guard directories.count <= 128,
-          directories.allSatisfy({ !$0.isEmpty && $0.hasPrefix("/") && $0.utf8.count <= 4_096 }) else { return nil }
-    return value
 }
 
 private func configPath() -> String {
@@ -90,9 +80,6 @@ guard project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regula
 
 do {
     let config = try PropertyListDecoder().decode(LauncherConfig.self, from: Data(contentsOf: URL(fileURLWithPath: configPath())))
-    guard let toolPath = validatedToolPath(ProcessInfo.processInfo.environment["PATH"]) else {
-        throw NSError(domain: "KaizenScheduledLauncher", code: 3)
-    }
     var random = [UInt8](repeating: 0, count: 32)
     let randomCount = random.count
     let randomStatus = random.withUnsafeMutableBytes {
@@ -107,8 +94,7 @@ do {
     let ok = try exchange(descriptor, request: JSONEncoder().encode(ScheduledRunRequest(
         project: project,
         job: job,
-        capability: capability,
-        toolPath: toolPath
+        capability: capability
     )))
     exit(ok ? 0 : 1)
 } catch {

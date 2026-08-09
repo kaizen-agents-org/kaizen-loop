@@ -41,7 +41,10 @@ daemon maps these names to canonical `https://github.com/owner/name.git` URLs an
 treats a client URL as authority. Add each authorized scheduler project/job pair with
 `--scheduled-job` and record its normalized executable search path with `--tool-path`.
 The root-owned registration prevents another LaunchAgent under the runtime UID from
-choosing a different job or toolchain.
+choosing a different job or toolchain. The broker also confirms that the connecting
+PID belongs to the registered `com.kaizen-loop.<project>.<job>` launchd job. Use
+`--publication-timeout-ms` to pin a value from 10000 through 3600000 in the same
+root-owned registration; the default is 1800000.
 
 Configure scheduler jobs to invoke the installed launcher, then resync them:
 
@@ -53,9 +56,9 @@ kaizen scheduler sync
 The user LaunchAgent or cron environment clears any inherited broker socket. The root
 daemon starts the fixed root-owned runtime with a small environment and injects the
 publication socket and a one-run, non-credential capability only after that clear
-boundary. The scheduled launcher forwards only a bounded list of absolute `PATH`
-directories so the supervisor can resolve the operator-configured `gh`, builder, and
-verifier executables. Kaizen captures and removes the capability at startup; its normal
+boundary. The supervisor receives the bounded `PATH` and publication timeout from the
+root-owned job registration rather than the user LaunchAgent environment. Kaizen
+captures and removes the capability at startup; its normal
 untrusted child environment allowlist contains neither value.
 
 ## Broker validation
