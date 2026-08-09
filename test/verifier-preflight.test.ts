@@ -507,12 +507,24 @@ async function createVerifierRemote(): Promise<{
   mainCommit: string;
 }> {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-remote-'));
+  const isolatedConfig = path.join(repo, 'isolated.gitconfig');
+  const hooksDir = path.join(repo, 'disabled-hooks');
+  await fs.writeFile(isolatedConfig, '');
+  await fs.mkdir(hooksDir);
   const git = async (...args: string[]): Promise<string> => {
     const { stdout } = await execFileAsync('git', [
       '-c', 'commit.gpgSign=false',
       '-c', 'tag.gpgSign=false',
+      '-c', `core.hooksPath=${hooksDir}`,
       ...args
-    ], { cwd: repo });
+    ], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: isolatedConfig,
+        GIT_CONFIG_SYSTEM: isolatedConfig
+      }
+    });
     return stdout.trim();
   };
   await git('init', '--initial-branch=main');
