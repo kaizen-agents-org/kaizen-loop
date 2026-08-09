@@ -33,6 +33,7 @@ describe('enableScheduler', () => {
     vi.stubEnv('HOME', home);
     vi.stubEnv('KAIZEN_HOME', home);
     vi.stubEnv('KAIZEN_CRON_SCHEDULED_LAUNCHER', launcher);
+    vi.stubEnv('PATH', '.:/usr/bin');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command, args, exitCode: 0, stdout: '', stderr: '', durationMs: 1
     }));
@@ -51,6 +52,7 @@ describe('enableScheduler', () => {
     expect(plist).not.toContain('<string>/bin/sh</string>');
     expect(plist).toContain('<key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>');
     expect(plist).toContain('<key>KAIZEN_GITHUB_BROKER_CAPABILITY</key><string></string>');
+    expect(plist).toContain(`<key>PATH</key><string>/trusted/bin:${process.cwd()}:/usr/bin</string>`);
   });
 
   it('rejects missing trusted GitHub CLI before replacing managed jobs', async () => {

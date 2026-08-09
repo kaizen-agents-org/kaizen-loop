@@ -255,6 +255,8 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('chmod 0755 "$config_dir"');
     expect(brokerSource).toContain('chown(config.privateDirectory, 0, config.runtimeGid)');
     expect(brokerSource).toContain('chmod(config.privateDirectory, 0o710)');
+    expect(brokerSource).toContain('processPath(pid) == config.scheduledLauncherExecutable');
+    expect(brokerSource).toContain('parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"');
     expect(installer).toContain('cp -p "$build_dir/config.backup" "$config_path"');
     expect(installer).toContain('launchctl bootstrap system "$daemon_path"');
   });

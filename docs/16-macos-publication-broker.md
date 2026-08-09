@@ -7,7 +7,9 @@ supervisor. The daemon records the launcher's PID and one-run capability, waits 
 readiness handshake, and then binds the post-`exec` Node process's macOS audit token on
 the first preflight. Publication requests must come from that exact process identity
 and carry the same capability. A child, sibling, stale PID, or reused PID does not
-match the registered audit identity.
+match the registered audit identity. Supervisor-start requests additionally require
+the configured immutable launcher executable to be a direct child of macOS launchd;
+another process running under the scheduler UID cannot invoke the broker entry point.
 
 ## Install
 

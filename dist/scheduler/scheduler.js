@@ -106,8 +106,9 @@ function pathWithExecutable(executable) {
     const executableDir = path.dirname(executable);
     const inherited = (process.env.PATH ?? '')
         .split(path.delimiter)
-        .filter((entry) => entry && entry !== executableDir);
-    return [executableDir, ...inherited].join(path.delimiter);
+        .filter(Boolean)
+        .map((entry) => path.resolve(entry));
+    return [...new Set([executableDir, ...inherited])].join(path.delimiter);
 }
 function requiredScheduledLauncher(trust = isTrustedExecutablePath) {
     const launcher = process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER;

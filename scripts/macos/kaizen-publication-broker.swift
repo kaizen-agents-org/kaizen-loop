@@ -113,6 +113,28 @@ private func identity(_ descriptor: Int32, pid: pid_t) throws -> ProcessIdentity
     return ProcessIdentity(pid: pid, auditToken: token)
 }
 
+private func processPath(_ pid: pid_t) -> String? {
+    var buffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+    let count = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+    guard count > 0 else { return nil }
+    return String(cString: buffer)
+}
+
+private func parentPid(_ pid: pid_t) -> pid_t? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+    return pid_t(info.pbi_ppid)
+}
+
+private func authenticateScheduledTrigger(_ descriptor: Int32, config: BrokerConfig) throws -> Bool {
+    let (uid, _, pid) = try peerCredentials(descriptor)
+    guard uid == config.runtimeUid,
+          processPath(pid) == config.scheduledLauncherExecutable else { return false }
+    if testingConfigPath() != nil { return true }
+    return parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"
+}
+
 private func readRequest(_ descriptor: Int32) throws -> [String: Any] {
     let deadline = Date().addingTimeInterval(10)
     var data = Data()
@@ -268,8 +290,7 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
           capability.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
           project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
           job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return false }
-    let (uid, _, _) = try peerCredentials(descriptor)
-    guard uid == config.runtimeUid else { return false }
+    guard try authenticateScheduledTrigger(descriptor, config: config) else { return false }
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: config.supervisorLauncherExecutable)
