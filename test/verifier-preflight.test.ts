@@ -1,15 +1,20 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import { configSchema } from '../src/config/schema.js';
 import { VerifierAgentAdapter } from '../src/agents/verifier.js';
+import { createInitialConfig } from '../src/init/init.js';
 import { preflightVerifier } from '../src/orchestrator/run.js';
+import type { KaizenConfig } from '../src/config/schema.js';
 import type { CommandRunner } from '../src/utils/command.js';
 
 const oldCommit = 'a'.repeat(40);
 const currentCommit = 'b'.repeat(40);
 const tagObject = 'c'.repeat(40);
+const execFileAsync = promisify(execFile);
 
 describe('verifier freshness preflight', () => {
   it('rejects a self-consistent verifier checkout that is behind the trusted branch', async () => {
@@ -72,6 +77,39 @@ describe('verifier freshness preflight', () => {
 
     expect(failure).toBeUndefined();
     expect(diagnostic.freshness).toMatchObject({ expectedCommit: oldCommit, status: 'current' });
+  });
+
+  it('keeps an installed pinned release current after upstream main advances', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-pinned-install-'));
+    const stamp = path.join(home, 'toolchain', 'verifier', '.installed-version');
+    await fs.mkdir(path.dirname(stamp), { recursive: true });
+    await fs.writeFile(stamp, 'v0.1.0\n');
+    const config = configSchema.parse(await createInitialConfig({
+      agent: 'codex',
+      setup: null,
+      verify: []
+    }, home));
+    const remote = await createVerifierRemote();
+
+    expect(remote.mainCommit).not.toBe(remote.releaseCommit);
+    expect(config.verifier.expectedRef).toBe('refs/tags/v0.1.0');
+
+    const { failure, diagnostic, runner } = await inspect({
+      config,
+      expectedCommit: remote.releaseCommit,
+      buildCommit: remote.releaseCommit,
+      runtimeCommit: remote.releaseCommit,
+      localGitRemote: remote.repo
+    });
+
+    expect(failure).toBeUndefined();
+    expect(diagnostic.freshness).toMatchObject({
+      ref: 'refs/tags/v0.1.0',
+      expectedCommit: remote.releaseCommit,
+      status: 'current'
+    });
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'git' && args.includes('refs/heads/main'))).toBe(false);
   });
 
   it('rejects current main when a pinned release tag is expected', async () => {
@@ -306,6 +344,7 @@ describe('verifier freshness preflight', () => {
 
 async function inspect(options: {
   expectedCommit: string | null;
+  config?: KaizenConfig;
   expectedRef?: string;
   buildCommit?: string;
   runtimeCommit?: string;
@@ -322,6 +361,7 @@ async function inspect(options: {
   observeRefreshLock?: boolean;
   home?: string;
   globalRoot?: string;
+  localGitRemote?: string;
 }) {
   const runDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-preflight-'));
   const previousHome = process.env.KAIZEN_HOME;
@@ -339,7 +379,7 @@ async function inspect(options: {
   } catch {
     await fs.symlink(previousPackageRoot, globalLink, 'dir');
   }
-  const config = configSchema.parse({
+  const config = options.config ?? configSchema.parse({
     version: 1,
     ...(options.canonicalMainUpdate ? {
       safety: { operationMode: 'dogfood' },
@@ -361,7 +401,13 @@ async function inspect(options: {
       }
       if (args[0] === 'checkout') return result(command, args, commandOptions?.cwd, '');
       if (args.join(' ') === 'rev-parse HEAD') return result(command, args, commandOptions?.cwd, `${currentCommit}\n`);
-      const expectedRef = options.expectedRef ?? 'refs/heads/main';
+      if (args[0] === 'ls-remote' && options.localGitRemote) {
+        const localArgs = [...args];
+        localArgs[2] = options.localGitRemote;
+        const remote = await execFileAsync('git', localArgs, { cwd: commandOptions?.cwd });
+        return result(command, args, commandOptions?.cwd, remote.stdout);
+      }
+      const expectedRef = config.verifier.expectedRef;
       return {
         command,
         args,
@@ -453,6 +499,46 @@ async function inspect(options: {
     if (previousHome === undefined) delete process.env.KAIZEN_HOME;
     else process.env.KAIZEN_HOME = previousHome;
   }
+}
+
+async function createVerifierRemote(): Promise<{
+  repo: string;
+  releaseCommit: string;
+  mainCommit: string;
+}> {
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-remote-'));
+  const isolatedConfig = path.join(repo, 'isolated.gitconfig');
+  const hooksDir = path.join(repo, 'disabled-hooks');
+  await fs.writeFile(isolatedConfig, '');
+  await fs.mkdir(hooksDir);
+  const git = async (...args: string[]): Promise<string> => {
+    const { stdout } = await execFileAsync('git', [
+      '-c', 'commit.gpgSign=false',
+      '-c', 'tag.gpgSign=false',
+      '-c', `core.hooksPath=${hooksDir}`,
+      ...args
+    ], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: isolatedConfig,
+        GIT_CONFIG_SYSTEM: isolatedConfig
+      }
+    });
+    return stdout.trim();
+  };
+  await git('init', '--initial-branch=main');
+  await git('config', 'user.name', 'Kaizen Test');
+  await git('config', 'user.email', 'kaizen-test@example.com');
+  await fs.writeFile(path.join(repo, 'verifier.txt'), 'release\n');
+  await git('add', 'verifier.txt');
+  await git('commit', '-m', 'release');
+  const releaseCommit = await git('rev-parse', 'HEAD');
+  await git('tag', '-a', 'v0.1.0', '-m', 'v0.1.0');
+  await fs.writeFile(path.join(repo, 'verifier.txt'), 'main advanced\n');
+  await git('commit', '-am', 'advance main');
+  const mainCommit = await git('rev-parse', 'HEAD');
+  return { repo, releaseCommit, mainCommit };
 }
 
 function result(command: string, args: string[], cwd: string | undefined, stdout: string) {
