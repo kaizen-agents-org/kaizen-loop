@@ -4136,6 +4136,12 @@ describe('runKaizen PR flow', () => {
         statusCalls += 1;
         return result(command, args, workspace, statusCalls === 2 ? 'M generated.txt\n' : '');
       }
+      // `git diff --cached --quiet` exits non-zero when something is staged.
+      // The generated change here is not harness scratch, so it survives the
+      // exclusion and must be committed.
+      if (command === 'git' && args.join(' ') === 'diff --cached --quiet') {
+        return { ...result(command, args, workspace, ''), exitCode: 1 };
+      }
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') {
         return result(command, args, workspace, 'src/file.ts\ngenerated.txt\n');
       }
@@ -4278,6 +4284,11 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') {
         return result(command, args, workspace, verificationCreatedChanges ? 'M generated.txt\n' : '');
+      }
+      // `git diff --cached --quiet` exits non-zero when something is staged.
+      // `generated.txt` is not harness scratch, so it survives the exclusion.
+      if (command === 'git' && args.join(' ') === 'diff --cached --quiet') {
+        return { ...result(command, args, workspace, ''), exitCode: verificationCreatedChanges ? 1 : 0 };
       }
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') {
         return result(command, args, workspace, verificationCreatedChanges ? 'generated.txt\n' : '');

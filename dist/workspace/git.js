@@ -97,8 +97,46 @@ export class GitClient {
     async forceBranch(branch, ref) {
         await this.git(['branch', '-f', branch, ref]);
     }
-    async addAll() {
-        await this.git(['add', '-A']);
+    // `excludePaths` keeps harness scratch out of the work branch. The verifier
+    // writes its artifacts inside the checkout -- it is confined to
+    // KAIZEN_WORKSPACE_DIR by design and cannot use a temporary directory -- so
+    // an unfiltered `add -A` sweeps them into the commit. That put 6 files and
+    // 917 lines of scratch, including a dump of the builder prompt, into a pull
+    // request whose actual change was 8 lines.
+    // Returns true when an exclusion was actually applied, so the caller knows
+    // the index may be empty even though the tree was dirty.
+    async addAll(excludePaths = []) {
+        const exclusions = excludePaths
+            .map((entry) => this.repositoryRelativePath(entry))
+            .filter((entry) => Boolean(entry))
+            .map((entry) => `:(exclude,glob)${entry}/**`);
+        if (exclusions.length === 0) {
+            await this.git(['add', '-A']);
+            return false;
+        }
+        await this.git(['add', '-A', '--', '.', ...exclusions]);
+        return true;
+    }
+    // Git rejects a pathspec that leaves the repository, which would abort the
+    // commit rather than ignore a bad entry. A prefix check is not enough:
+    // `scratch/../../outside` does not start with `..` yet still escapes, so the
+    // path is resolved and compared against the workspace root.
+    repositoryRelativePath(candidate) {
+        const trimmed = candidate.trim();
+        if (!trimmed)
+            return undefined;
+        const resolved = path.resolve(this.cwd, trimmed);
+        const relativePath = path.relative(this.cwd, resolved);
+        if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath))
+            return undefined;
+        return relativePath.split(path.sep).join('/');
+    }
+    // `git status` reports a dirty tree, but the index can still be empty once
+    // exclusions are applied -- when only harness scratch changed. Committing
+    // then fails and takes the run down with it.
+    async hasStagedChanges() {
+        const result = await this.git(['diff', '--cached', '--quiet'], { rejectOnNonZero: false });
+        return result.exitCode !== 0;
     }
     async commit(message) {
         await this.git(['commit', '-m', message]);

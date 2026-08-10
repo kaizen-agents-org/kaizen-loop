@@ -1258,7 +1258,7 @@ async function processIssue(options: {
       }
 
       if (!agentResult) throw new Error('Agent did not produce a result.');
-      await commitLeftovers(workspace, options.issue, agentResult);
+      await commitLeftovers(workspace, options.issue, agentResult, options.config);
       let diff = await workspace.collectDiffStats(options.config);
       if (diff.changedFiles === 0) {
         if (!skipBuilder && agentResult.status === 'fixed' && options.config.commands.verify.length > 0) {
@@ -1280,7 +1280,7 @@ async function processIssue(options: {
               discoveredFollowups
             );
           }
-          await commitLeftovers(workspace, options.issue, agentResult);
+          await commitLeftovers(workspace, options.issue, agentResult, options.config);
           diff = await workspace.collectDiffStats(options.config);
           if (diff.changedFiles === 0) {
             return withDiscoveredFollowups(
@@ -1363,7 +1363,7 @@ async function processIssue(options: {
       return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent did not produce a result.', started), discoveredFollowups);
     }
 
-    await commitLeftovers(workspace, options.issue, agentResult);
+    await commitLeftovers(workspace, options.issue, agentResult, options.config);
     const diff = await workspace.collectDiffStats(options.config);
     if (diff.changedFiles === 0) {
       return withDiscoveredFollowups(await finishFailed(options, agent, attempts, 'Agent produced no changes.', started), discoveredFollowups);
@@ -1374,7 +1374,7 @@ async function processIssue(options: {
         discoveredFollowups
       );
     }
-    await commitLeftovers(workspace, options.issue, agentResult);
+    await commitLeftovers(workspace, options.issue, agentResult, options.config);
     const finalDiff = await workspace.collectDiffStats(options.config);
     if (finalDiff.forbiddenFiles.length > 0) {
       return withDiscoveredFollowups(
@@ -1910,12 +1910,30 @@ export function selectPreferredBackends(
   return [primary, fallback];
 }
 
-async function commitLeftovers(workspace: WorkspaceManager, issue: GitHubIssue, agentResult: AgentResult): Promise<void> {
+async function commitLeftovers(
+  workspace: WorkspaceManager,
+  issue: GitHubIssue,
+  agentResult: AgentResult,
+  config?: KaizenConfig
+): Promise<void> {
   const git = workspace.git();
   const status = await git.statusPorcelain();
   if (!status.trim()) return;
-  await git.addAll();
+  // A dirty tree does not imply a non-empty index once exclusions are applied:
+  // when only harness scratch changed, committing would fail and take the run
+  // with it. Only worth an extra git call when something was actually excluded.
+  const excluded = await git.addAll(harnessScratchPaths(config));
+  if (excluded && !(await git.hasStagedChanges())) return;
   await git.commit(`kaizen: ${shortSummary(agentResult.summary || issue.title)} (#${issue.number})`);
+}
+
+// The directory holding `verifier.resultPath` is the verifier's scratch area:
+// it writes its artifacts alongside the result file, inside the checkout. These
+// belong to the harness, never to the change under review.
+function harnessScratchPaths(config?: KaizenConfig): string[] {
+  if (!config) return [];
+  const resultDir = path.dirname(config.verifier.resultPath);
+  return resultDir && resultDir !== '.' ? [resultDir] : [];
 }
 
 async function finishBlocked(
@@ -2273,7 +2291,8 @@ async function checkpointPartialChanges(
     }
     const git = workspace.git();
     if (!(await git.statusPorcelain()).trim()) return {};
-    await git.addAll();
+    const excluded = await git.addAll(harnessScratchPaths(options.config));
+    if (excluded && !(await git.hasStagedChanges())) return {};
     await git.commit(`kaizen: checkpoint partial implementation (#${issue.number})`);
     return {};
   } catch (error) {
@@ -2481,7 +2500,7 @@ async function reflectDirect(options: {
   const verifyResults = await options.workspace.runVerify(options.config);
   const failedVerify = verifyResults.find((result) => !result.ok);
   if (failedVerify) throw new Error(`post-rebase verification failed: ${failedVerify.command}`);
-  await commitLeftovers(options.workspace, options.issue, options.agentResult);
+  await commitLeftovers(options.workspace, options.issue, options.agentResult, options.config);
   await git.checkout(options.config.git.defaultBranch, { ignoreOtherWorktrees: true });
   await git.resetHard(`origin/${options.config.git.defaultBranch}`);
   await git.mergeFfOnly(options.branch);
