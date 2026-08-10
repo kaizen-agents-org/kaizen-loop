@@ -172,6 +172,36 @@ describe('workspace branch handling', () => {
     expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
   });
 
+  // Suppressing the message entirely made a named refusal indistinguishable
+  // from any other failure, so a known refusal code is surfaced -- while the
+  // surrounding text it arrived in stays suppressed.
+  it('surfaces a known broker refusal code without the message around it', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'remote get-url --push --all origin'
+          ? 'https://github.com/o/r.git\n'
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+
+    const error = await new GitClient(trustedRunner(runner, {
+      githubToken: false,
+      githubPublisher: async () => {
+        throw new Error('broker refused the request: repository-not-allowed (token ghp_aaaaaaaaaaaaaaaaaaaa)');
+      }
+    }), '/workspace')
+      .push('kaizen/issue-330-fix', { expectedRepo: 'o/r' })
+      .catch((caught: unknown) => caught);
+
+    expect(String(error)).toContain('repository-not-allowed');
+    expect(String(error)).not.toContain('ghp_');
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false);
+  });
+
   it('does not expose GitHub tokens to SSH publication transports', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
     vi.stubEnv('SSH_AUTH_SOCK', '/supervisor-agent');
