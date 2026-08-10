@@ -254,8 +254,16 @@ export class GitClient {
                         forceWithLease: lease[0]
                     });
                 }
-                catch {
-                    throw new Error('GitHub credential broker failed to publish the validated ref.');
+                catch (error) {
+                    // Discarding this error entirely left "failed to publish the
+                    // validated ref" as the only trace of a failure the broker had
+                    // already named. But the publisher is an injected callback whose
+                    // message is not under our control and may carry credentials, so only
+                    // the broker's own refusal vocabulary is allowed through.
+                    const reason = brokerRefusalReason(error);
+                    throw new Error(reason
+                        ? `GitHub credential broker failed to publish the validated ref: ${reason}.`
+                        : 'GitHub credential broker failed to publish the validated ref.');
                 }
             }
             else {
@@ -320,6 +328,36 @@ export function isGitLfsPointer(content) {
     return lines.slice(1, oidIndex).every((line) => /^ext-[0-9]+-[A-Za-z0-9][A-Za-z0-9._-]* .+$/.test(line))
         && /^oid sha256:[0-9a-f]{64}$/.test(lines[oidIndex])
         && /^size [0-9]+$/.test(lines[oidIndex + 1]);
+}
+// The refusal codes the broker is documented to answer with. Matching against a
+// fixed list rather than forwarding the error text keeps an injected publisher
+// -- or a future broker that echoes a URL -- from leaking a credential into a
+// message that reaches issue comments and logs.
+const BROKER_REFUSAL_REASONS = [
+    'repository-mismatch',
+    'repository-not-allowed',
+    'default-branch-refused',
+    'invalid-refspec',
+    'invalid-cwd',
+    'invalid-expected-sha',
+    'invalid-force-with-lease',
+    'invalid-object-directory',
+    'invalid-request',
+    'invalid-request-fields',
+    'invalid-framing',
+    'unsupported-operation',
+    'expected-sha-mismatch',
+    'request-timeout',
+    'request-too-large',
+    'broker-busy',
+    'git-timeout',
+    'git-failed',
+    'internal-error',
+    'internal-response-error'
+];
+function brokerRefusalReason(error) {
+    const message = error instanceof Error ? error.message : '';
+    return BROKER_REFUSAL_REASONS.find((reason) => message.includes(reason));
 }
 function parseWorktreeList(output) {
     const worktrees = [];

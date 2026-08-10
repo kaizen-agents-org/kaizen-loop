@@ -65,6 +65,7 @@ export declare function publicationGithubPublisher(command: CommandRunner): GitH
 export declare function publicationGithubPreflight(command: CommandRunner): GitHubPublicationPreflight | undefined;
 export declare function withTrustedExecutables(command: CommandRunner, executables: TrustedExecutables): CommandRunner;
 export declare function executableNames(command: string, platform?: NodeJS.Platform, pathExt?: string | undefined): string[];
+export declare function requestGithubPublication(socketPath: string, capability: string | undefined, request: GitHubPublicationRequest, timeoutMs: number): Promise<void>;
 export declare function isTrustedExecutablePath(executable: string, canWrite?: (candidate: string) => boolean, statPath?: (candidate: string) => Stats, effectiveUid?: number | undefined): boolean;
 export declare function isWindowsExecutablePathTrusted(executable: string, trustedRoots: string[], canWrite?: (candidate: string) => boolean): boolean;
 export declare function gitSshPublicationEnv(source?: NodeJS.ProcessEnv, sshExecutable?: string | undefined): NodeJS.ProcessEnv;

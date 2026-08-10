@@ -299,25 +299,46 @@ function resolveConfiguredBrokerSocket(socketPath) {
         throw new Error('KAIZEN_GITHUB_TOKEN_SOCKET must be an absolute path.');
     let resolved;
     try {
-        resolved = fs.realpathSync(socketPath);
-        const stat = fs.statSync(resolved);
-        if (!stat.isSocket() || stat.uid !== 0) {
-            throw new Error('untrusted socket owner');
+        try {
+            resolved = fs.realpathSync(socketPath);
         }
+        catch (error) {
+            // A missing path is by far the most common case here and means the broker
+            // is not running. Reporting it as a permission problem sends the operator
+            // to audit directory ownership that was never at fault.
+            if (error.code === 'ENOENT') {
+                throw new Error('the socket does not exist; the broker is probably not running');
+            }
+            throw error;
+        }
+        const stat = fs.statSync(resolved);
+        if (!stat.isSocket())
+            throw new Error(`${resolved} is not a socket`);
+        if (stat.uid !== 0)
+            throw new Error(`the socket is owned by uid ${stat.uid}, not root`);
         let current = path.dirname(resolved);
         while (true) {
             const directory = fs.statSync(current);
-            if (directory.uid !== 0 || (directory.mode & 0o022) !== 0 || canCurrentUserWrite(current)) {
-                throw new Error('untrusted socket directory');
+            // Name the offending directory: without it the operator has to walk the
+            // whole ancestry by hand to find which one failed.
+            if (directory.uid !== 0)
+                throw new Error(`${current} is owned by uid ${directory.uid}, not root`);
+            if ((directory.mode & 0o022) !== 0) {
+                throw new Error(`${current} is group- or world-writable (mode ${(directory.mode & 0o7777).toString(8)})`);
             }
+            if (canCurrentUserWrite(current))
+                throw new Error(`${current} is writable by the current user`);
             const parent = path.dirname(current);
             if (parent === current)
                 break;
             current = parent;
         }
     }
-    catch {
-        throw new Error('KAIZEN_GITHUB_TOKEN_SOCKET must resolve to a root-owned broker socket in immutable root-owned directories.');
+    catch (error) {
+        // Safe to include: every message thrown above is built here from paths the
+        // operator supplied and from stat results, never from network input.
+        const detail = error instanceof Error ? error.message : 'unknown error';
+        throw new Error(`KAIZEN_GITHUB_TOKEN_SOCKET must resolve to a root-owned broker socket in immutable root-owned directories: ${detail}`);
     }
     return resolved;
 }
@@ -330,7 +351,10 @@ function resolveBrokerCapability(value) {
     delete process.env.KAIZEN_GITHUB_BROKER_CAPABILITY;
     return value;
 }
-function requestGithubPublication(socketPath, capability, request, timeoutMs) {
+// Exported for the wire-contract tests: the broker lives in another repository,
+// so this is the only place the request shape and the refusal handling can be
+// pinned without a running root-owned broker.
+export function requestGithubPublication(socketPath, capability, request, timeoutMs) {
     return requestBroker(socketPath, { operation: 'git-push', capability, ...request }, timeoutMs);
 }
 function requestGithubPublicationPreflight(socketPath, capability, request, timeoutMs) {
@@ -340,12 +364,19 @@ function requestBroker(socketPath, request, timeoutMs) {
     installShutdownHooks();
     throwIfShutdownRequested();
     return new Promise((resolve, reject) => {
-        const socket = net.createConnection(socketPath);
+        // allowHalfOpen keeps the read side open after we half-close the write
+        // side, which is required because the broker only starts processing on our
+        // FIN and answers afterwards.
+        const socket = net.createConnection({ path: socketPath, allowHalfOpen: true });
         activePublicationSockets.add(socket);
         let output = '';
         let settled = false;
         let absoluteTimeout;
-        const fail = () => {
+        // Every failure used to collapse into one message, so a refusal the broker
+        // had already explained ("repository-not-allowed", "invalid-cwd", ...) was
+        // indistinguishable from the socket being absent. `detail` carries whatever
+        // the broker or the socket layer actually reported.
+        const fail = (detail) => {
             if (settled)
                 return;
             settled = true;
@@ -353,12 +384,18 @@ function requestBroker(socketPath, request, timeoutMs) {
                 clearTimeout(absoluteTimeout);
             activePublicationSockets.delete(socket);
             socket.destroy();
-            reject(new Error('GitHub credential broker failed to acknowledge publication.'));
+            reject(new Error(detail
+                ? `GitHub credential broker failed to acknowledge publication: ${detail}`
+                : 'GitHub credential broker failed to acknowledge publication.'));
         };
         absoluteTimeout = setTimeout(fail, timeoutMs);
         absoluteTimeout.unref();
         socket.setEncoding('utf8');
-        socket.on('connect', () => socket.write(`${JSON.stringify({
+        // The broker reads until end-of-input and only then validates and answers,
+        // so the request must be terminated with a half-close. Writing without it
+        // left every publication waiting for the broker's 10s read timeout, which
+        // answered `request-timeout` and surfaced as a failed publication.
+        socket.on('connect', () => socket.end(`${JSON.stringify({
             version: 1,
             ...request
         })}\n`));
@@ -367,29 +404,60 @@ function requestBroker(socketPath, request, timeoutMs) {
             if (output.length > 4_096)
                 fail();
         });
-        socket.on('error', fail);
-        socket.on('close', fail);
+        socket.on('error', (error) => {
+            // ENOENT here means the socket file is absent, which almost always means
+            // the broker is not running -- a different problem from a refusal, and
+            // previously reported identically. Only the errno code is forwarded: it
+            // is a fixed vocabulary, unlike a message that could quote a request.
+            fail(error.code === 'ENOENT'
+                ? 'the broker socket does not exist; the broker is probably not running'
+                : `socket error ${error.code ?? 'unknown'}`);
+        });
+        // Only meaningful before 'end' has been handled; `fail` is a no-op once the
+        // request settled.
+        socket.on('close', () => fail('the broker closed the connection without responding'));
         socket.on('end', () => {
             if (settled)
                 return;
             const lines = output.replace(/\r\n/g, '\n').split('\n');
             if (lines.length > 2 || (lines.length === 2 && lines[1] !== '')) {
-                fail();
+                fail('the broker sent a malformed multi-line response');
                 return;
             }
+            let parsed;
             try {
-                const response = JSON.parse(lines[0] || '{}');
-                if (response.ok !== true)
-                    throw new Error('broker rejected publication');
-                settled = true;
-                if (absoluteTimeout)
-                    clearTimeout(absoluteTimeout);
-                activePublicationSockets.delete(socket);
-                resolve();
+                parsed = JSON.parse(lines[0] || '{}');
             }
             catch {
-                fail();
+                fail('the broker sent a response that is not JSON');
+                return;
             }
+            // `JSON.parse('null')` succeeds, and reading `.ok` off it throws inside
+            // this event handler, where nothing catches it -- the promise would then
+            // never settle until the absolute timeout. Arrays parse cleanly too and
+            // are not a valid response either.
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                fail('the broker sent a response that is not a JSON object');
+                return;
+            }
+            const response = parsed;
+            if (response.ok !== true) {
+                // The broker names the refusal ("repository-not-allowed",
+                // "default-branch-refused", "invalid-cwd", "git-failed", ...). Each one
+                // has a different fix, so the code has to survive to the caller --
+                // but constrained to a short token, since the response comes from
+                // outside this process and must not be able to inject arbitrary text.
+                const code = typeof response.error === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(response.error)
+                    ? response.error
+                    : 'unspecified reason';
+                fail(`the broker refused the request: ${code}`);
+                return;
+            }
+            settled = true;
+            if (absoluteTimeout)
+                clearTimeout(absoluteTimeout);
+            activePublicationSockets.delete(socket);
+            resolve();
         });
     });
 }
