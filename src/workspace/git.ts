@@ -131,8 +131,18 @@ export class GitClient {
     await this.git(['branch', '-f', branch, ref]);
   }
 
-  async addAll(): Promise<void> {
-    await this.git(['add', '-A']);
+  // `excludePaths` keeps harness scratch out of the work branch. The verifier
+  // writes its artifacts inside the checkout -- it is confined to
+  // KAIZEN_WORKSPACE_DIR by design and cannot use a temporary directory -- so
+  // an unfiltered `add -A` sweeps them into the commit. That put 6 files and
+  // 917 lines of scratch, including a dump of the builder prompt, into a pull
+  // request whose actual change was 8 lines.
+  async addAll(excludePaths: string[] = []): Promise<void> {
+    const exclusions = excludePaths
+      .map((entry) => entry.trim().replace(/^\.\/+/, '').replace(/\/+$/, ''))
+      .filter((entry) => entry && !entry.startsWith('..') && !path.isAbsolute(entry))
+      .map((entry) => `:(exclude,glob)${entry}/**`);
+    await this.git(['add', '-A', '--', '.', ...exclusions]);
   }
 
   async commit(message: string): Promise<void> {

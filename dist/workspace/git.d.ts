@@ -32,7 +32,7 @@ export declare class GitClient {
     switchNew(branch: string): Promise<void>;
     deleteLocalBranch(branch: string): Promise<void>;
     forceBranch(branch: string, ref: string): Promise<void>;
-    addAll(): Promise<void>;
+    addAll(excludePaths?: string[]): Promise<void>;
     commit(message: string): Promise<void>;
     statusPorcelain(): Promise<string>;
     remoteBranches(remote?: string): Promise<Array<{
