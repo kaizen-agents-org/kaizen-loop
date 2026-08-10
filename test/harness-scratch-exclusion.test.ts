@@ -95,14 +95,52 @@ describe('harness scratch is kept out of the work branch', () => {
   it.each([
     ['an absolute path', '/etc'],
     ['a parent escape', '../outside'],
+    // Does not start with '..' yet still leaves the repository; git rejects the
+    // pathspec outright, so a prefix check would abort the commit.
+    ['an embedded parent escape', 'scratch/../../outside'],
+    ['a path resolving to the root itself', '.'],
     ['an empty entry', '   ']
   ])('ignores %s rather than passing it to git', async (_label, configured) => {
     const directory = await repositoryWithScratch();
     const git = new GitClient(runCommand, directory);
 
-    await git.addAll([configured]);
-
-    // Nothing is excluded, and git is not handed a pathspec it would reject.
+    // Must not throw: git fails the whole `add` on a pathspec outside the repo.
+    // The `false` return also tells the caller no exclusion was applied, so it
+    // can skip the staged-changes check.
+    await expect(git.addAll([configured])).resolves.toBe(false);
     expect(await stagedPaths(directory)).toContain('.kaizen/verifier/verify-result.json');
+  });
+
+  it('reports whether an exclusion was applied', async () => {
+    const directory = await repositoryWithScratch();
+    const git = new GitClient(runCommand, directory);
+
+    expect(await git.addAll(['.kaizen/verifier'])).toBe(true);
+    expect(await git.addAll()).toBe(false);
+  });
+
+  // `git status` still reports the tree as dirty, so the caller would proceed
+  // to commit an empty index and fail, taking the run down with it.
+  it('reports no staged changes when only excluded scratch is dirty', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-scratch-only-'));
+    repositories.push(directory);
+    await run('git', ['init', '-q', '.'], { cwd: directory });
+    await fs.mkdir(path.join(directory, '.kaizen/verifier'), { recursive: true });
+    await fs.writeFile(path.join(directory, '.kaizen/verifier/verify-result.json'), '{}\n');
+
+    const git = new GitClient(runCommand, directory);
+    await git.addAll(['.kaizen/verifier']);
+
+    expect((await git.statusPorcelain()).trim()).not.toBe('');
+    expect(await git.hasStagedChanges()).toBe(false);
+  });
+
+  it('reports staged changes when the review change is present', async () => {
+    const directory = await repositoryWithScratch();
+    const git = new GitClient(runCommand, directory);
+
+    await git.addAll(['.kaizen/verifier']);
+
+    expect(await git.hasStagedChanges()).toBe(true);
   });
 });

@@ -1540,7 +1540,12 @@ async function commitLeftovers(workspace, issue, agentResult, config) {
     const status = await git.statusPorcelain();
     if (!status.trim())
         return;
-    await git.addAll(harnessScratchPaths(config));
+    // A dirty tree does not imply a non-empty index once exclusions are applied:
+    // when only harness scratch changed, committing would fail and take the run
+    // with it. Only worth an extra git call when something was actually excluded.
+    const excluded = await git.addAll(harnessScratchPaths(config));
+    if (excluded && !(await git.hasStagedChanges()))
+        return;
     await git.commit(`kaizen: ${shortSummary(agentResult.summary || issue.title)} (#${issue.number})`);
 }
 // The directory holding `verifier.resultPath` is the verifier's scratch area:
@@ -1816,7 +1821,9 @@ async function checkpointPartialChanges(options, issue) {
         const git = workspace.git();
         if (!(await git.statusPorcelain()).trim())
             return {};
-        await git.addAll(harnessScratchPaths(options.config));
+        const excluded = await git.addAll(harnessScratchPaths(options.config));
+        if (excluded && !(await git.hasStagedChanges()))
+            return {};
         await git.commit(`kaizen: checkpoint partial implementation (#${issue.number})`);
         return {};
     }
