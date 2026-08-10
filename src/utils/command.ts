@@ -555,13 +555,22 @@ function requestBroker(
         fail('the broker sent a malformed multi-line response');
         return;
       }
-      let response: { ok?: boolean; error?: unknown };
+      let parsed: unknown;
       try {
-        response = JSON.parse(lines[0] || '{}') as { ok?: boolean; error?: unknown };
+        parsed = JSON.parse(lines[0] || '{}');
       } catch {
         fail('the broker sent a response that is not JSON');
         return;
       }
+      // `JSON.parse('null')` succeeds, and reading `.ok` off it throws inside
+      // this event handler, where nothing catches it -- the promise would then
+      // never settle until the absolute timeout. Arrays parse cleanly too and
+      // are not a valid response either.
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        fail('the broker sent a response that is not a JSON object');
+        return;
+      }
+      const response = parsed as { ok?: unknown; error?: unknown };
       if (response.ok !== true) {
         // The broker names the refusal ("repository-not-allowed",
         // "default-branch-refused", "invalid-cwd", "git-failed", ...). Each one

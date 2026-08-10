@@ -117,6 +117,17 @@ describe('publication broker wire contract', () => {
     await expect(publisher(request)).rejects.toThrow(/not JSON/);
   });
 
+  // `JSON.parse` accepts these, and reading `.ok` off `null` throws inside the
+  // 'end' handler where nothing catches it -- the request would hang until the
+  // absolute timeout instead of failing immediately.
+  it.each(['null\n', '[]\n', '"text"\n', '42\n'])(
+    'rejects a JSON response that is not an object (%j)',
+    async (payload) => {
+      const publisher = publisherFor(await startFakeBroker(payload));
+      await expect(publisher(request)).rejects.toThrow(/not a JSON object/);
+    }
+  );
+
   // Regression: the client used to write the request without half-closing, so
   // the broker -- which parses only on end-of-input -- waited for its own read
   // timeout and answered `request-timeout`. Every HTTPS publication failed that
@@ -148,8 +159,9 @@ describe('publication broker wire contract', () => {
     }));
     await publisher({ ...request, forceWithLease: '--force-with-lease=refs/heads/kaizen/issue-1:' });
     // assertExactKeys in the broker rejects unknown or missing keys outright,
-    // so the client must send exactly this shape.
-    expect(received).toMatchObject({
+    // so this must be an exact match: toMatchObject would pass while the broker
+    // refused the very request it accepted here.
+    expect(received).toEqual({
       version: 1,
       operation: 'git-push',
       cwd: request.cwd,
