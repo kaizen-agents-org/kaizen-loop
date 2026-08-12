@@ -14,8 +14,9 @@ Kaizen creates and revalidates each registered workspace, worktree parent, run
 directory, and issue worktree with mode `0700` before untrusted work starts.
 `kaizen doctor` reports an exposed workspace; `kaizen doctor --repair` tightens an
 existing workspace only after confirming that it is a real directory owned by the
-runtime user. On macOS, validation also rejects extended ACL grants and repair removes
-them. Any non-dry run, scheduled or manual, rebuilds a formerly exposed workspace from
+runtime user. On macOS, validation also rejects extended ACLs; repair refuses to mutate
+ACL-bearing directories by pathname, so an operator must remove the ACL before retrying.
+Any non-dry run, scheduled or manual, rebuilds a formerly exposed workspace from
 the trusted developer checkout's origin before reading its contents. A dry run never
 repairs or rebuilds a workspace; a scheduled dry run validates privacy and refuses
 exposed or previously marked-untrusted contents.

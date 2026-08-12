@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile);
 describe('private directory validation', () => {
   it.runIf(process.platform !== 'win32')('rejects owner permission sets weaker than 0700', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-mode-'));
-    await fs.chmod(root, 0o000);
+    await fs.chmod(root, 0o600);
 
     await expect(assertPrivateDirectory(root)).rejects.toThrow('mode 0700');
 
@@ -20,7 +20,26 @@ describe('private directory validation', () => {
     expect((await fs.stat(root)).mode & 0o777).toBe(0o700);
   });
 
-  it.runIf(process.platform === 'darwin')('rejects extended ACL grants and removes them during repair', async () => {
+  it.runIf(process.platform !== 'win32')('does not chmod a replacement path during exposure repair', async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-swap-'));
+    const directory = path.join(parent, 'workspace');
+    const original = path.join(parent, 'original');
+    await fs.mkdir(directory);
+    await fs.chmod(directory, 0o755);
+
+    await expect(ensurePrivateDirectory(directory, {
+      beforeExposureRepair: async () => {
+        await fs.rename(directory, original);
+        await fs.mkdir(directory);
+        await fs.chmod(directory, 0o777);
+      }
+    })).rejects.toThrow('changed while it was being validated');
+
+    expect((await fs.stat(original)).mode & 0o777).toBe(0o755);
+    expect((await fs.stat(directory)).mode & 0o777).toBe(0o777);
+  });
+
+  it.runIf(process.platform === 'darwin')('rejects extended ACL grants without mutating them by pathname', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-acl-'));
     await fs.chmod(root, 0o700);
     await execFileAsync('/bin/chmod', [
@@ -31,14 +50,13 @@ describe('private directory validation', () => {
 
     await expect(assertPrivateDirectory(root)).rejects.toThrow('extended ACL');
 
-    const repair = await ensurePrivateDirectory(root, { beforeExposureRepair: async () => undefined });
-
-    expect(repair.contentsMayHaveBeenExposed).toBe(true);
-    await expect(assertPrivateDirectory(root)).resolves.toBeUndefined();
+    await expect(ensurePrivateDirectory(root, { beforeExposureRepair: async () => undefined }))
+      .rejects.toThrow('extended ACL');
+    await expect(assertPrivateDirectory(root)).rejects.toThrow('extended ACL');
     expect((await fs.stat(root)).mode & 0o777).toBe(0o700);
   });
 
-  it.runIf(process.platform === 'darwin')('removes a deny-only ACL without classifying contents as exposed', async () => {
+  it.runIf(process.platform === 'darwin')('rejects a deny-only ACL without mutating the directory', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-deny-acl-'));
     const sentinel = path.join(root, 'sentinel');
     await fs.writeFile(sentinel, 'preserve');
@@ -47,10 +65,8 @@ describe('private directory validation', () => {
 
     await expect(assertPrivateDirectory(root)).rejects.toThrow('extended ACL');
 
-    const repair = await ensurePrivateDirectory(root);
-
-    expect(repair.contentsMayHaveBeenExposed).toBe(false);
-    await expect(assertPrivateDirectory(root)).resolves.toBeUndefined();
+    await expect(ensurePrivateDirectory(root)).rejects.toThrow('extended ACL');
+    await expect(assertPrivateDirectory(root)).rejects.toThrow('extended ACL');
     await expect(fs.readFile(sentinel, 'utf8')).resolves.toBe('preserve');
   });
 });

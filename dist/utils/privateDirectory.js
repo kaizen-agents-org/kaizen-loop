@@ -37,33 +37,28 @@ async function validatePrivateDirectory(directory, repairMode, beforeExposureRep
     const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
     if (process.platform === 'win32')
         return { contentsMayHaveBeenExposed: false };
-    const contentsMayHaveBeenExposed = (before.mode & 0o077) !== 0 ||
-        (process.platform === 'darwin' && await hasExposureGrantAcl(directory));
-    if (repairMode && contentsMayHaveBeenExposed) {
-        if (!beforeExposureRepair) {
-            throw new Error(`Refusing to repair an exposed private directory without a durable taint handler: ${directory}`);
-        }
-        await beforeExposureRepair();
-    }
-    if (!repairMode && (before.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
-        throw new Error(`Private directory path must have mode 0700: ${directory}`);
-    }
-    if (repairMode && (before.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
-        if (process.platform === 'darwin')
-            await execFileAsync('/bin/chmod', ['-h', '700', directory]);
-        else
-            await fs.chmod(directory, PRIVATE_DIRECTORY_MODE);
-        assertSameDirectory(directory, before, await fs.lstat(directory), uid);
-    }
     const noFollow = constants.O_NOFOLLOW ?? 0;
     const handle = await fs.open(directory, constants.O_RDONLY | noFollow);
     try {
         const opened = await handle.stat();
         assertSameDirectory(directory, before, opened, uid);
-        if (repairMode) {
-            if (process.platform === 'darwin') {
-                await execFileAsync('/bin/chmod', ['-h', '-N', directory]);
+        const aclEntries = process.platform === 'darwin' ? await extendedAclEntries(directory) : [];
+        assertSameDirectory(directory, before, await fs.lstat(directory), uid);
+        const contentsMayHaveBeenExposed = (opened.mode & 0o077) !== 0 || aclEntriesGrantExposure(aclEntries);
+        if (repairMode && contentsMayHaveBeenExposed) {
+            if (!beforeExposureRepair) {
+                throw new Error(`Refusing to repair an exposed private directory without a durable taint handler: ${directory}`);
             }
+            await beforeExposureRepair();
+            assertSameDirectory(directory, before, await fs.lstat(directory), uid);
+        }
+        if (aclEntries.length > 0) {
+            throw new Error(`Private directory path must not grant access through an extended ACL: ${directory}`);
+        }
+        if (!repairMode && (opened.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
+            throw new Error(`Private directory path must have mode 0700: ${directory}`);
+        }
+        if (repairMode) {
             await handle.chmod(PRIVATE_DIRECTORY_MODE);
         }
         if (process.platform === 'darwin')
@@ -75,11 +70,11 @@ async function validatePrivateDirectory(directory, repairMode, beforeExposureRep
         if ((secured.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
             throw new Error(`Private directory path must have mode 0700: ${directory}`);
         }
+        return { contentsMayHaveBeenExposed };
     }
     finally {
         await handle.close();
     }
-    return { contentsMayHaveBeenExposed };
 }
 function assertOwnedRealDirectory(directory, stats) {
     if (!stats.isDirectory() || stats.isSymbolicLink()) {
@@ -107,8 +102,11 @@ async function hasExtendedAcl(directory) {
     return (await extendedAclEntries(directory)).length > 0;
 }
 async function hasExposureGrantAcl(directory) {
+    return aclEntriesGrantExposure(await extendedAclEntries(directory));
+}
+function aclEntriesGrantExposure(entries) {
     const owner = os.userInfo().username;
-    return (await extendedAclEntries(directory)).some((entry) => {
+    return entries.some((entry) => {
         if (!/\ballow\b/.test(entry))
             return false;
         const user = entry.match(/^\s*\d+:\s+user:(\S+)\s+/);
