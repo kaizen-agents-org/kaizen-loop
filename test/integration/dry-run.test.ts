@@ -3631,7 +3631,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,
@@ -3650,6 +3650,7 @@ describe('runKaizen PR flow', () => {
     let draftBody = '';
     let resultComment = '';
     let verifierRuns = 0;
+    let setupRuns = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue()]));
@@ -3695,6 +3696,10 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') return result(command, args, workspace, 'abc123\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        setupRuns += 1;
+        return result(command, args, workspace, 'installed');
+      }
       if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
       return result(command, args, options?.cwd, '');
     });
@@ -3724,6 +3729,7 @@ describe('runKaizen PR flow', () => {
     });
 
     const builderCallsBeforeResume = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const setupRunsBeforeResume = setupRuns;
     const resumed = await runKaizen({
       cwd: repo,
       project: 'o-r',
@@ -3736,6 +3742,8 @@ describe('runKaizen PR flow', () => {
     expect('issues' in resumed && resumed.issues[0].outcome).toBe('pr-created');
     expect(verifierRuns).toBe(2);
     expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(builderCallsBeforeResume);
+    expect(setupRunsBeforeResume).toBe(3);
+    expect(setupRuns - setupRunsBeforeResume).toBe(2);
     expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args.join(' ') === '-lc npm test')).toBe(true);
   });
 
@@ -4196,7 +4204,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
-    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
+    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(3);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
     expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
   });
@@ -4208,7 +4216,7 @@ describe('runKaizen PR flow', () => {
     vi.stubEnv('KAIZEN_HOME', home);
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
-    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] }));
     await saveRegistry({
       version: 1,
       projects: {
@@ -4220,6 +4228,7 @@ describe('runKaizen PR flow', () => {
     });
 
     let resultComment = '';
+    let setupRuns = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(193)]));
@@ -4242,6 +4251,10 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        setupRuns += 1;
+        return result(command, args, options?.cwd, 'installed');
+      }
       if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, options?.cwd, '112 passed, 5 skipped');
       if (command === 'verifier' && args[0] !== '--version') throw new Error('PR verifier must not run for a zero-diff success');
       return result(command, args, options?.cwd, '');
@@ -4263,6 +4276,7 @@ describe('runKaizen PR flow', () => {
     });
     expect(resultComment).toContain('Already fixed; verification passed with no changes');
     expect(resultComment).toContain('`npm test` passed');
+    expect(setupRuns).toBe(3);
     expect(resultComment).toContain('"outcome":"already-fixed"');
     expect(runner.mock.calls).toContainEqual([
       'gh', ['issue', 'close', '193'], expect.any(Object)

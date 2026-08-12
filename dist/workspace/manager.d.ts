@@ -55,7 +55,6 @@ export declare class WorkspaceManager {
     removeIssueWorktree(worktreePath: string): Promise<void>;
     collectDiffStats(config: KaizenConfig): Promise<DiffStats>;
     collectCheckpointDiffStats(config: KaizenConfig): Promise<DiffStats>;
-    checkpointFingerprint(config: KaizenConfig, runDeadlineAt?: number): Promise<string>;
     collectDiffText(config: KaizenConfig, maxChars?: number): Promise<string>;
     collectWorkingTreeDiffStats(config: KaizenConfig): Promise<DiffStats>;
     collectWorkingTreeDiffText(maxChars?: number): Promise<string>;

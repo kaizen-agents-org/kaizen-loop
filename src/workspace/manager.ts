@@ -1,6 +1,4 @@
 import fs from 'node:fs/promises';
-import { createHash, type Hash } from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import type { KaizenConfig } from '../config/schema.js';
@@ -38,8 +36,6 @@ export class CheckpointBranchDivergedError extends Error {
 }
 
 const DEFAULT_DIFF_TEXT_MAX_CHARS = 30_000;
-const CHECKPOINT_MAX_ENTRIES = 10_000;
-const CHECKPOINT_MAX_BYTES = 64 * 1024 * 1024;
 
 export class WorkspaceManager {
   constructor(
@@ -224,18 +220,6 @@ export class WorkspaceManager {
     };
   }
 
-  async checkpointFingerprint(config: KaizenConfig, runDeadlineAt?: number): Promise<string> {
-    const files = await this.git().checkpointFiles(`origin/${config.git.defaultBranch}`);
-    const hash = createHash('sha256');
-    const budget = { entries: 0, bytes: 0, runDeadlineAt };
-    for (const file of files.sort()) {
-      hash.update(`path\0${file}\0`);
-      const entryPath = await validatedWorkspaceEntryPath(this.workspacePath, file);
-      await hashWorkspaceEntry(entryPath, hash, budget, async () => this.git().gitlinkFingerprint(file));
-    }
-    return hash.digest('hex');
-  }
-
   async collectDiffText(config: KaizenConfig, maxChars = DEFAULT_DIFF_TEXT_MAX_CHARS): Promise<string> {
     const base = `origin/${config.git.defaultBranch}`;
     const diff = await this.git().diff(base);
@@ -346,97 +330,4 @@ function parseStatusFiles(status: string): string[] {
     .map((line) => line.slice(3))
     .flatMap((file) => file.includes(' -> ') ? file.split(' -> ') : [file])
     .map((file) => file.replace(/^"|"$/g, ''));
-}
-
-async function validatedWorkspaceEntryPath(workspacePath: string, inventoryPath: string): Promise<string> {
-  if (!inventoryPath || path.isAbsolute(inventoryPath)) {
-    throw new Error(`Checkpoint fingerprint refuses path outside workspace: ${inventoryPath}`);
-  }
-  const root = path.resolve(workspacePath);
-  const entry = path.resolve(root, inventoryPath);
-  const relative = path.relative(root, entry);
-  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error(`Checkpoint fingerprint refuses path outside workspace: ${inventoryPath}`);
-  }
-
-  const components = relative.split(path.sep).filter(Boolean);
-  let current = root;
-  for (let index = 0; index < components.length; index += 1) {
-    let stat;
-    try {
-      stat = await fs.lstat(current);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return entry;
-      throw error;
-    }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error(`Checkpoint fingerprint refuses symlinked or non-directory parent: ${current}`);
-    }
-    current = path.join(current, components[index]);
-  }
-  return entry;
-}
-
-async function hashWorkspaceEntry(
-  entryPath: string,
-  hash: Hash,
-  budget: { entries: number; bytes: number; runDeadlineAt?: number },
-  gitlinkFingerprint: () => Promise<string | undefined>
-): Promise<void> {
-  if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt) throw new Error('Checkpoint fingerprint deadline exceeded.');
-  budget.entries += 1;
-  if (budget.entries > CHECKPOINT_MAX_ENTRIES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_ENTRIES} entries.`);
-  let stat;
-  try {
-    stat = await fs.lstat(entryPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      hash.update('missing\0');
-      return;
-    }
-    throw error;
-  }
-  hash.update(`mode\0${stat.mode}\0`);
-  if (stat.isSymbolicLink()) {
-    hash.update(`symlink\0${await fs.readlink(entryPath)}\0`);
-    return;
-  }
-  if (stat.isDirectory()) {
-    const fingerprint = await gitlinkFingerprint();
-    if (!fingerprint) throw new Error('Checkpoint fingerprint refuses non-gitlink directory entries.');
-    hash.update(`gitlink\0${fingerprint}\0`);
-    return;
-  }
-  if (stat.isFile()) {
-    hash.update('file\0');
-    const noFollow = process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW;
-    const handle = await fs.open(entryPath, fsConstants.O_RDONLY | noFollow);
-    try {
-      const opened = await handle.stat();
-      if (
-        opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size
-        || opened.mtimeMs !== stat.mtimeMs || opened.mode !== stat.mode || !opened.isFile()
-      ) throw new Error('Checkpoint file changed during validation.');
-      if (budget.bytes + opened.size > CHECKPOINT_MAX_BYTES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_BYTES} bytes.`);
-      const buffer = Buffer.allocUnsafe(64 * 1024);
-      let position = 0;
-      while (position < opened.size) {
-        if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt) throw new Error('Checkpoint fingerprint deadline exceeded.');
-        const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, opened.size - position), position);
-        if (bytesRead === 0) throw new Error('Checkpoint file changed while hashing.');
-        if (budget.bytes + bytesRead > CHECKPOINT_MAX_BYTES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_BYTES} bytes.`);
-        hash.update(buffer.subarray(0, bytesRead));
-        position += bytesRead;
-        budget.bytes += bytesRead;
-      }
-      const after = await handle.stat();
-      if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) {
-        throw new Error('Checkpoint file changed while hashing.');
-      }
-    } finally {
-      await handle.close();
-    }
-    return;
-  }
-  hash.update(`other\0${stat.size}\0`);
 }
