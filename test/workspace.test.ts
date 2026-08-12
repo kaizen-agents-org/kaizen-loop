@@ -109,6 +109,24 @@ describe('workspace branch handling', () => {
     expect(after).not.toBe(before);
   });
 
+  it('includes staged-only paths in checkpoint fingerprints', async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    await fs.writeFile(path.join(workspacePath, 'package-lock.json'), 'staged content\n');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: 0,
+      stdout: args.join(' ') === 'diff --cached --name-only -z' ? 'package-lock.json\0' : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+
+    await expect(workspace.checkpointFingerprint(configSchema.parse({ version: 1 }))).resolves.toMatch(/^[0-9a-f]{64}$/);
+    expect(runner.mock.calls.some(([, args]) => args.join(' ') === 'diff --cached --name-only -z')).toBe(true);
+  });
+
   it('can force-with-lease when pushing regenerated issue branches', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
