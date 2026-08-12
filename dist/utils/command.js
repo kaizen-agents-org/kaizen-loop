@@ -52,6 +52,7 @@ const INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS = publicationTimeoutMs(process.env.K
 const activeChildren = new Set();
 const activePublicationSockets = new Set();
 const PROCESS_TERMINATION_GRACE_MS = 250;
+const OUTPUT_LIMIT_FORCE_KILL_MS = 1_000;
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal;
 export const COMMAND_RUNNER_INJECTION = Symbol.for('kaizen.commandRunnerInjection');
@@ -77,17 +78,18 @@ const executeCommand = async (command, args, options = {}) => {
         let stderr = '';
         let settled = false;
         let timeout;
-        let forceKillTimeout;
+        const forceKillTimeouts = new Set();
         let timedOut = false;
+        let outputLimitExceeded = false;
+        let capturedOutputBytes = 0;
         const clearTimers = () => {
             if (timeout) {
                 clearTimeout(timeout);
                 timeout = undefined;
             }
-            if (forceKillTimeout) {
-                clearTimeout(forceKillTimeout);
-                forceKillTimeout = undefined;
-            }
+            for (const timer of forceKillTimeouts)
+                clearTimeout(timer);
+            forceKillTimeouts.clear();
         };
         if (options.timeoutMs && options.timeoutMs > 0) {
             timeout = setTimeout(() => {
@@ -95,18 +97,38 @@ const executeCommand = async (command, args, options = {}) => {
                     return;
                 timedOut = true;
                 terminateProcessTree(child, 'SIGTERM');
-                forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000);
+                const forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000);
+                forceKillTimeouts.add(forceKillTimeout);
                 forceKillTimeout.unref();
             }, options.timeoutMs);
             timeout.unref();
         }
         child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
+        const captureOutput = (chunk, target) => {
+            if (outputLimitExceeded)
+                return;
+            const chunkBytes = Buffer.byteLength(chunk);
+            const remaining = options.maxOutputBytes === undefined ? chunkBytes : options.maxOutputBytes - capturedOutputBytes;
+            const captured = remaining >= chunkBytes ? chunk : truncateUtf8(chunk, Math.max(0, remaining));
+            if (target === 'stdout')
+                stdout += captured;
+            else
+                stderr += captured;
+            capturedOutputBytes += Buffer.byteLength(captured);
+            if (options.maxOutputBytes !== undefined && chunkBytes > remaining) {
+                outputLimitExceeded = true;
+                terminateProcessTree(child, 'SIGTERM');
+                const forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), OUTPUT_LIMIT_FORCE_KILL_MS);
+                forceKillTimeouts.add(forceKillTimeout);
+                forceKillTimeout.unref();
+            }
+        };
         child.stdout.on('data', (chunk) => {
-            stdout += chunk;
+            captureOutput(chunk, 'stdout');
         });
         child.stderr.on('data', (chunk) => {
-            stderr += chunk;
+            captureOutput(chunk, 'stderr');
         });
         child.on('error', (error) => {
             if (settled)
@@ -142,6 +164,12 @@ const executeCommand = async (command, args, options = {}) => {
                     reject(err);
                     return;
                 }
+                if (outputLimitExceeded) {
+                    const err = new Error(`Command output exceeded ${options.maxOutputBytes} bytes: ${formatCommand(command, args)}`);
+                    Object.assign(err, { result });
+                    reject(err);
+                    return;
+                }
                 if (options.rejectOnNonZero !== false && result.exitCode !== 0) {
                     const err = new Error(formatCommandFailure(result));
                     Object.assign(err, { result });
@@ -163,6 +191,18 @@ const executeCommand = async (command, args, options = {}) => {
     });
 };
 export const runCommand = withTrustedExecutables(executeCommand, initialTrustedExecutables());
+function truncateUtf8(value, maxBytes) {
+    let bytes = 0;
+    let result = '';
+    for (const character of value) {
+        const characterBytes = Buffer.byteLength(character);
+        if (bytes + characterBytes > maxBytes)
+            break;
+        result += character;
+        bytes += characterBytes;
+    }
+    return result;
+}
 function initialTrustedExecutables() {
     return {
         git: INITIAL_GIT_EXECUTABLE,

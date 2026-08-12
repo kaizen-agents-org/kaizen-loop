@@ -3631,7 +3631,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] })
+      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] })
     );
     await saveRegistry({
       version: 1,
@@ -3650,6 +3650,7 @@ describe('runKaizen PR flow', () => {
     let draftBody = '';
     let resultComment = '';
     let verifierRuns = 0;
+    let setupRuns = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue()]));
@@ -3695,6 +3696,10 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') return result(command, args, workspace, 'abc123\n');
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        setupRuns += 1;
+        return result(command, args, workspace, 'installed');
+      }
       if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
       return result(command, args, options?.cwd, '');
     });
@@ -3724,6 +3729,7 @@ describe('runKaizen PR flow', () => {
     });
 
     const builderCallsBeforeResume = runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version').length;
+    const setupRunsBeforeResume = setupRuns;
     const resumed = await runKaizen({
       cwd: repo,
       project: 'o-r',
@@ -3736,6 +3742,8 @@ describe('runKaizen PR flow', () => {
     expect('issues' in resumed && resumed.issues[0].outcome).toBe('pr-created');
     expect(verifierRuns).toBe(2);
     expect(runner.mock.calls.filter(([command, args]) => command === 'builder-agent' && args[0] !== '--version')).toHaveLength(builderCallsBeforeResume);
+    expect(setupRunsBeforeResume).toBe(3);
+    expect(setupRuns - setupRunsBeforeResume).toBe(2);
     expect(runner.mock.calls.some(([command, args]) => command === 'sh' && args.join(' ') === '-lc npm test')).toBe(true);
   });
 
@@ -3826,7 +3834,7 @@ describe('runKaizen PR flow', () => {
     expect(prBody).toContain('reported: Kaizen Loop ran verifier, but verifier evidence is based on text reporting rather than execution proof');
   });
 
-  it('includes all six evidence-package sections in generated PR bodies', async () => {
+  it('runs setup for committed Builder edits before verification and includes all PR evidence sections', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -3835,7 +3843,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test', 'npm run typecheck'] })
+      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test', 'npm run typecheck'] })
     );
     await saveRegistry({
       version: 1,
@@ -3852,6 +3860,9 @@ describe('runKaizen PR flow', () => {
     });
 
     let prBody = '';
+    const executionOrder: string[] = [];
+    let builderFinished = false;
+    let setupCalls = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(1, { body: 'Users cannot log in when the session cookie expires.' })]));
@@ -3863,6 +3874,8 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
+        executionOrder.push('builder');
+        builderFinished = true;
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: 'Refreshed the session cookie before it expires so users stay logged in.',
@@ -3881,10 +3894,28 @@ describe('runKaizen PR flow', () => {
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
+      // Builder committed its edit, so the working tree is clean while the
+      // branch diff still contains the dependency-affecting change.
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
-      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/auth/session.ts\n');
-      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '4\t1\tsrc/auth/session.ts\n');
-      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') {
+        return result(command, args, workspace, builderFinished ? 'src/auth/session.ts\n' : '');
+      }
+      if (command === 'git' && args.join(' ') === 'diff --no-renames --name-only -z origin/main...HEAD') {
+        return result(command, args, workspace, builderFinished ? 'src/auth/session.ts\0' : '');
+      }
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') {
+        return result(command, args, workspace, builderFinished ? '4\t1\tsrc/auth/session.ts\n' : '');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        setupCalls += 1;
+        executionOrder.push('setup');
+        if (setupCalls === 3) return failedResult(command, args, workspace, 'transient install failure');
+        return result(command, args, workspace, 'dependencies installed');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm test') {
+        executionOrder.push('verify');
+        return result(command, args, workspace, 'ok');
+      }
       if (command === 'sh' && args.join(' ') === '-lc npm run typecheck') return result(command, args, workspace, 'ok');
       return result(command, args, options?.cwd, '');
     });
@@ -3916,6 +3947,14 @@ describe('runKaizen PR flow', () => {
     expect(prBody).toContain('## Verification');
     expect(prBody).toContain('`npm test` — 成功');
     expect(prBody).toContain('`npm run typecheck` — 成功');
+    const builderIndex = executionOrder.lastIndexOf('builder');
+    const postBuilderSetupIndex = executionOrder.indexOf('setup', builderIndex + 1);
+    const postBuilderVerifyIndex = executionOrder.indexOf('verify', postBuilderSetupIndex + 1);
+    expect(builderIndex).toBeGreaterThanOrEqual(0);
+    expect(postBuilderSetupIndex).toBeGreaterThan(builderIndex);
+    expect(postBuilderVerifyIndex).toBeGreaterThan(postBuilderSetupIndex);
+    expect(executionOrder.filter((step) => step === 'builder')).toHaveLength(2);
+    expect(setupCalls).toBe(4);
     // 5. verifier verdict と根拠(evidence_grade 含む)
     expect(prBody).toContain('## Verifier verdict');
     expect(prBody).toContain('verifier: open_pr');
@@ -4107,7 +4146,7 @@ describe('runKaizen PR flow', () => {
       }
     });
 
-    let statusCalls = 0;
+    let verifierFinished = false;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue()]));
@@ -4129,12 +4168,12 @@ describe('runKaizen PR flow', () => {
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
+        verifierFinished = true;
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') {
-        statusCalls += 1;
-        return result(command, args, workspace, statusCalls === 2 ? 'M generated.txt\n' : '');
+        return result(command, args, workspace, verifierFinished ? 'M generated.txt\n' : '');
       }
       // `git diff --cached --quiet` exits non-zero when something is staged.
       // The generated change here is not harness scratch, so it survives the
@@ -4165,7 +4204,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
-    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
+    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(3);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
     expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
   });
@@ -4177,7 +4216,7 @@ describe('runKaizen PR flow', () => {
     vi.stubEnv('KAIZEN_HOME', home);
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
-    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test'] }));
     await saveRegistry({
       version: 1,
       projects: {
@@ -4189,6 +4228,7 @@ describe('runKaizen PR flow', () => {
     });
 
     let resultComment = '';
+    let setupRuns = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(193)]));
@@ -4211,6 +4251,10 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        setupRuns += 1;
+        return result(command, args, options?.cwd, 'installed');
+      }
       if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, options?.cwd, '112 passed, 5 skipped');
       if (command === 'verifier' && args[0] !== '--version') throw new Error('PR verifier must not run for a zero-diff success');
       return result(command, args, options?.cwd, '');
@@ -4232,6 +4276,7 @@ describe('runKaizen PR flow', () => {
     });
     expect(resultComment).toContain('Already fixed; verification passed with no changes');
     expect(resultComment).toContain('`npm test` passed');
+    expect(setupRuns).toBe(3);
     expect(resultComment).toContain('"outcome":"already-fixed"');
     expect(runner.mock.calls).toContainEqual([
       'gh', ['issue', 'close', '193'], expect.any(Object)
@@ -4323,14 +4368,16 @@ describe('runKaizen PR flow', () => {
     ]);
   });
 
-  it('fails closed when a fixed result has no diff and configured verification fails', async () => {
+  it('runs configured Cargo verification after Builder and fails closed before publication', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
     vi.stubEnv('KAIZEN_HOME', home);
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
-    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({
+      agent: 'claude', setup: null, verify: ['cargo test', 'cargo clippy']
+    }));
     await saveRegistry({
       version: 1,
       projects: {
@@ -4341,7 +4388,9 @@ describe('runKaizen PR flow', () => {
       }
     });
 
-    let verifyCalls = 0;
+    const verifyCommands: string[] = [];
+    let clippyCalls = 0;
+    let builderPrompt = '';
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(193)]));
@@ -4349,6 +4398,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
+        builderPrompt = String(options?.input ?? '');
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed', summary: 'Already fixed.', notes: ''
         });
@@ -4358,11 +4408,16 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
-      if (command === 'sh' && args.join(' ') === '-lc npm test') {
-        verifyCalls += 1;
-        return verifyCalls === 1
-          ? result(command, args, options?.cwd, 'baseline passed')
-          : failedResult(command, args, options?.cwd, 'verification failed');
+      if (command === 'sh' && args.join(' ') === '-lc cargo test') {
+        verifyCommands.push('cargo test');
+        return result(command, args, options?.cwd, 'cargo tests passed');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc cargo clippy') {
+        verifyCommands.push('cargo clippy');
+        clippyCalls += 1;
+        return clippyCalls === 1
+          ? result(command, args, options?.cwd, 'baseline clippy passed')
+          : failedResult(command, args, options?.cwd, 'post-builder clippy failed');
       }
       return result(command, args, options?.cwd, '');
     });
@@ -4373,12 +4428,17 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary).toMatchObject({
       result: 'failed',
-      issues: [{ number: 193, outcome: 'failed', reason: 'Verification failed: npm test' }],
+      issues: [{ number: 193, outcome: 'failed', reason: 'Verification failed: cargo clippy' }],
       queue: { health: { state: 'blocked' } }
     });
-    expect(verifyCalls).toBe(2);
+    expect(verifyCommands).toEqual(['cargo test', 'cargo clippy', 'cargo test', 'cargo clippy']);
+    expect(builderPrompt).not.toContain('cargo test');
+    expect(builderPrompt).not.toContain('cargo clippy');
     expect(runner.mock.calls.some(([command, args]) =>
       command === 'gh' && args[0] === 'issue' && args[1] === 'close'
+    )).toBe(false);
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'gh' && args[0] === 'pr' && args[1] === 'create'
     )).toBe(false);
   });
 

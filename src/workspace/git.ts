@@ -391,11 +391,12 @@ export class GitClient {
     if (cleanupError !== undefined) throw cleanupError;
   }
 
-  private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv }) {
+  private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv; maxOutputBytes?: number }) {
     return this.run('git', args, {
       cwd: this.cwd,
       env: options?.env ?? gitCliEnv(),
-      rejectOnNonZero: options?.rejectOnNonZero
+      rejectOnNonZero: options?.rejectOnNonZero,
+      maxOutputBytes: options?.maxOutputBytes
     });
   }
 }
