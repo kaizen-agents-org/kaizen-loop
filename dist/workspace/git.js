@@ -174,8 +174,8 @@ export class GitClient {
             .filter(Boolean);
     }
     async checkpointFiles(base) {
-        const committed = await this.git(['diff', '--name-only', '-z', `${base}...HEAD`], { maxOutputBytes: 2 * 1024 * 1024 });
-        const staged = await this.git(['diff', '--cached', '--name-only', '-z'], { maxOutputBytes: 2 * 1024 * 1024 });
+        const committed = await this.git(['diff', '--no-renames', '--name-only', '-z', `${base}...HEAD`], { maxOutputBytes: 2 * 1024 * 1024 });
+        const staged = await this.git(['diff', '--cached', '--no-renames', '--name-only', '-z'], { maxOutputBytes: 2 * 1024 * 1024 });
         const working = await this.git(['ls-files', '--modified', '--others', '--exclude-standard', '-z'], { maxOutputBytes: 2 * 1024 * 1024 });
         return [...new Set(`${committed.stdout}${staged.stdout}${working.stdout}`.split('\0').filter(Boolean))];
     }

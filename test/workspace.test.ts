@@ -49,7 +49,7 @@ describe('workspace branch handling', () => {
       exitCode: 0,
       stdout: args.join(' ') === 'diff --name-only origin/main...HEAD'
         ? '"p\\303\\244ckage-lock.json"\n'
-        : args.join(' ') === 'diff --name-only -z origin/main...HEAD'
+        : args.join(' ') === 'diff --no-renames --name-only -z origin/main...HEAD'
           ? 'päckage-lock.json\0'
         : args.join(' ') === 'diff --numstat origin/main...HEAD'
           ? '1\t1\t"p\\303\\244ckage-lock.json"\n'
@@ -89,7 +89,7 @@ describe('workspace branch handling', () => {
       args,
       cwd: workspacePath,
       exitCode: 0,
-      stdout: args.join(' ') === 'diff --name-only -z origin/main...HEAD'
+      stdout: args.join(' ') === 'diff --no-renames --name-only -z origin/main...HEAD'
         ? 'vendor/dependency\0'
         : args[0] === 'ls-files' && args[1] === '--stage'
           ? `160000 ${'a'.repeat(40)} 0\tvendor/dependency\0`
@@ -117,14 +117,37 @@ describe('workspace branch handling', () => {
       args,
       cwd: workspacePath,
       exitCode: 0,
-      stdout: args.join(' ') === 'diff --cached --name-only -z' ? 'package-lock.json\0' : '',
+      stdout: args.join(' ') === 'diff --cached --no-renames --name-only -z' ? 'package-lock.json\0' : '',
       stderr: '',
       durationMs: 1
     }));
     const workspace = new WorkspaceManager(runner, workspacePath);
 
     await expect(workspace.checkpointFingerprint(configSchema.parse({ version: 1 }))).resolves.toMatch(/^[0-9a-f]{64}$/);
-    expect(runner.mock.calls.some(([, args]) => args.join(' ') === 'diff --cached --name-only -z')).toBe(true);
+    expect(runner.mock.calls.some(([, args]) => args.join(' ') === 'diff --cached --no-renames --name-only -z')).toBe(true);
+  });
+
+  it('disables rename detection so dependency source and destination paths are both inventoried', async () => {
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: '/workspace',
+      exitCode: 0,
+      stdout: args.join(' ') === 'diff --no-renames --name-only -z origin/main...HEAD'
+        ? 'packages/old/package-lock.json\0packages/new/package-lock.json\0'
+        : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const git = new GitClient(trustedRunner(runner), '/workspace');
+
+    await expect(git.checkpointFiles('origin/main')).resolves.toEqual([
+      'packages/old/package-lock.json',
+      'packages/new/package-lock.json'
+    ]);
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).toContain(
+      'diff --no-renames --name-only -z origin/main...HEAD'
+    );
   });
 
   it('can force-with-lease when pushing regenerated issue branches', async () => {
