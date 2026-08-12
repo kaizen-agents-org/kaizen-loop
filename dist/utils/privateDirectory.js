@@ -22,6 +22,16 @@ async function validatePrivateDirectory(directory, repairMode) {
     }
     if (process.platform === 'win32')
         return;
+    if (!repairMode && (before.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
+        throw new Error(`Private directory path must have mode 0700: ${directory}`);
+    }
+    if (repairMode && (before.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
+        if (process.platform === 'darwin')
+            await execFileAsync('/bin/chmod', ['-h', '700', directory]);
+        else
+            await fs.chmod(directory, PRIVATE_DIRECTORY_MODE);
+        assertSameDirectory(directory, before, await fs.lstat(directory), uid);
+    }
     const noFollow = constants.O_NOFOLLOW ?? 0;
     const handle = await fs.open(directory, constants.O_RDONLY | noFollow);
     try {

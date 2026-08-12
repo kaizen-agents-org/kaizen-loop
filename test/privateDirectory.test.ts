@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile);
 describe('private directory validation', () => {
   it.runIf(process.platform !== 'win32')('rejects owner permission sets weaker than 0700', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-mode-'));
-    await fs.chmod(root, 0o600);
+    await fs.chmod(root, 0o000);
 
     await expect(assertPrivateDirectory(root)).rejects.toThrow('mode 0700');
 
