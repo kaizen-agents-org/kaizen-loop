@@ -61,25 +61,22 @@ export async function markWorkspaceContentsUntrusted(stateDir: string): Promise<
 
 export async function ensurePrivateProjectStateDirectory(
   stateDir: string
-): Promise<{ contentsMayHaveBeenExposed: boolean }> {
-  let contentsMayHaveBeenExposed = false;
+): Promise<void> {
   const hierarchy = projectStateHierarchy(stateDir);
-  for (const [index, directory] of hierarchy.entries()) {
+  for (const directory of hierarchy) {
     let modifiableByOthers = false;
     try {
       modifiableByOthers = await privateDirectoryMayBeModifiedByOthers(directory);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    if (modifiableByOthers && index < hierarchy.length - 1) {
-      throw new Error(`Refusing to repair an exposed project-state ancestor: ${directory}`);
+    if (modifiableByOthers) {
+      throw new Error(`Refusing to repair exposed project-state storage: ${directory}`);
     }
-    if (modifiableByOthers) contentsMayHaveBeenExposed = true;
     await ensurePrivateDirectory(directory, {
       beforeExposureRepair: async () => undefined
     });
   }
-  return { contentsMayHaveBeenExposed };
 }
 
 async function assertPrivateProjectStateDirectory(stateDir: string): Promise<boolean> {

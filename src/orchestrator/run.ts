@@ -152,8 +152,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 
   const stateDir = projectStateDir(resolved.slug);
-  const stateRepair = await ensurePrivateProjectStateDirectory(stateDir);
-  if (stateRepair.contentsMayHaveBeenExposed) await markWorkspaceContentsUntrusted(stateDir);
+  await ensurePrivateProjectStateDirectory(stateDir);
   await ensureNotPaused(stateDir);
   const ownsLock = options.existingLock === undefined;
   let lock: RunLock;

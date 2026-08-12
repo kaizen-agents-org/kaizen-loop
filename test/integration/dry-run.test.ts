@@ -267,7 +267,7 @@ describe('runKaizen dry-run', () => {
 
     await expect(runKaizen({
       cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
-    })).rejects.toThrow('exposed project-state ancestor');
+    })).rejects.toThrow('exposed project-state storage');
 
     expect((await fs.stat(projectsDir)).mode & 0o777).toBe(0o777);
     expect(runner).not.toHaveBeenCalled();
@@ -330,7 +330,7 @@ describe('runKaizen dry-run', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it.runIf(process.platform !== 'win32')('rebuilds the workspace after repairing an exposed state directory', async () => {
+  it.runIf(process.platform !== 'win32')('refuses an exposed project state directory without repairing it', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -356,29 +356,15 @@ describe('runKaizen dry-run', () => {
         }
       }
     });
-    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
-      if (isGitCommand(command) && args.join(' ') === 'remote get-url origin') {
-        return result(command, args, options?.cwd, 'https://github.com/o/r.git\n');
-      }
-      if (isGitCommand(command) && args[0] === 'clone') {
-        await fs.mkdir(path.join(args[2], '.git'), { recursive: true });
-        return result(command, args, options?.cwd, 'cloned');
-      }
-      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
-        return result(command, args, options?.cwd, '[]');
-      }
-      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
-    });
+    const runner = vi.fn<CommandRunner>();
 
-    await runKaizen({
+    await expect(runKaizen({
       cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
-    });
+    })).rejects.toThrow('exposed project-state storage');
 
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o700);
-    expect(runner.mock.calls.some(([command, args]) => isGitCommand(command) && args[0] === 'clone')).toBe(true);
-    await expect(fs.access(path.join(stateDir, 'workspace-contents-untrusted')))
-      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readFile(sentinel, 'utf8')).resolves.toBe('replace');
+    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o777);
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it('repairs an owner-only workspace mode without rebuilding its contents', async () => {

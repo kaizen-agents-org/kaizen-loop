@@ -33,10 +33,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
   const resolved = await resolveProject(options.project, options.cwd);
   const stateDir = projectStateDir(resolved.slug);
-  if (options.repair) {
-    const stateRepair = await ensurePrivateProjectStateDirectory(stateDir);
-    if (stateRepair.contentsMayHaveBeenExposed) await markWorkspaceContentsUntrusted(stateDir);
-  }
+  if (options.repair) await ensurePrivateProjectStateDirectory(stateDir);
   const repairLock = options.repair ? await RunLock.acquire(stateDir) : undefined;
   try {
   let workspacePrivate = false;
