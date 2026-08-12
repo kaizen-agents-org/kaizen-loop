@@ -7,7 +7,7 @@ const VERIFICATION_LOG_MAX_CHARS = 8_000;
 const DEFERRED_VERIFICATION_CONSTRAINT =
   'Do not run repository setup or verification commands in this provider job. Leave the uncommitted edits for the separate credential-free verification phase; Kaizen Loop will run every configured command.';
 const LOCAL_VERIFICATION_CONSTRAINT =
-  `${DEFERRED_VERIFICATION_CONSTRAINT} In a local run, Kaizen Loop returns any failure for a repair attempt.`;
+  `${DEFERRED_VERIFICATION_CONSTRAINT} In a local run, Kaizen Loop returns a verification failure for a repair attempt when this job produced edits; a failure with no edits stops the run.`;
 const ACTIONS_VERIFICATION_CONSTRAINT =
   `${DEFERRED_VERIFICATION_CONSTRAINT} In the reusable Actions workflow, the verification job fails closed if any command fails.`;
 

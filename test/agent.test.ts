@@ -912,7 +912,7 @@ describe('buildFixPrompt', () => {
 
     expect(prompt).toContain('Do not run repository setup or verification commands in this provider job.');
     expect(prompt).toContain('Kaizen Loop will run every configured command.');
-    expect(prompt).toContain('In a local run, Kaizen Loop returns any failure for a repair attempt.');
+    expect(prompt).toContain('Kaizen Loop returns a verification failure for a repair attempt when this job produced edits; a failure with no edits stops the run.');
     expect(prompt).not.toContain(heredoc);
     expect(prompt).not.toContain('npm test');
   });
