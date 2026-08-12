@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { BuilderAgentAdapter } from '../agents/builder.js';
 import { ClaudeCodeAdapter } from '../agents/claude.js';
 import { CodexAdapter } from '../agents/codex.js';
@@ -11,6 +12,8 @@ import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
 import type { CommandRunner } from '../utils/command.js';
+import { projectStateDir, worktreesDirForWorkspace } from '../utils/paths.js';
+import { assertPrivateDirectory, makeDirectoryPrivate } from '../utils/privateDirectory.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
@@ -39,6 +42,9 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     await new GitHubClient(options.runCommand, configPath).createLabels(requiredLabels(loaded));
   });
   await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
+  await check(checks, 'workspace permissions', async () => {
+    await checkWorkspacePermissions(resolved.project.workspacePath, resolved.slug, options.repair === true);
+  });
   await check(checks, 'temporary directory', async () => void (await checkWorkspaceTempDir(resolved.project.workspacePath)));
   for (const agent of configuredAgents(config)) {
     await check(checks, `${agent} auth`, async () => {
@@ -110,6 +116,46 @@ function builderOptions(config: KaizenConfig) {
 async function checkWorkspaceTempDir(workspacePath: string): Promise<void> {
   await fs.access(workspacePath);
   await ensureKaizenTempDir(workspacePath);
+}
+
+async function checkWorkspacePermissions(workspacePath: string, slug: string, repair: boolean): Promise<void> {
+  const directories = [
+    workspacePath,
+    ...await existingWorktreeDirectories(workspacePath),
+    ...await existingGuardianWorktreeDirectories(slug)
+  ];
+  for (const directory of directories) {
+    if (repair) await makeDirectoryPrivate(directory);
+    await assertPrivateDirectory(directory);
+  }
+}
+
+async function existingGuardianWorktreeDirectories(slug: string): Promise<string[]> {
+  const root = path.join(projectStateDir(slug), 'guardian', 'worktrees');
+  try {
+    return [root, ...await childDirectories(root)];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function existingWorktreeDirectories(workspacePath: string): Promise<string[]> {
+  const root = worktreesDirForWorkspace(workspacePath);
+  let runDirectories;
+  try {
+    runDirectories = await childDirectories(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const worktrees = await Promise.all(runDirectories.map((directory) => childDirectories(directory)));
+  return [root, ...runDirectories, ...worktrees.flat()];
+}
+
+async function childDirectories(parent: string): Promise<string[]> {
+  const entries = await fs.readdir(parent, { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(parent, entry.name));
 }
 
 function configuredAgents(config: KaizenConfig | undefined): Array<'claude' | 'codex'> {

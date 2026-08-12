@@ -282,7 +282,8 @@ npx kaizen-loop fix 42 --json
 
 Local execution uses the same authorization, untrusted-input, path, verification,
 verifier, and PR-first gates. `kaizen doctor --repair` may recreate missing
-labels, but it does not decide whether your verification commands are correct.
+labels and restore managed workspace/worktree directories to mode `0700`, but it
+does not decide whether your verification commands are correct.
 See the [CLI specification](./02-cli-spec.md) and
 [instant-run behavior](./09-instant-run.md) before operating it unattended.
 

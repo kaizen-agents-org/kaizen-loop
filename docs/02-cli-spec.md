@@ -411,9 +411,9 @@ kaizen logs [--project <slug>] [--run <timestamp>] [--issue <番号>] [--guardia
 kaizen doctor [--project <slug>] [--repair]
 ```
 
-検査項目: gh 認証、開発 checkout と workspace の設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在。`doctor` は builder smoke test を実行するため、publication token を受け取らない。publication 用 token は credential-only な `init` / `actions prepare` / `actions publish` の各境界で検査する。運用検査には workspace 設定を使い、開発 checkout と意味的に異なる場合は `configuration.drift` に診断情報を返す。この差は feature branch 上の作業でも発生し得るため、それだけでは `ok: false` にしない。構造化された `verifier --version --json` provenance は必須であり、設定された canonical repository/ref の期待 commit、build commit、runtime commit が一致し、runtime が clean な場合だけ正常とする。旧 verifier のプレーンな version 出力は鮮度を証明できないため拒否する。再利用可能な Actions workflow は既定の `kaizen-agents-org/verifier` の `refs/heads/main` trust root のみをサポートし、カスタム trust root には対応する trusted workflow checkout が必要になる。
+検査項目: gh 認証、開発 checkout と workspace の設定ファイルのスキーマ妥当性、builder-agent、verifier、pr-guardian skill runner、ワークスペースパスの存在、base workspace と worktree 階層のモード `0700`。`doctor` は builder smoke test を実行するため、publication token を受け取らない。publication 用 token は credential-only な `init` / `actions prepare` / `actions publish` の各境界で検査する。運用検査には workspace 設定を使い、開発 checkout と意味的に異なる場合は `configuration.drift` に診断情報を返す。この差は feature branch 上の作業でも発生し得るため、それだけでは `ok: false` にしない。構造化された `verifier --version --json` provenance は必須であり、設定された canonical repository/ref の期待 commit、build commit、runtime commit が一致し、runtime が clean な場合だけ正常とする。旧 verifier のプレーンな version 出力は鮮度を証明できないため拒否する。再利用可能な Actions workflow は既定の `kaizen-agents-org/verifier` の `refs/heads/main` trust root のみをサポートし、カスタム trust root には対応する trusted workflow checkout が必要になる。
 
-`--repair`: 設定から必要な GitHub ラベルを再作成する。複数 repo の registry 再構築、stale ロック削除、ワークスペース再作成、スケジューラ定義の再生成は `kaizen fleet` を使う。
+`--repair`: 設定から必要な GitHub ラベルを再作成し、既存の base workspace、worktree 親、run、Issue worktree ディレクトリを `0700` に戻す。複数 repo の registry 再構築、stale ロック削除、ワークスペース再作成、スケジューラ定義の再生成は `kaizen fleet` を使う。
 
 ---
 

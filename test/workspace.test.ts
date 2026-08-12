@@ -17,6 +17,42 @@ afterEach(() => {
 describe('workspace branch handling', () => {
   afterEach(() => vi.unstubAllEnvs());
 
+  it('repairs an existing workspace directory to mode 0700', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    await fs.mkdir(path.join(workspacePath, '.git'), { recursive: true });
+    await fs.chmod(workspacePath, 0o755);
+    const runner = vi.fn<CommandRunner>();
+
+    await new WorkspaceManager(runner, workspacePath).ensure();
+
+    expect((await fs.stat(workspacePath)).mode & 0o777).toBe(0o700);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('creates worktree directories with mode 0700', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-test-'));
+    const workspacePath = path.join(root, 'workspace');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: args[0] === 'show-ref' ? 1 : 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    const created = await workspace.createIssueWorktree(config, { number: 12, title: 'Private worktree' }, 'new-run');
+    const worktreesRoot = path.join(root, 'workspace-worktrees');
+
+    for (const directory of [worktreesRoot, path.join(worktreesRoot, 'new-run'), created.path]) {
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
+    }
+  });
+
   it('replaces an existing deterministic issue branch before retrying', async () => {
     const runner = vi.fn<CommandRunner>(async (command, args) => ({
       command,

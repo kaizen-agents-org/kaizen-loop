@@ -4,6 +4,8 @@ import { minimatch } from 'minimatch';
 import { buildUntrustedEnv } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
+import { ensurePrivateDirectory, makeDirectoryPrivate } from '../utils/privateDirectory.js';
+import { worktreesDirForWorkspace } from '../utils/paths.js';
 import { GitClient } from './git.js';
 export class CheckpointBranchMissingError extends Error {
     branch;
@@ -37,10 +39,11 @@ export class WorkspaceManager {
         }
         catch {
             await fs.rm(this.workspacePath, { recursive: true, force: true });
-            await fs.mkdir(path.dirname(this.workspacePath), { recursive: true });
+            await ensurePrivateDirectory(this.workspacePath);
             const parentGit = new GitClient(this.run, path.dirname(this.workspacePath));
             await parentGit.clone(this.remoteUrl, this.workspacePath);
         }
+        await makeDirectoryPrivate(this.workspacePath);
     }
     git() {
         return new GitClient(this.run, this.workspacePath);
@@ -126,11 +129,14 @@ export class WorkspaceManager {
         await git.worktreePrune();
         await git.worktreeRemove(worktreePath);
         await fs.rm(worktreePath, { recursive: true, force: true });
-        await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+        await ensurePrivateDirectory(worktreesDirForWorkspace(this.workspacePath));
+        await ensurePrivateDirectory(path.dirname(worktreePath));
+        await ensurePrivateDirectory(worktreePath);
         await this.removeWorktreesForBranch(branch);
         if (!options.resume) {
             await git.deleteLocalBranch(branch);
             await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
+            await makeDirectoryPrivate(worktreePath);
             return { branch, path: worktreePath, resumed: false };
         }
         const localBranchExists = await git.localBranchExists(branch);
@@ -150,6 +156,7 @@ export class WorkspaceManager {
         else {
             await git.worktreeAdd(worktreePath, branch, `origin/${branch}`);
         }
+        await makeDirectoryPrivate(worktreePath);
         return { branch, path: worktreePath, resumed: true };
     }
     async discardIssueChanges(branch, defaultBranch) {
@@ -261,7 +268,7 @@ function issueBranchName(config, issue) {
     return `${config.git.branchPrefix}issue-${issue.number}-${slugify(issue.title)}`;
 }
 function issueWorktreePath(workspacePath, runId, issueNumber) {
-    return path.join(path.dirname(workspacePath), `${path.basename(workspacePath)}-worktrees`, runId, `issue-${issueNumber}`);
+    return path.join(worktreesDirForWorkspace(workspacePath), runId, `issue-${issueNumber}`);
 }
 function matchesAny(file, patterns) {
     return patterns.some((pattern) => minimatch(file, pattern, { dot: true }));

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { buildUntrustedEnv, githubCliExecutable, publicationGitExecutable, trustedGithubCliEnv } from '../utils/command.js';
+import { ensurePrivateDirectory, makeDirectoryPrivate } from '../utils/privateDirectory.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
@@ -329,9 +330,11 @@ async function withGuardianWorktree(options, job, execute) {
     await git.worktreePrune();
     await git.worktreeRemove(worktreePath);
     await fs.rm(worktreePath, { recursive: true, force: true });
-    await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+    await ensurePrivateDirectory(path.dirname(worktreePath));
+    await ensurePrivateDirectory(worktreePath);
     await git.deleteLocalBranch(localBranch);
     await git.worktreeAdd(worktreePath, localBranch, job.headSha);
+    await makeDirectoryPrivate(worktreePath);
     try {
         return await execute(worktreePath);
     }

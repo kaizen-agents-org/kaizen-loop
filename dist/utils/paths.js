@@ -12,4 +12,7 @@ export function projectStateDir(slug) {
 export function workspaceDir(slug) {
     return path.join(getKaizenHome(), 'workspaces', slug);
 }
+export function worktreesDirForWorkspace(workspacePath) {
+    return path.join(path.dirname(workspacePath), `${path.basename(workspacePath)}-worktrees`);
+}
 //# sourceMappingURL=paths.js.map

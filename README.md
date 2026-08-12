@@ -67,7 +67,7 @@ flowchart TB
 | `kaizen scheduler` | Inspect, update, sync, and disable scheduled jobs. |
 | `kaizen fleet` | Rebuild registry, workspaces, labels, scheduler jobs, and optionally verify fleet workspaces after upgrading Kaizen Loop. |
 | `kaizen logs` | Print latest or selected run logs from `~/.kaizen`. |
-| `kaizen doctor` | Check local setup, required labels, workspaces, and external commands. |
+| `kaizen doctor` | Check local setup, required labels, private workspace permissions, and external commands; `--repair` restores managed directories to `0700`. |
 | `kaizen list` | List registered projects. |
 | `kaizen watch` | Reserved for Phase 4; currently returns a not-implemented error. |
 
