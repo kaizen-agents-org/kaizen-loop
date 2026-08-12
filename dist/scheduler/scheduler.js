@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isTrustedExecutablePath, requireTrustedGitHubCliExecutable } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
-import { getKaizenHome, projectStateDir } from '../utils/paths.js';
+import { getKaizenHome } from '../utils/paths.js';
 export async function enableScheduler(options) {
     const jobs = schedulerJobs(options.config);
     const platform = options.platform ?? process.platform;
@@ -41,13 +41,17 @@ export async function enableScheduler(options) {
     return { type: 'cron', jobs, kaizenHome };
 }
 export async function disableScheduler(options) {
-    if (options.terminateRunning)
-        await terminateLockPid(options.slug);
     if ((options.platform ?? process.platform) === 'darwin') {
+        if (options.terminateRunning) {
+            await terminateLockPid(options.slug, await installedLaunchdKaizenHome(options.slug) ?? schedulerKaizenHome());
+        }
         const paths = await removeLaunchdPlists(options.slug, options.runCommand);
         return { type: 'launchd', path: paths[0], paths };
     }
     const current = await options.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
+    if (options.terminateRunning) {
+        await terminateLockPid(options.slug, installedCronKaizenHome(current.stdout, options.slug) ?? schedulerKaizenHome());
+    }
     const lines = removeManagedCronLines(current.stdout, options.slug);
     await options.runCommand('crontab', ['-'], { input: `${lines.filter(Boolean).join('\n')}\n` });
     return { type: 'cron' };
@@ -281,8 +285,57 @@ function cliPath() {
 function escapeXml(value) {
     return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-async function terminateLockPid(slug) {
-    const lockPath = path.join(projectStateDir(slug), 'run.lock');
+async function installedLaunchdKaizenHome(slug) {
+    const launchAgentsDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
+    let entries;
+    try {
+        entries = await fs.readdir(launchAgentsDir);
+    }
+    catch {
+        return undefined;
+    }
+    for (const entry of entries) {
+        if (!entry.startsWith(`com.kaizen-loop.${slug}.`) || !entry.endsWith('.plist'))
+            continue;
+        try {
+            const plist = await fs.readFile(path.join(launchAgentsDir, entry), 'utf8');
+            const match = plist.match(/<key>KAIZEN_HOME<\/key>\s*<string>([^<]*)<\/string>/);
+            if (match)
+                return unescapeXml(match[1]);
+        }
+        catch {
+            // Keep looking for another installed job for this project.
+        }
+    }
+    return undefined;
+}
+function installedCronKaizenHome(crontab, slug) {
+    const marker = cronMarker(slug);
+    for (const line of crontab.split('\n')) {
+        if (!line.includes(marker) || line.trimStart().startsWith('#'))
+            continue;
+        const prefix = ' KAIZEN_HOME=';
+        const suffix = ' KAIZEN_GITHUB_TOKEN_SOCKET=';
+        const start = line.indexOf(prefix);
+        const end = line.indexOf(suffix, start + prefix.length);
+        if (start < 0 || end < 0)
+            continue;
+        const quoted = line.slice(start + prefix.length, end);
+        if (quoted.startsWith("'") && quoted.endsWith("'")) {
+            return quoted.slice(1, -1).replace(/'\\''/g, "'");
+        }
+    }
+    return undefined;
+}
+function unescapeXml(value) {
+    return value
+        .replace(/&quot;/g, '"')
+        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<')
+        .replace(/&amp;/g, '&');
+}
+async function terminateLockPid(slug, kaizenHome) {
+    const lockPath = path.join(kaizenHome, 'projects', slug, 'run.lock');
     try {
         const raw = await fs.readFile(lockPath, 'utf8');
         const pid = JSON.parse(raw).pid;
