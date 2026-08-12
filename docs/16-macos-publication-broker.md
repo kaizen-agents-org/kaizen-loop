@@ -14,7 +14,8 @@ Kaizen creates and revalidates each registered workspace, worktree parent, run
 directory, and issue worktree with mode `0700` before untrusted work starts.
 `kaizen doctor` reports an exposed workspace; `kaizen doctor --repair` tightens an
 existing workspace only after confirming that it is a real directory owned by the
-runtime user.
+runtime user. On macOS, validation also rejects extended ACL grants and repair removes
+them. Doctor does not launch its Builder smoke test until workspace privacy passes.
 
 ## Install
 

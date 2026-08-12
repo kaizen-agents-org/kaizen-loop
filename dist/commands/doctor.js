@@ -29,6 +29,7 @@ export async function doctorProject(options) {
     const drift = localConfig && workspaceConfig
         ? configDrift(localConfig, workspaceConfig, resolved.project)
         : undefined;
+    let workspacePrivate = false;
     await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, configPath).authStatus()));
     await check(checks, 'github labels', async () => {
         const loaded = config;
@@ -44,8 +45,13 @@ export async function doctorProject(options) {
             await ensurePrivateDirectory(resolved.project.workspacePath);
         else
             await assertPrivateDirectory(resolved.project.workspacePath);
+        workspacePrivate = true;
     });
-    await check(checks, 'temporary directory', async () => void (await checkWorkspaceTempDir(resolved.project.workspacePath)));
+    await check(checks, 'temporary directory', async () => {
+        if (!workspacePrivate)
+            throw new Error('skipped because workspace privacy validation failed');
+        await checkWorkspaceTempDir(resolved.project.workspacePath);
+    });
     for (const agent of configuredAgents(config)) {
         await check(checks, `${agent} auth`, async () => {
             const adapter = agent === 'codex' ? new CodexAdapter(options.runCommand) : new ClaudeCodeAdapter(options.runCommand);
@@ -64,7 +70,8 @@ export async function doctorProject(options) {
         const loaded = config;
         if (!loaded)
             throw new Error('config unavailable');
-        await fs.access(resolved.project.workspacePath);
+        if (!workspacePrivate)
+            throw new Error('skipped because workspace privacy validation failed');
         const preferredBackend = loaded.agent.default;
         const fallbackBackend = preferredBackend === 'codex' ? 'claude' : 'codex';
         const preferredBackends = loaded.agent.fallback

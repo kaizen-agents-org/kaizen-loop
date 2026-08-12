@@ -126,6 +126,11 @@ describe('doctorProject', () => {
       ok: false,
       message: expect.stringContaining('mode 0700')
     });
+    expect(before.checks.find((item) => item.name === 'builder agent runtime')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('workspace privacy validation failed')
+    });
+    expect(runner.mock.calls.some(([command, args]) => command === 'builder-agent' && args.length === 0)).toBe(false);
 
     const after = await doctorProject({ cwd: repo, project: 'o-r', repair: true, runCommand: trustedRunner(runner) });
     expect(after.checks.find((item) => item.name === 'workspace')?.ok).toBe(true);
