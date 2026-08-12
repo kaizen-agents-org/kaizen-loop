@@ -418,6 +418,21 @@ describe('runCommand', () => {
     expect(Buffer.byteLength(`${error.result?.stdout ?? ''}${error.result?.stderr ?? ''}`)).toBeLessThanOrEqual(1024);
     expect(Date.now() - started).toBeLessThan(4_000);
   });
+
+  it('clears competing timeout and output-limit kill timers', async () => {
+    if (process.platform === 'win32') return;
+    const script = [
+      'process.on("SIGTERM", () => {});',
+      'setInterval(() => process.stdout.write("x".repeat(4096)), 1);'
+    ].join('');
+    const error = await runCommand(process.execPath, ['-e', script], {
+      timeoutMs: 25,
+      maxOutputBytes: 1024
+    }).catch((caught: unknown) => caught as Error & { result?: { stdout: string; stderr: string } });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(Buffer.byteLength(`${error.result?.stdout ?? ''}${error.result?.stderr ?? ''}`)).toBeLessThanOrEqual(1024);
+  });
 });
 
 describe('withRunDeadline', () => {

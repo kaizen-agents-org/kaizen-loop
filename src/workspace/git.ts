@@ -219,6 +219,14 @@ export class GitClient {
     return [...new Set(`${committed.stdout}${working.stdout}`.split('\0').filter(Boolean))];
   }
 
+  async gitlinkFingerprint(file: string): Promise<string | undefined> {
+    const staged = await this.git(['ls-files', '--stage', '-z', '--', file], { maxOutputBytes: 4096 });
+    const match = /^160000 ([0-9a-f]{40,64}) \d\t/.exec(staged.stdout);
+    if (!match) return undefined;
+    const checkedOut = await this.git(['submodule', 'status', '--', file], { maxOutputBytes: 4096 });
+    return `${match[1]}\0${checkedOut.stdout}`;
+  }
+
   async diffNumstat(base: string): Promise<Array<{ file: string; added: number; deleted: number }>> {
     const result = await this.git(['diff', '--numstat', `${base}...HEAD`], { rejectOnNonZero: false });
     return result.stdout

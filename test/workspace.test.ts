@@ -80,6 +80,35 @@ describe('workspace branch handling', () => {
     await expect(workspace.checkpointFingerprint(configSchema.parse({ version: 1 }))).rejects.toThrow('inventory failed');
   });
 
+  it('fingerprints changed gitlinks without traversing their directories', async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    await fs.mkdir(path.join(workspacePath, 'vendor', 'dependency'), { recursive: true });
+    let checkedOut = 'b'.repeat(40);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: 0,
+      stdout: args.join(' ') === 'diff --name-only -z origin/main...HEAD'
+        ? 'vendor/dependency\0'
+        : args[0] === 'ls-files' && args[1] === '--stage'
+          ? `160000 ${'a'.repeat(40)} 0\tvendor/dependency\0`
+          : args[0] === 'submodule'
+            ? ` ${checkedOut} vendor/dependency\n`
+            : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    const before = await workspace.checkpointFingerprint(config);
+    checkedOut = 'c'.repeat(40);
+    const after = await workspace.checkpointFingerprint(config);
+
+    expect(after).not.toBe(before);
+  });
+
   it('can force-with-lease when pushing regenerated issue branches', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({

@@ -230,7 +230,7 @@ export class WorkspaceManager {
     const budget = { entries: 0, bytes: 0, runDeadlineAt };
     for (const file of files.sort()) {
       hash.update(`path\0${file}\0`);
-      await hashWorkspaceEntry(path.join(this.workspacePath, file), hash, budget);
+      await hashWorkspaceEntry(path.join(this.workspacePath, file), hash, budget, async () => this.git().gitlinkFingerprint(file));
     }
     return hash.digest('hex');
   }
@@ -350,7 +350,8 @@ function parseStatusFiles(status: string): string[] {
 async function hashWorkspaceEntry(
   entryPath: string,
   hash: Hash,
-  budget: { entries: number; bytes: number; runDeadlineAt?: number }
+  budget: { entries: number; bytes: number; runDeadlineAt?: number },
+  gitlinkFingerprint: () => Promise<string | undefined>
 ): Promise<void> {
   if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt) throw new Error('Checkpoint fingerprint deadline exceeded.');
   budget.entries += 1;
@@ -371,7 +372,10 @@ async function hashWorkspaceEntry(
     return;
   }
   if (stat.isDirectory()) {
-    throw new Error('Checkpoint fingerprint refuses directory-valued Git entries.');
+    const fingerprint = await gitlinkFingerprint();
+    if (!fingerprint) throw new Error('Checkpoint fingerprint refuses non-gitlink directory entries.');
+    hash.update(`gitlink\0${fingerprint}\0`);
+    return;
   }
   if (stat.isFile()) {
     hash.update('file\0');

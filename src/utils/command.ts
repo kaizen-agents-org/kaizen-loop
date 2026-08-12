@@ -143,7 +143,7 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
     let stderr = '';
     let settled = false;
     let timeout: NodeJS.Timeout | undefined;
-    let forceKillTimeout: NodeJS.Timeout | undefined;
+    const forceKillTimeouts = new Set<NodeJS.Timeout>();
     let timedOut = false;
     let outputLimitExceeded = false;
     let capturedOutputBytes = 0;
@@ -152,10 +152,8 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
         clearTimeout(timeout);
         timeout = undefined;
       }
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-        forceKillTimeout = undefined;
-      }
+      for (const timer of forceKillTimeouts) clearTimeout(timer);
+      forceKillTimeouts.clear();
     };
 
     if (options.timeoutMs && options.timeoutMs > 0) {
@@ -163,7 +161,8 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
         if (settled) return;
         timedOut = true;
         terminateProcessTree(child, 'SIGTERM');
-        forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000);
+        const forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), 10_000);
+        forceKillTimeouts.add(forceKillTimeout);
         forceKillTimeout.unref();
       }, options.timeoutMs);
       timeout.unref();
@@ -182,7 +181,8 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
       if (options.maxOutputBytes !== undefined && chunkBytes > remaining) {
         outputLimitExceeded = true;
         terminateProcessTree(child, 'SIGTERM');
-        forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), OUTPUT_LIMIT_FORCE_KILL_MS);
+        const forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), OUTPUT_LIMIT_FORCE_KILL_MS);
+        forceKillTimeouts.add(forceKillTimeout);
         forceKillTimeout.unref();
       }
     };

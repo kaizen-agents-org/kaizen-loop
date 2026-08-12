@@ -48,6 +48,7 @@ export declare class GitClient {
     }>;
     diffNameOnly(base: string): Promise<string[]>;
     checkpointFiles(base: string): Promise<string[]>;
+    gitlinkFingerprint(file: string): Promise<string | undefined>;
     diffNumstat(base: string): Promise<Array<{
         file: string;
         added: number;
