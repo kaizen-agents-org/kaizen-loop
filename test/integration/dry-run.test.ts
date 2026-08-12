@@ -3835,7 +3835,7 @@ describe('runKaizen PR flow', () => {
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
     await fs.writeFile(
       path.join(repo, '.kaizen', 'config.yml'),
-      defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test', 'npm run typecheck'] })
+      defaultConfigYaml({ agent: 'claude', setup: 'npm ci', verify: ['npm test', 'npm run typecheck'] })
     );
     await saveRegistry({
       version: 1,
@@ -3852,6 +3852,7 @@ describe('runKaizen PR flow', () => {
     });
 
     let prBody = '';
+    const executionOrder: string[] = [];
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(1, { body: 'Users cannot log in when the session cookie expires.' })]));
@@ -3863,6 +3864,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
+        executionOrder.push('builder');
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: 'Refreshed the session cookie before it expires so users stay logged in.',
@@ -3884,7 +3886,14 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/auth/session.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '4\t1\tsrc/auth/session.ts\n');
-      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        executionOrder.push('setup');
+        return result(command, args, workspace, 'dependencies installed');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc npm test') {
+        executionOrder.push('verify');
+        return result(command, args, workspace, 'ok');
+      }
       if (command === 'sh' && args.join(' ') === '-lc npm run typecheck') return result(command, args, workspace, 'ok');
       return result(command, args, options?.cwd, '');
     });
@@ -3916,6 +3925,12 @@ describe('runKaizen PR flow', () => {
     expect(prBody).toContain('## Verification');
     expect(prBody).toContain('`npm test` — 成功');
     expect(prBody).toContain('`npm run typecheck` — 成功');
+    const builderIndex = executionOrder.lastIndexOf('builder');
+    const postBuilderSetupIndex = executionOrder.indexOf('setup', builderIndex + 1);
+    const postBuilderVerifyIndex = executionOrder.indexOf('verify', postBuilderSetupIndex + 1);
+    expect(builderIndex).toBeGreaterThanOrEqual(0);
+    expect(postBuilderSetupIndex).toBeGreaterThan(builderIndex);
+    expect(postBuilderVerifyIndex).toBeGreaterThan(postBuilderSetupIndex);
     // 5. verifier verdict と根拠(evidence_grade 含む)
     expect(prBody).toContain('## Verifier verdict');
     expect(prBody).toContain('verifier: open_pr');
@@ -4165,7 +4180,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
-    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
+    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(3);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
     expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
   });
