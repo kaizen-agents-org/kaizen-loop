@@ -12,6 +12,7 @@ import { RunLock } from '../orchestrator/lock.js';
 import { enableScheduler } from '../scheduler/scheduler.js';
 import { KaizenError } from '../utils/errors.js';
 import { projectStateDir, workspaceDir } from '../utils/paths.js';
+import { ensurePrivateProjectStateDirectory } from '../utils/workspaceTrust.js';
 import { assertProjectSlug, repoFromRemote, slugFromRepo } from '../utils/slug.js';
 import { runtimeIdentity } from '../utils/runtime.js';
 import { GitClient } from '../workspace/git.js';
@@ -226,7 +227,9 @@ async function refreshProject(slug, project, sync, runCommand) {
     if (config) {
         let lock;
         try {
-            lock = await RunLock.acquire(projectStateDir(slug));
+            const stateDir = projectStateDir(slug);
+            await ensurePrivateProjectStateDirectory(stateDir);
+            lock = await RunLock.acquire(stateDir);
             const remoteUrl = sync ? await resolveFleetRemote(runCommand, project) : githubRemote(project.repo);
             const workspace = new WorkspaceManager(runCommand, project.workspacePath, remoteUrl || githubRemote(project.repo));
             await refreshWorkspace(steps, slug, project, sync, workspace, config);

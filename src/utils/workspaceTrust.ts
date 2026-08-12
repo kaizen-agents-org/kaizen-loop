@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { getKaizenHome } from './paths.js';
 import { assertPrivateDirectory, ensurePrivateStructureDirectory } from './privateDirectory.js';
 
 const MARKER_NAME = 'workspace-contents-untrusted';
@@ -10,12 +11,7 @@ export function workspaceContentsUntrustedMarker(stateDir: string): string {
 }
 
 export async function workspaceContentsAreUntrusted(stateDir: string): Promise<boolean> {
-  try {
-    await assertPrivateDirectory(stateDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
+  if (!(await assertPrivateProjectStateDirectory(stateDir))) return false;
   const marker = workspaceContentsUntrustedMarker(stateDir);
   try {
     const stats = await fs.lstat(marker);
@@ -28,7 +24,7 @@ export async function workspaceContentsAreUntrusted(stateDir: string): Promise<b
 }
 
 export async function markWorkspaceContentsUntrusted(stateDir: string): Promise<void> {
-  await ensurePrivateStructureDirectory(stateDir);
+  await ensurePrivateProjectStateDirectory(stateDir);
   const marker = workspaceContentsUntrustedMarker(stateDir);
   try {
     const existing = await fs.lstat(marker);
@@ -51,6 +47,34 @@ export async function markWorkspaceContentsUntrusted(stateDir: string): Promise<
     await fs.rm(temporary, { force: true });
     throw error;
   }
+}
+
+export async function ensurePrivateProjectStateDirectory(stateDir: string): Promise<void> {
+  for (const directory of projectStateHierarchy(stateDir)) {
+    await ensurePrivateStructureDirectory(directory);
+  }
+}
+
+async function assertPrivateProjectStateDirectory(stateDir: string): Promise<boolean> {
+  for (const directory of projectStateHierarchy(stateDir)) {
+    try {
+      await assertPrivateDirectory(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+  return true;
+}
+
+function projectStateHierarchy(stateDir: string): string[] {
+  const home = path.resolve(getKaizenHome());
+  const projects = path.join(home, 'projects');
+  const resolvedState = path.resolve(stateDir);
+  if (path.dirname(resolvedState) !== projects) {
+    throw new Error(`Project state directory must be a direct child of ${projects}: ${stateDir}`);
+  }
+  return [home, projects, resolvedState];
 }
 
 export async function clearWorkspaceContentsUntrusted(stateDir: string): Promise<void> {

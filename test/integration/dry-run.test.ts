@@ -200,7 +200,7 @@ describe('runKaizen dry-run', () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it.runIf(process.platform !== 'win32')('fails closed on an insecure state directory before loading workspace config', async () => {
+  it.runIf(process.platform !== 'win32')('fails closed on an insecure state ancestor before loading workspace config', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -215,7 +215,9 @@ describe('runKaizen dry-run', () => {
     await fs.chmod(workspace, 0o700);
     const stateDir = projectStateDir('o-r');
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.chmod(stateDir, 0o777);
+    await fs.chmod(stateDir, 0o700);
+    const projectsDir = path.dirname(stateDir);
+    await fs.chmod(projectsDir, 0o777);
     await saveRegistryFile({
       version: 1,
       projects: {
@@ -231,7 +233,8 @@ describe('runKaizen dry-run', () => {
       cwd: repo, project: 'o-r', scheduled: true, job: 'maintenance', dryRun: true, json: true, runCommand: runner
     })).rejects.toThrow('mode 0700');
 
-    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o777);
+    expect((await fs.stat(projectsDir)).mode & 0o777).toBe(0o777);
+    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o700);
     expect(runner).not.toHaveBeenCalled();
   });
 

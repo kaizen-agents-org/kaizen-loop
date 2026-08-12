@@ -23,12 +23,17 @@ import {
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
-import { markWorkspaceContentsUntrusted, workspaceContentsAreUntrusted } from '../utils/workspaceTrust.js';
+import {
+  ensurePrivateProjectStateDirectory,
+  markWorkspaceContentsUntrusted,
+  workspaceContentsAreUntrusted
+} from '../utils/workspaceTrust.js';
 
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
   const resolved = await resolveProject(options.project, options.cwd);
   const stateDir = projectStateDir(resolved.slug);
+  if (options.repair) await ensurePrivateProjectStateDirectory(stateDir);
   const repairLock = options.repair ? await RunLock.acquire(stateDir) : undefined;
   try {
   let workspacePrivate = false;
