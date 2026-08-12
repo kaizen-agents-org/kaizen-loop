@@ -34,6 +34,14 @@ export class WorkspaceManager {
     }
     async ensure() {
         try {
+            await fs.lstat(this.workspacePath);
+            await ensurePrivateDirectory(this.workspacePath);
+        }
+        catch (error) {
+            if (!isMissingPath(error))
+                throw error;
+        }
+        try {
             await fs.access(path.join(this.workspacePath, '.git'));
         }
         catch {
@@ -257,6 +265,9 @@ export class WorkspaceManager {
             await fs.rm(worktree.path, { recursive: true, force: true });
         }
     }
+}
+function isMissingPath(error) {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 function boundedTimeoutMs(configuredTimeoutMs, runDeadlineAt) {
     if (!runDeadlineAt)

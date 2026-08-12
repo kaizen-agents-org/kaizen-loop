@@ -16,12 +16,23 @@ import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/private
 export async function doctorProject(options) {
     const checks = [];
     const resolved = await resolveProject(options.project, options.cwd);
+    let workspacePrivate = false;
+    await check(checks, 'workspace', async () => {
+        await fs.access(resolved.project.workspacePath);
+        if (options.repair)
+            await ensurePrivateDirectory(resolved.project.workspacePath);
+        else
+            await assertPrivateDirectory(resolved.project.workspacePath);
+        workspacePrivate = true;
+    });
     let localConfig;
     let workspaceConfig;
     await check(checks, 'config', async () => {
         localConfig = await loadConfig(resolved.project.localPath);
     });
     await check(checks, 'workspace config', async () => {
+        if (!workspacePrivate)
+            throw new Error('skipped because workspace privacy validation failed');
         workspaceConfig = await loadConfig(resolved.project.workspacePath);
     });
     const config = workspaceConfig ?? localConfig;
@@ -29,7 +40,6 @@ export async function doctorProject(options) {
     const drift = localConfig && workspaceConfig
         ? configDrift(localConfig, workspaceConfig, resolved.project)
         : undefined;
-    let workspacePrivate = false;
     await check(checks, 'gh auth', async () => void (await new GitHubClient(options.runCommand, configPath).authStatus()));
     await check(checks, 'github labels', async () => {
         const loaded = config;
@@ -38,14 +48,6 @@ export async function doctorProject(options) {
         if (!options.repair)
             return;
         await new GitHubClient(options.runCommand, configPath).createLabels(requiredLabels(loaded));
-    });
-    await check(checks, 'workspace', async () => {
-        await fs.access(resolved.project.workspacePath);
-        if (options.repair)
-            await ensurePrivateDirectory(resolved.project.workspacePath);
-        else
-            await assertPrivateDirectory(resolved.project.workspacePath);
-        workspacePrivate = true;
     });
     await check(checks, 'temporary directory', async () => {
         if (!workspacePrivate)

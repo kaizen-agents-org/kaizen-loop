@@ -137,6 +137,32 @@ describe('doctorProject', () => {
     expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
   });
 
+  it('does not load executable configuration from an exposed workspace', async () => {
+    if (process.platform === 'win32') return;
+    const { repo, workspace } = await setupProject();
+    const configPath = path.join(workspace, '.kaizen', 'config.yml');
+    const config = parse(await fs.readFile(configPath, 'utf8')) as Record<string, any>;
+    config.builder.command = 'attacker-controlled-builder';
+    await fs.writeFile(configPath, stringify(config));
+    await fs.chmod(workspace, 0o777);
+    const runner = vi.fn<CommandRunner>(async (command, args, options) =>
+      result(command, args, options?.cwd, 'ok'));
+
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: trustedRunner(runner)
+    });
+
+    expect(output.checks.find((item) => item.name === 'workspace')).toMatchObject({ ok: false });
+    expect(output.checks.find((item) => item.name === 'workspace config')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('workspace privacy validation failed')
+    });
+    expect(runner.mock.calls.some(([command]) => command === 'attacker-controlled-builder')).toBe(false);
+  });
+
   it('fails when the builder command exists but runtime smoke test cannot execute', async () => {
     const { repo } = await setupProject();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {

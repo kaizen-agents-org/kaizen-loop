@@ -44,7 +44,7 @@ describe('workspace branch handling', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-workspace-'));
     const workspacePath = path.join(root, 'workspace');
     await fs.mkdir(path.join(workspacePath, '.git'), { recursive: true });
-    await fs.chmod(workspacePath, 0o755);
+    await fs.chmod(workspacePath, 0o600);
     const runner = vi.fn<CommandRunner>();
 
     await new WorkspaceManager(runner, workspacePath).ensure();
