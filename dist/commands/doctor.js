@@ -12,6 +12,7 @@ import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js'
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
+import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
 export async function doctorProject(options) {
     const checks = [];
     const resolved = await resolveProject(options.project, options.cwd);
@@ -37,7 +38,13 @@ export async function doctorProject(options) {
             return;
         await new GitHubClient(options.runCommand, configPath).createLabels(requiredLabels(loaded));
     });
-    await check(checks, 'workspace', async () => void (await fs.access(resolved.project.workspacePath)));
+    await check(checks, 'workspace', async () => {
+        await fs.access(resolved.project.workspacePath);
+        if (options.repair)
+            await ensurePrivateDirectory(resolved.project.workspacePath);
+        else
+            await assertPrivateDirectory(resolved.project.workspacePath);
+    });
     await check(checks, 'temporary directory', async () => void (await checkWorkspaceTempDir(resolved.project.workspacePath)));
     for (const agent of configuredAgents(config)) {
         await check(checks, `${agent} auth`, async () => {

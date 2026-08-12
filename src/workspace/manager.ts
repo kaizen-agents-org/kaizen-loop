@@ -5,6 +5,7 @@ import type { KaizenConfig } from '../config/schema.js';
 import { buildUntrustedEnv, type CommandResult, type CommandRunner } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
+import { ensurePrivateDirectory } from '../utils/privateDirectory.js';
 import { GitClient } from './git.js';
 
 export interface DiffStats {
@@ -50,9 +51,11 @@ export class WorkspaceManager {
     } catch {
       await fs.rm(this.workspacePath, { recursive: true, force: true });
       await fs.mkdir(path.dirname(this.workspacePath), { recursive: true });
+      await ensurePrivateDirectory(this.workspacePath);
       const parentGit = new GitClient(this.run, path.dirname(this.workspacePath));
       await parentGit.clone(this.remoteUrl, this.workspacePath);
     }
+    await ensurePrivateDirectory(this.workspacePath);
   }
 
   git(): GitClient {
@@ -155,11 +158,16 @@ export class WorkspaceManager {
     await git.worktreePrune();
     await git.worktreeRemove(worktreePath);
     await fs.rm(worktreePath, { recursive: true, force: true });
-    await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+    const worktreesRoot = path.dirname(path.dirname(worktreePath));
+    const runRoot = path.dirname(worktreePath);
+    await ensurePrivateDirectory(worktreesRoot);
+    await ensurePrivateDirectory(runRoot);
+    await ensurePrivateDirectory(worktreePath);
     await this.removeWorktreesForBranch(branch);
     if (!options.resume) {
       await git.deleteLocalBranch(branch);
       await git.worktreeAdd(worktreePath, branch, `origin/${config.git.defaultBranch}`);
+      await ensurePrivateDirectory(worktreePath);
       return { branch, path: worktreePath, resumed: false };
     }
     const localBranchExists = await git.localBranchExists(branch);
@@ -175,6 +183,7 @@ export class WorkspaceManager {
     } else {
       await git.worktreeAdd(worktreePath, branch, `origin/${branch}`);
     }
+    await ensurePrivateDirectory(worktreePath);
     return { branch, path: worktreePath, resumed: true };
   }
 

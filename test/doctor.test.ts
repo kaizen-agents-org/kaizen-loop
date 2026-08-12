@@ -108,6 +108,30 @@ describe('doctorProject', () => {
     await expect(fs.access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('reports an exposed workspace and repairs it to mode 0700', async () => {
+    if (process.platform === 'win32') return;
+    const { repo, workspace } = await setupProject();
+    await fs.chmod(workspace, 0o755);
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+        });
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
+
+    const before = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: trustedRunner(runner) });
+    expect(before.checks.find((item) => item.name === 'workspace')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('mode 0700')
+    });
+
+    const after = await doctorProject({ cwd: repo, project: 'o-r', repair: true, runCommand: trustedRunner(runner) });
+    expect(after.checks.find((item) => item.name === 'workspace')?.ok).toBe(true);
+    expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
+  });
+
   it('fails when the builder command exists but runtime smoke test cannot execute', async () => {
     const { repo } = await setupProject();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {

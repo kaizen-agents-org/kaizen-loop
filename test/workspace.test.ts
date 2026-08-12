@@ -39,6 +39,63 @@ describe('workspace branch handling', () => {
     ]);
   });
 
+  it('repairs an existing workspace to mode 0700', async () => {
+    if (process.platform === 'win32') return;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-workspace-'));
+    const workspacePath = path.join(root, 'workspace');
+    await fs.mkdir(path.join(workspacePath, '.git'), { recursive: true });
+    await fs.chmod(workspacePath, 0o755);
+    const runner = vi.fn<CommandRunner>();
+
+    await new WorkspaceManager(runner, workspacePath).ensure();
+
+    expect((await fs.stat(workspacePath)).mode & 0o777).toBe(0o700);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('pre-creates worktree directories with mode 0700', async () => {
+    if (process.platform === 'win32') return;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-worktree-'));
+    const workspacePath = path.join(root, 'workspace');
+    await fs.mkdir(path.join(workspacePath, '.git'), { recursive: true });
+    const observedModes: number[] = [];
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'git' && args[0] === 'worktree' && args[1] === 'add') {
+        observedModes.push((await fs.stat(args[args.length - 2])).mode & 0o777);
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: args.join(' ') === 'worktree list --porcelain' ? '' : '',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+    const config = configSchema.parse({ version: 1 });
+    const manager = new WorkspaceManager(runner, workspacePath);
+
+    const created = await manager.createIssueWorktree(config, { number: 12, title: 'Private worktree' }, 'run-1');
+
+    const worktreesRoot = path.dirname(path.dirname(created.path));
+    for (const directory of [worktreesRoot, path.dirname(created.path), created.path]) {
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
+    }
+    expect(observedModes).toEqual([0o700]);
+  });
+
+  it('refuses a symlinked workspace instead of changing its target mode', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-symlink-workspace-'));
+    const target = path.join(root, 'target');
+    const workspacePath = path.join(root, 'workspace');
+    await fs.mkdir(path.join(target, '.git'), { recursive: true });
+    await fs.symlink(target, workspacePath);
+
+    await expect(new WorkspaceManager(vi.fn<CommandRunner>(), workspacePath).ensure())
+      .rejects.toThrow('must be a real directory');
+  });
+
   it('can force-with-lease when pushing regenerated issue branches', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({

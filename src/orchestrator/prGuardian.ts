@@ -11,6 +11,7 @@ import {
   type CommandRunner
 } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
+import { ensurePrivateDirectory } from '../utils/privateDirectory.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
 import { isSyncPullRequest } from './wipLimit.js';
@@ -439,9 +440,11 @@ async function withGuardianWorktree<T>(
   await git.worktreePrune();
   await git.worktreeRemove(worktreePath);
   await fs.rm(worktreePath, { recursive: true, force: true });
-  await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+  await ensurePrivateDirectory(path.dirname(worktreePath));
+  await ensurePrivateDirectory(worktreePath);
   await git.deleteLocalBranch(localBranch);
   await git.worktreeAdd(worktreePath, localBranch, job.headSha);
+  await ensurePrivateDirectory(worktreePath);
   try {
     return await execute(worktreePath);
   } finally {
