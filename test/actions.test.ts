@@ -54,6 +54,7 @@ describe('GitHub Actions fix workflow', () => {
     const context = JSON.parse(await fs.readFile(path.join(outputDir, 'context.json'), 'utf8'));
     expect(prompt).toContain('# Issue #199: Add Actions workflow');
     expect(prompt).toContain('Do not run repository setup or verification commands in this provider job');
+    expect(prompt).toContain('Kaizen Loop will run every configured command');
     expect(prompt).not.toContain('npm test');
     expect(context).toMatchObject({
       repo: 'owner/repo',

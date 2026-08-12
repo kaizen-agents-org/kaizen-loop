@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { BuilderAgentAdapter } from '../src/agents/builder.js';
 import { ClaudeCodeAdapter, parseAgentResult } from '../src/agents/claude.js';
@@ -888,7 +887,7 @@ describe('buildFixPrompt', () => {
     `);
   });
 
-  it('renders heredoc verification commands as runnable shell', () => {
+  it('defers configured verification commands to the credential-free phase', () => {
     const heredoc = "python3 <<'PY'\nprint('ok')\nPY";
     const config = configSchema.parse({
       version: 1,
@@ -911,13 +910,9 @@ describe('buildFixPrompt', () => {
       }
     });
 
-    expect(prompt).toContain("5. Verify with:\n```sh\nset -e\npython3 <<'PY'\nprint('ok')\nPY\nnpm test\n```");
-    expect(prompt).not.toContain('PY && npm test');
-
-    const match = prompt.match(/5\. Verify with:\n```sh\n([\s\S]*?)\n```/);
-    if (!match) throw new Error('missing verification shell block');
-
-    const syntaxCheck = spawnSync('sh', ['-n'], { input: match[1], encoding: 'utf8' });
-    expect(syntaxCheck.status, syntaxCheck.stderr).toBe(0);
+    expect(prompt).toContain('Do not run repository setup or verification commands in this provider job.');
+    expect(prompt).toContain('Kaizen Loop will run every configured command and return any failure for a repair attempt.');
+    expect(prompt).not.toContain(heredoc);
+    expect(prompt).not.toContain('npm test');
   });
 });

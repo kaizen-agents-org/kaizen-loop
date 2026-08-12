@@ -1,9 +1,10 @@
 const VERIFICATION_LOG_MAX_CHARS = 8_000;
+const DEFERRED_VERIFICATION_CONSTRAINT = 'Do not run repository setup or verification commands in this provider job. Leave the uncommitted edits for the separate credential-free verification phase; Kaizen Loop will run every configured command and return any failure for a repair attempt.';
 export function buildFixPrompt(options) {
-    return buildFixPromptText(options, `Verify with:\n${formatVerifyCommands(options.config.commands.verify)}`);
+    return buildFixPromptText(options, DEFERRED_VERIFICATION_CONSTRAINT);
 }
 export function buildActionsFixPrompt(options) {
-    return buildFixPromptText(options, 'Do not run repository setup or verification commands in this provider job. Leave the uncommitted edits for the separate credential-free verification job.');
+    return buildFixPromptText(options, DEFERRED_VERIFICATION_CONSTRAINT);
 }
 function buildFixPromptText(options, verificationConstraint) {
     const comments = options.issue.comments?.map((comment) => comment.body).join('\n\n---\n\n') || '(none)';
@@ -61,11 +62,6 @@ After completing the work, make your final response only this JSON in a json cod
 \`\`\`
 
 Use an empty discoveredIssues array when you did not find a separate follow-up bug. Use status "blocked" if the issue lacks information, the recommended action would weaken safety/review/verification guardrails, the correct fix belongs in an upstream source-of-truth repository first, or the work requires human approval for secrets, credentials, billing, destructive data changes, or production infrastructure. Include humanRequest only when there is one concrete unanswered human question or approval, using {"reasonCode":"missing_information|credentials|billing|destructive_action|production_change|policy_exception|external_repository_action|other_approval","requestKey":"stable-lowercase-semantic-key","question":"exact question"}. Keep requestKey unchanged for wording-only changes and use a new key for a genuinely different decision. Omit humanRequest for upstream work, automation failures, retry exhaustion, and provider failures. Omit both blockedReason and humanRequest for fixed or partial results.`;
-}
-function formatVerifyCommands(commands) {
-    if (commands.length === 0)
-        return '(not configured)';
-    return ['```sh', 'set -e', ...commands, '```'].join('\n');
 }
 export function buildVerifierPrompt(options) {
     const verify = options.verifyResults.length
