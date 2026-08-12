@@ -31,6 +31,17 @@ export async function privateDirectoryContentsMayHaveBeenExposed(directory) {
     assertSameDirectory(directory, before, await fs.lstat(directory), uid);
     return exposed;
 }
+export async function privateDirectoryMayBeModifiedByOthers(directory) {
+    const before = await fs.lstat(directory);
+    assertOwnedRealDirectory(directory, before);
+    if (process.platform === 'win32')
+        return false;
+    const modifiable = (before.mode & 0o022) !== 0 ||
+        (process.platform === 'darwin' && await hasExposureGrantAcl(directory));
+    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    assertSameDirectory(directory, before, await fs.lstat(directory), uid);
+    return modifiable;
+}
 async function validatePrivateDirectory(directory, repairMode, beforeExposureRepair) {
     const before = await fs.lstat(directory);
     assertOwnedRealDirectory(directory, before);

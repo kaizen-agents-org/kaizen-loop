@@ -295,6 +295,57 @@ describe('runKaizen dry-run', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it.runIf(process.platform !== 'win32')('rebuilds the workspace after repairing an exposed state directory', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+    const sentinel = path.join(workspace, 'untrusted-sentinel');
+    await fs.writeFile(sentinel, 'replace');
+    await fs.chmod(workspace, 0o700);
+    const stateDir = projectStateDir('o-r');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.chmod(path.dirname(stateDir), 0o700);
+    await fs.chmod(stateDir, 0o777);
+    await saveRegistryFile({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace, schedule: '02:00', enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (isGitCommand(command) && args.join(' ') === 'remote get-url origin') {
+        return result(command, args, options?.cwd, 'https://github.com/o/r.git\n');
+      }
+      if (isGitCommand(command) && args[0] === 'clone') {
+        await fs.mkdir(path.join(args[2], '.git'), { recursive: true });
+        return result(command, args, options?.cwd, 'cloned');
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, options?.cwd, '[]');
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await runKaizen({
+      cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
+    });
+
+    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o700);
+    expect(runner.mock.calls.some(([command, args]) => isGitCommand(command) && args[0] === 'clone')).toBe(true);
+    await expect(fs.access(path.join(stateDir, 'workspace-contents-untrusted')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('repairs an owner-only workspace mode without rebuilding its contents', async () => {
     if (process.platform === 'win32') return;
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));

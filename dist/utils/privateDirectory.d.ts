@@ -7,3 +7,4 @@ export declare function ensurePrivateDirectory(directory: string, options?: {
 export declare function ensurePrivateStructureDirectory(directory: string): Promise<void>;
 export declare function assertPrivateDirectory(directory: string): Promise<void>;
 export declare function privateDirectoryContentsMayHaveBeenExposed(directory: string): Promise<boolean>;
+export declare function privateDirectoryMayBeModifiedByOthers(directory: string): Promise<boolean>;

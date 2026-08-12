@@ -2,7 +2,11 @@ import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getKaizenHome } from './paths.js';
-import { assertPrivateDirectory, ensurePrivateStructureDirectory } from './privateDirectory.js';
+import {
+  assertPrivateDirectory,
+  ensurePrivateDirectory,
+  privateDirectoryMayBeModifiedByOthers
+} from './privateDirectory.js';
 
 const MARKER_NAME = 'workspace-contents-untrusted';
 
@@ -43,16 +47,33 @@ export async function markWorkspaceContentsUntrusted(stateDir: string): Promise<
       await handle.close();
     }
     await fs.rename(temporary, marker);
+    const directoryHandle = await fs.open(stateDir, constants.O_RDONLY | noFollow);
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
+    }
   } catch (error) {
     await fs.rm(temporary, { force: true });
     throw error;
   }
 }
 
-export async function ensurePrivateProjectStateDirectory(stateDir: string): Promise<void> {
+export async function ensurePrivateProjectStateDirectory(
+  stateDir: string
+): Promise<{ contentsMayHaveBeenExposed: boolean }> {
+  let contentsMayHaveBeenExposed = false;
   for (const directory of projectStateHierarchy(stateDir)) {
-    await ensurePrivateStructureDirectory(directory);
+    try {
+      if (await privateDirectoryMayBeModifiedByOthers(directory)) contentsMayHaveBeenExposed = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await ensurePrivateDirectory(directory, {
+      beforeExposureRepair: async () => undefined
+    });
   }
+  return { contentsMayHaveBeenExposed };
 }
 
 async function assertPrivateProjectStateDirectory(stateDir: string): Promise<boolean> {

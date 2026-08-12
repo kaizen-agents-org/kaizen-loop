@@ -42,7 +42,9 @@ export async function runKaizen(options) {
         return runKaizenWithPreparedWorkspace(options, resolved, false);
     }
     const stateDir = projectStateDir(resolved.slug);
-    await ensurePrivateProjectStateDirectory(stateDir);
+    const stateRepair = await ensurePrivateProjectStateDirectory(stateDir);
+    if (stateRepair.contentsMayHaveBeenExposed)
+        await markWorkspaceContentsUntrusted(stateDir);
     await ensureNotPaused(stateDir);
     const ownsLock = options.existingLock === undefined;
     let lock;
