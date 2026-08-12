@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash, type Hash } from 'node:crypto';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import type { KaizenConfig } from '../config/schema.js';
@@ -220,6 +221,16 @@ export class WorkspaceManager {
     };
   }
 
+  async checkpointFingerprint(config: KaizenConfig): Promise<string> {
+    const diff = await this.collectCheckpointDiffStats(config);
+    const hash = createHash('sha256');
+    for (const file of [...diff.files].sort()) {
+      hash.update(`path\0${file}\0`);
+      await hashWorkspaceEntry(path.join(this.workspacePath, file), hash);
+    }
+    return hash.digest('hex');
+  }
+
   async collectDiffText(config: KaizenConfig, maxChars = DEFAULT_DIFF_TEXT_MAX_CHARS): Promise<string> {
     const base = `origin/${config.git.defaultBranch}`;
     const diff = await this.git().diff(base);
@@ -330,4 +341,36 @@ function parseStatusFiles(status: string): string[] {
     .map((line) => line.slice(3))
     .flatMap((file) => file.includes(' -> ') ? file.split(' -> ') : [file])
     .map((file) => file.replace(/^"|"$/g, ''));
+}
+
+async function hashWorkspaceEntry(entryPath: string, hash: Hash): Promise<void> {
+  let stat;
+  try {
+    stat = await fs.lstat(entryPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      hash.update('missing\0');
+      return;
+    }
+    throw error;
+  }
+  hash.update(`mode\0${stat.mode}\0`);
+  if (stat.isSymbolicLink()) {
+    hash.update(`symlink\0${await fs.readlink(entryPath)}\0`);
+    return;
+  }
+  if (stat.isDirectory()) {
+    hash.update('directory\0');
+    for (const name of (await fs.readdir(entryPath)).sort()) {
+      hash.update(`entry\0${name}\0`);
+      await hashWorkspaceEntry(path.join(entryPath, name), hash);
+    }
+    return;
+  }
+  if (stat.isFile()) {
+    hash.update('file\0');
+    hash.update(await fs.readFile(entryPath));
+    return;
+  }
+  hash.update(`other\0${stat.size}\0`);
 }

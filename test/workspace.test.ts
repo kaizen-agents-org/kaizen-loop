@@ -39,6 +39,32 @@ describe('workspace branch handling', () => {
     ]);
   });
 
+  it('fingerprints content changes when file names and line counts stay the same', async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    await fs.writeFile(path.join(workspacePath, 'package-lock.json'), 'version-one\n');
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: 0,
+      stdout: args.join(' ') === 'diff --name-only origin/main...HEAD'
+        ? 'package-lock.json\n'
+        : args.join(' ') === 'diff --numstat origin/main...HEAD'
+          ? '1\t1\tpackage-lock.json\n'
+          : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+    const config = configSchema.parse({ version: 1 });
+
+    const before = await workspace.checkpointFingerprint(config);
+    await fs.writeFile(path.join(workspacePath, 'package-lock.json'), 'version-two\n');
+    const after = await workspace.checkpointFingerprint(config);
+
+    expect(after).not.toBe(before);
+  });
+
   it('can force-with-lease when pushing regenerated issue branches', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({

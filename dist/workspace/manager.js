@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import { buildUntrustedEnv } from '../utils/command.js';
@@ -190,6 +191,15 @@ export class WorkspaceManager {
             protectedFiles: files.filter((file) => matchesAny(file, config.policy.protectedPaths))
         };
     }
+    async checkpointFingerprint(config) {
+        const diff = await this.collectCheckpointDiffStats(config);
+        const hash = createHash('sha256');
+        for (const file of [...diff.files].sort()) {
+            hash.update(`path\0${file}\0`);
+            await hashWorkspaceEntry(path.join(this.workspacePath, file), hash);
+        }
+        return hash.digest('hex');
+    }
     async collectDiffText(config, maxChars = DEFAULT_DIFF_TEXT_MAX_CHARS) {
         const base = `origin/${config.git.defaultBranch}`;
         const diff = await this.git().diff(base);
@@ -283,5 +293,37 @@ function parseStatusFiles(status) {
         .map((line) => line.slice(3))
         .flatMap((file) => file.includes(' -> ') ? file.split(' -> ') : [file])
         .map((file) => file.replace(/^"|"$/g, ''));
+}
+async function hashWorkspaceEntry(entryPath, hash) {
+    let stat;
+    try {
+        stat = await fs.lstat(entryPath);
+    }
+    catch (error) {
+        if (error.code === 'ENOENT') {
+            hash.update('missing\0');
+            return;
+        }
+        throw error;
+    }
+    hash.update(`mode\0${stat.mode}\0`);
+    if (stat.isSymbolicLink()) {
+        hash.update(`symlink\0${await fs.readlink(entryPath)}\0`);
+        return;
+    }
+    if (stat.isDirectory()) {
+        hash.update('directory\0');
+        for (const name of (await fs.readdir(entryPath)).sort()) {
+            hash.update(`entry\0${name}\0`);
+            await hashWorkspaceEntry(path.join(entryPath, name), hash);
+        }
+        return;
+    }
+    if (stat.isFile()) {
+        hash.update('file\0');
+        hash.update(await fs.readFile(entryPath));
+        return;
+    }
+    hash.update(`other\0${stat.size}\0`);
 }
 //# sourceMappingURL=manager.js.map

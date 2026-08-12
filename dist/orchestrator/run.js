@@ -947,9 +947,6 @@ async function processIssue(options) {
             await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
             return withDiscoveredFollowups(await finishFailed(options, agent, attempts, reason, started, [setupResult]), discoveredFollowups);
         }
-        let builderCheckpoint = options.config.commands.setup
-            ? await workspace.collectCheckpointDiffStats(options.config)
-            : undefined;
         if (!resumeAtVerifier)
             agent = await selectAgent(options.config, options.runCommand);
         const branch = options.branch;
@@ -970,7 +967,11 @@ async function processIssue(options) {
         for (let retry = 0; retry <= options.config.run.maxVerifyRetries; retry += 1) {
             let verificationPassedAfterZeroDiff = false;
             const skipBuilder = resumeAtVerifier && retry === 0;
+            let preBuilderCheckpoint;
             if (!skipBuilder) {
+                preBuilderCheckpoint = options.config.commands.setup
+                    ? await workspace.checkpointFingerprint(options.config)
+                    : undefined;
                 if (resumeAtVerifier && retry === 1)
                     agent = await selectAgent(options.config, options.runCommand);
                 const prompt = buildFixPrompt({
@@ -1007,14 +1008,12 @@ async function processIssue(options) {
             }
             if (!agentResult)
                 throw new Error('Agent did not produce a result.');
-            const postBuilderCheckpoint = !skipBuilder && builderCheckpoint
-                ? await workspace.collectCheckpointDiffStats(options.config)
+            const postBuilderCheckpoint = !skipBuilder && preBuilderCheckpoint
+                ? await workspace.checkpointFingerprint(options.config)
                 : undefined;
-            const builderChangedCheckpoint = builderCheckpoint && postBuilderCheckpoint
-                ? JSON.stringify(postBuilderCheckpoint) !== JSON.stringify(builderCheckpoint)
+            const builderChangedCheckpoint = preBuilderCheckpoint && postBuilderCheckpoint
+                ? postBuilderCheckpoint !== preBuilderCheckpoint
                 : false;
-            if (postBuilderCheckpoint)
-                builderCheckpoint = postBuilderCheckpoint;
             if (builderChangedCheckpoint) {
                 const postBuilderSetup = await workspace.runSetup(options.config, options.runDeadlineAt);
                 if (postBuilderSetup && !postBuilderSetup.ok) {
