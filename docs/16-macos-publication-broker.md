@@ -15,10 +15,18 @@ directory, and issue worktree with mode `0700` before untrusted work starts.
 `kaizen doctor` reports an exposed workspace; `kaizen doctor --repair` tightens an
 existing workspace only after confirming that it is a real directory owned by the
 runtime user. On macOS, validation also rejects extended ACL grants and repair removes
-them. A scheduled run rebuilds a formerly exposed workspace from the trusted developer
-checkout's origin before reading its contents. Doctor tightens the directory but does
-not load its config or launch its Builder smoke test in the same repair invocation;
-the operator must first review or rebuild the previously exposed contents.
+them. Any non-dry run, scheduled or manual, rebuilds a formerly exposed workspace from
+the trusted developer checkout's origin before reading its contents. A dry run never
+repairs or rebuilds a workspace; a scheduled dry run validates privacy and refuses
+exposed or previously marked-untrusted contents.
+Doctor tightens the directory but persists an untrusted-contents marker outside the
+workspace, so later Doctor invocations still refuse its config and Builder smoke test.
+A successful non-dry rebuild clears that marker.
+
+> **Upgrade note:** Workspaces created by versions before private workspace enforcement
+> are normally mode `0755`. The first non-dry run after upgrading rebuilds each such
+> workspace once. Untracked files and unpushed local branches in the managed workspace
+> are discarded; checkpoints already pushed to `origin` remain resumable.
 
 ## Install
 

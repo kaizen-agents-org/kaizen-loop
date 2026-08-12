@@ -29,8 +29,7 @@ export async function executeRun(options: RunOptions) {
       existingLock: lock,
       runCommand: options.runCommand
     });
-  } catch (error) {
+  } finally {
     await lock.release();
-    throw error;
   }
 }

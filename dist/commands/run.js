@@ -29,9 +29,8 @@ export async function executeRun(options) {
             runCommand: options.runCommand
         });
     }
-    catch (error) {
+    finally {
         await lock.release();
-        throw error;
     }
 }
 //# sourceMappingURL=run.js.map

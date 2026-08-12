@@ -177,6 +177,21 @@ describe('doctorProject', () => {
       ok: false,
       message: expect.stringContaining('contents require review or rebuild')
     });
+
+    const afterRepair = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: trustedRunner(runner)
+    });
+    expect(afterRepair.checks.find((item) => item.name === 'workspace config')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
+    expect(afterRepair.checks.find((item) => item.name === 'builder agent runtime')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
     expect(runner.mock.calls.some(([command]) => command === 'attacker-controlled-builder')).toBe(false);
   });
 

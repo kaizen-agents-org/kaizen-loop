@@ -15,26 +15,29 @@ import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
 import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import { projectStateDir } from '../utils/paths.js';
+import { markWorkspaceContentsUntrusted, workspaceContentsAreUntrusted } from '../utils/workspaceTrust.js';
 
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
   const resolved = await resolveProject(options.project, options.cwd);
+  const stateDir = projectStateDir(resolved.slug);
   let workspacePrivate = false;
   let workspaceContentsTrusted = false;
   await check(checks, 'workspace', async () => {
     await fs.access(resolved.project.workspacePath);
-    if (options.repair) {
-      try {
-        await assertPrivateDirectory(resolved.project.workspacePath);
-        workspaceContentsTrusted = true;
-      } catch {
-        await ensurePrivateDirectory(resolved.project.workspacePath);
-      }
-    } else {
+    try {
       await assertPrivateDirectory(resolved.project.workspacePath);
-      workspaceContentsTrusted = true;
+    } catch (error) {
+      await markWorkspaceContentsUntrusted(stateDir);
+      if (options.repair) {
+        await ensurePrivateDirectory(resolved.project.workspacePath);
+      } else {
+        throw error;
+      }
     }
     workspacePrivate = true;
+    workspaceContentsTrusted = !(await workspaceContentsAreUntrusted(stateDir));
   });
   let localConfig: KaizenConfig | undefined;
   let workspaceConfig: KaizenConfig | undefined;

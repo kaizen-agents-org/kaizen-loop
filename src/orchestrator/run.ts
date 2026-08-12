@@ -31,6 +31,11 @@ import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
 import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import {
+  clearWorkspaceContentsUntrusted,
+  markWorkspaceContentsUntrusted,
+  workspaceContentsAreUntrusted
+} from '../utils/workspaceTrust.js';
 import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
 import {
@@ -97,6 +102,7 @@ export interface RunOptions {
   json: boolean;
   assumeYes?: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
+  /** Caller-owned lock. runKaizen uses it but never releases it. */
   existingLock?: RunLock;
   authorizationEventRetry?: {
     attempts: number;
@@ -138,13 +144,16 @@ const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
   if (options.dryRun) {
-    if (options.scheduled) await assertExistingWorkspacePrivate(resolved.project.workspacePath);
-    return runKaizenWithPreparedWorkspace(options, resolved);
+    if (options.scheduled) {
+      await assertExistingWorkspacePrivate(resolved.project.workspacePath, projectStateDir(resolved.slug));
+    }
+    return runKaizenWithPreparedWorkspace(options, resolved, false);
   }
 
   const stateDir = projectStateDir(resolved.slug);
   await fs.mkdir(stateDir, { recursive: true });
   await ensureNotPaused(stateDir);
+  const ownsLock = options.existingLock === undefined;
   let lock: RunLock;
   try {
     lock = options.existingLock ?? await RunLock.acquire(stateDir);
@@ -174,17 +183,18 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 
   let handedOff = false;
   try {
-    await secureOrRebuildExistingWorkspace(resolved.project, options.runCommand);
+    await secureOrRebuildExistingWorkspace(resolved.project, stateDir, options.runCommand);
     handedOff = true;
-    return await runKaizenWithPreparedWorkspace({ ...options, existingLock: lock }, resolved);
+    return await runKaizenWithPreparedWorkspace({ ...options, existingLock: lock }, resolved, ownsLock);
   } finally {
-    if (!handedOff) await lock.release();
+    if (ownsLock && !handedOff) await lock.release();
   }
 }
 
 async function runKaizenWithPreparedWorkspace(
   options: RunOptions,
-  resolved: Awaited<ReturnType<typeof resolveProject>>
+  resolved: Awaited<ReturnType<typeof resolveProject>>,
+  releaseLock: boolean
 ): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   try {
     const initialConfig = await loadOperationalConfig(resolved.project, {
@@ -552,11 +562,11 @@ async function runKaizenWithPreparedWorkspace(
 
     return summary;
   } finally {
-    if (!options.dryRun) await options.existingLock?.release();
+    if (releaseLock) await options.existingLock?.release();
   }
 }
 
-async function assertExistingWorkspacePrivate(workspacePath: string): Promise<void> {
+async function assertExistingWorkspacePrivate(workspacePath: string, stateDir: string): Promise<void> {
   try {
     await fs.lstat(workspacePath);
   } catch (error) {
@@ -564,30 +574,40 @@ async function assertExistingWorkspacePrivate(workspacePath: string): Promise<vo
     throw error;
   }
   await assertPrivateDirectory(workspacePath);
+  if (await workspaceContentsAreUntrusted(stateDir)) {
+    throw new Error('Scheduled dry run refused previously exposed workspace contents; run a non-dry command to rebuild them.');
+  }
 }
 
 async function secureOrRebuildExistingWorkspace(
   project: { localPath: string; workspacePath: string },
+  stateDir: string,
   runCommand: CommandRunner
 ): Promise<void> {
   try {
     await fs.lstat(project.workspacePath);
   } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return;
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      await clearWorkspaceContentsUntrusted(stateDir);
+      return;
+    }
     throw error;
   }
+  const contentsMarkedUntrusted = await workspaceContentsAreUntrusted(stateDir);
   try {
     await assertPrivateDirectory(project.workspacePath);
-    return;
+    if (!contentsMarkedUntrusted) return;
   } catch {
-    // Validate that the path is an owned real directory before removing any
-    // content. Merely tightening an exposed checkout would preserve files that
-    // another account could already have replaced.
-    await ensurePrivateDirectory(project.workspacePath);
+    await markWorkspaceContentsUntrusted(stateDir);
   }
+  // Validate that the path is an owned real directory before removing any
+  // content. Merely tightening an exposed checkout would preserve files that
+  // another account could already have replaced.
+  await ensurePrivateDirectory(project.workspacePath);
   const remoteUrl = await new GitClient(runCommand, project.localPath).remoteUrl('origin');
   await fs.rm(project.workspacePath, { recursive: true, force: true });
   await new WorkspaceManager(runCommand, project.workspacePath, remoteUrl).ensure();
+  await clearWorkspaceContentsUntrusted(stateDir);
 }
 
 export async function preflightScheduledPublication(options: {

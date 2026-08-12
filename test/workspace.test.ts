@@ -86,6 +86,7 @@ describe('workspace branch handling', () => {
   });
 
   it('refuses a symlinked workspace instead of changing its target mode', async () => {
+    if (process.platform === 'win32') return;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-symlink-workspace-'));
     const target = path.join(root, 'target');
     const workspacePath = path.join(root, 'workspace');
