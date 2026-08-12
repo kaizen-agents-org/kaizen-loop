@@ -328,7 +328,9 @@ describe('runKaizen dry-run', () => {
     })).rejects.toThrow('trusted origin unavailable');
 
     expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
+    await expect(fs.readFile(path.join(workspace, 'untrusted-sentinel'), 'utf8')).resolves.toBe('preserve');
     await expect(fs.access(path.join(projectStateDir('o-r'), 'workspace-contents-untrusted'))).resolves.toBeUndefined();
+    expect((await fs.stat(projectStateDir('o-r'))).mode & 0o777).toBe(0o700);
   });
 
   it('does not rebuild an exposed workspace when another run holds the project lock', async () => {

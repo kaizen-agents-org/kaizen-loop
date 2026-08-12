@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { ensurePrivateStructureDirectory } from './privateDirectory.js';
 
 const MARKER_NAME = 'workspace-contents-untrusted';
 
@@ -18,7 +19,7 @@ export async function workspaceContentsAreUntrusted(stateDir: string): Promise<b
 }
 
 export async function markWorkspaceContentsUntrusted(stateDir: string): Promise<void> {
-  await fs.mkdir(stateDir, { recursive: true });
+  await ensurePrivateStructureDirectory(stateDir);
   await fs.writeFile(
     workspaceContentsUntrustedMarker(stateDir),
     `${JSON.stringify({ detectedAt: new Date().toISOString() })}\n`,

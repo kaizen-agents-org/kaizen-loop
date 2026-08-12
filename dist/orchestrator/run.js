@@ -14,7 +14,7 @@ import { publicationGithubPreflight, publicationGithubToken, throwIfShutdownRequ
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
-import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import { assertPrivateDirectory, ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
 import { clearWorkspaceContentsUntrusted, markWorkspaceContentsUntrusted, workspaceContentsAreUntrusted } from '../utils/workspaceTrust.js';
 import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
@@ -42,7 +42,7 @@ export async function runKaizen(options) {
         return runKaizenWithPreparedWorkspace(options, resolved, false);
     }
     const stateDir = projectStateDir(resolved.slug);
-    await fs.mkdir(stateDir, { recursive: true });
+    await ensurePrivateStructureDirectory(stateDir);
     await ensureNotPaused(stateDir);
     const ownsLock = options.existingLock === undefined;
     let lock;

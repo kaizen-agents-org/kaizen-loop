@@ -30,7 +30,7 @@ import {
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
-import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import { assertPrivateDirectory, ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
 import {
   clearWorkspaceContentsUntrusted,
   markWorkspaceContentsUntrusted,
@@ -151,7 +151,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   }
 
   const stateDir = projectStateDir(resolved.slug);
-  await fs.mkdir(stateDir, { recursive: true });
+  await ensurePrivateStructureDirectory(stateDir);
   await ensureNotPaused(stateDir);
   const ownsLock = options.existingLock === undefined;
   let lock: RunLock;
