@@ -69,6 +69,17 @@ describe('workspace branch handling', () => {
     await expect(workspace.checkpointFingerprint(config)).rejects.toThrow('Checkpoint fingerprint exceeds');
   });
 
+  it('fails closed when checkpoint file inventory fails', async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (args[0] === 'ls-files') throw new Error('inventory failed');
+      return { command, args, cwd: workspacePath, exitCode: 0, stdout: '', stderr: '', durationMs: 1 };
+    });
+    const workspace = new WorkspaceManager(runner, workspacePath);
+
+    await expect(workspace.checkpointFingerprint(configSchema.parse({ version: 1 }))).rejects.toThrow('inventory failed');
+  });
+
   it('can force-with-lease when pushing regenerated issue branches', async () => {
     vi.stubEnv('GH_TOKEN', 'supervisor-token');
     const runner = vi.fn<CommandRunner>(async (command, args) => ({

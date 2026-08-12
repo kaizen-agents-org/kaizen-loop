@@ -174,8 +174,8 @@ export class GitClient {
             .filter(Boolean);
     }
     async checkpointFiles(base) {
-        const committed = await this.git(['diff', '--name-only', '-z', `${base}...HEAD`], { rejectOnNonZero: false });
-        const working = await this.git(['ls-files', '--modified', '--others', '--exclude-standard', '-z'], { rejectOnNonZero: false });
+        const committed = await this.git(['diff', '--name-only', '-z', `${base}...HEAD`]);
+        const working = await this.git(['ls-files', '--modified', '--others', '--exclude-standard', '-z']);
         return [...new Set(`${committed.stdout}${working.stdout}`.split('\0').filter(Boolean))];
     }
     async diffNumstat(base) {
