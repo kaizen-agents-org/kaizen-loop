@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { createHash, type Hash } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import type { KaizenConfig } from '../config/schema.js';
@@ -37,6 +38,8 @@ export class CheckpointBranchDivergedError extends Error {
 }
 
 const DEFAULT_DIFF_TEXT_MAX_CHARS = 30_000;
+const CHECKPOINT_MAX_ENTRIES = 10_000;
+const CHECKPOINT_MAX_BYTES = 64 * 1024 * 1024;
 
 export class WorkspaceManager {
   constructor(
@@ -221,12 +224,13 @@ export class WorkspaceManager {
     };
   }
 
-  async checkpointFingerprint(config: KaizenConfig): Promise<string> {
+  async checkpointFingerprint(config: KaizenConfig, runDeadlineAt?: number): Promise<string> {
     const diff = await this.collectCheckpointDiffStats(config);
     const hash = createHash('sha256');
+    const budget = { entries: 0, bytes: 0, runDeadlineAt };
     for (const file of [...diff.files].sort()) {
       hash.update(`path\0${file}\0`);
-      await hashWorkspaceEntry(path.join(this.workspacePath, file), hash);
+      await hashWorkspaceEntry(path.join(this.workspacePath, file), hash, budget);
     }
     return hash.digest('hex');
   }
@@ -343,7 +347,14 @@ function parseStatusFiles(status: string): string[] {
     .map((file) => file.replace(/^"|"$/g, ''));
 }
 
-async function hashWorkspaceEntry(entryPath: string, hash: Hash): Promise<void> {
+async function hashWorkspaceEntry(
+  entryPath: string,
+  hash: Hash,
+  budget: { entries: number; bytes: number; runDeadlineAt?: number }
+): Promise<void> {
+  if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt) throw new Error('Checkpoint fingerprint deadline exceeded.');
+  budget.entries += 1;
+  if (budget.entries > CHECKPOINT_MAX_ENTRIES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_ENTRIES} entries.`);
   let stat;
   try {
     stat = await fs.lstat(entryPath);
@@ -363,13 +374,35 @@ async function hashWorkspaceEntry(entryPath: string, hash: Hash): Promise<void> 
     hash.update('directory\0');
     for (const name of (await fs.readdir(entryPath)).sort()) {
       hash.update(`entry\0${name}\0`);
-      await hashWorkspaceEntry(path.join(entryPath, name), hash);
+      await hashWorkspaceEntry(path.join(entryPath, name), hash, budget);
     }
     return;
   }
   if (stat.isFile()) {
     hash.update('file\0');
-    hash.update(await fs.readFile(entryPath));
+    if (budget.bytes + stat.size > CHECKPOINT_MAX_BYTES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_BYTES} bytes.`);
+    const noFollow = process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW;
+    const handle = await fs.open(entryPath, fsConstants.O_RDONLY | noFollow);
+    try {
+      const opened = await handle.stat();
+      if (opened.dev !== stat.dev || opened.ino !== stat.ino || !opened.isFile()) throw new Error('Checkpoint file changed during validation.');
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let position = 0;
+      while (position < opened.size) {
+        if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt) throw new Error('Checkpoint fingerprint deadline exceeded.');
+        const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, opened.size - position), position);
+        if (bytesRead === 0) throw new Error('Checkpoint file changed while hashing.');
+        hash.update(buffer.subarray(0, bytesRead));
+        position += bytesRead;
+        budget.bytes += bytesRead;
+      }
+      const after = await handle.stat();
+      if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) {
+        throw new Error('Checkpoint file changed while hashing.');
+      }
+    } finally {
+      await handle.close();
+    }
     return;
   }
   hash.update(`other\0${stat.size}\0`);

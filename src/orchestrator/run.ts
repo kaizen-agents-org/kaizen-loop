@@ -1221,9 +1221,16 @@ async function processIssue(options: {
       const skipBuilder = resumeAtVerifier && retry === 0;
       let preBuilderCheckpoint: string | undefined;
       if (!skipBuilder) {
-        preBuilderCheckpoint = options.config.commands.setup
-          ? await workspace.checkpointFingerprint(options.config)
-          : undefined;
+        try {
+          preBuilderCheckpoint = options.config.commands.setup
+            ? await workspace.checkpointFingerprint(options.config, options.runDeadlineAt)
+            : undefined;
+        } catch (error) {
+          return withDiscoveredFollowups(
+            await finishFingerprintFailure(options, agent, attempts, error, started),
+            discoveredFollowups
+          );
+        }
         if (resumeAtVerifier && retry === 1) agent = await selectAgent(options.config, options.runCommand);
         const prompt = buildFixPrompt({
           repo: options.project.repo,
@@ -1262,9 +1269,17 @@ async function processIssue(options: {
       }
 
       if (!agentResult) throw new Error('Agent did not produce a result.');
-      const postBuilderCheckpoint = !skipBuilder && preBuilderCheckpoint
-        ? await workspace.checkpointFingerprint(options.config)
-        : undefined;
+      let postBuilderCheckpoint: string | undefined;
+      try {
+        postBuilderCheckpoint = !skipBuilder && preBuilderCheckpoint
+          ? await workspace.checkpointFingerprint(options.config, options.runDeadlineAt)
+          : undefined;
+      } catch (error) {
+        return withDiscoveredFollowups(
+          await finishFingerprintFailure(options, agent, attempts, error, started),
+          discoveredFollowups
+        );
+      }
       const builderChangedCheckpoint = preBuilderCheckpoint && postBuilderCheckpoint
         ? postBuilderCheckpoint !== preBuilderCheckpoint
         : false;
@@ -2124,6 +2139,54 @@ async function finishFailed(
     attempt,
     outcome: 'failed',
     reason: recordedReason,
+    durationMs: Date.now() - started
+  };
+}
+
+async function finishFingerprintFailure(
+  options: {
+    issue: GitHubIssue;
+    runId: string;
+    github: GitHubClient;
+    trigger: RunSummary['trigger'];
+    stateDir: string;
+    branch: string;
+    config: KaizenConfig;
+  },
+  agent: AgentAdapter,
+  attempt: number,
+  error: unknown,
+  started: number
+): Promise<RunIssueSummary> {
+  const reason = `Checkpoint fingerprint failed closed: ${error instanceof Error ? error.message : String(error)}`;
+  await saveImplementationState(options.stateDir, {
+    issue: options.issue.number,
+    branch: options.branch,
+    phase: 'failed',
+    attempt,
+    lastFailure: reason
+  });
+  await options.github.comment(options.issue.number, buildResultComment({
+    runId: options.runId,
+    issue: options.issue.number,
+    attempt,
+    outcome: 'failed',
+    agent: agent.name,
+    summary: reason,
+    notes: '',
+    reason,
+    trigger: options.trigger,
+    maxAttempts: options.config.run.maxAttemptsPerIssue,
+    checkpointPublished: false
+  }));
+  await options.github.removeLabels(options.issue.number, ['kaizen:in-progress']);
+  return {
+    number: options.issue.number,
+    title: options.issue.title,
+    agent: agent.name,
+    attempt,
+    outcome: 'failed',
+    reason,
     durationMs: Date.now() - started
   };
 }

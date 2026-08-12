@@ -63,6 +63,8 @@ describe('workspace branch handling', () => {
     const after = await workspace.checkpointFingerprint(config);
 
     expect(after).not.toBe(before);
+    await fs.truncate(path.join(workspacePath, 'package-lock.json'), 65 * 1024 * 1024);
+    await expect(workspace.checkpointFingerprint(config)).rejects.toThrow('Checkpoint fingerprint exceeds');
   });
 
   it('can force-with-lease when pushing regenerated issue branches', async () => {
