@@ -323,6 +323,8 @@ kaizen scheduler disable [--project <slug>] [--all]
 - macOS: plist の `launchctl bootstrap` / `bootout`
 - Linux: crontab エントリの追加 / 削除
 - `sync` は `.kaizen/config.yml` の `scheduler.jobs` を読み、job ごとの plist / cron 行を登録する
+- `status` / `plan` / `sync` は、ジョブに固定される絶対 `KAIZEN_HOME` を `kaizenHome` として表示する
+- `sync` は launchd / cron の各ジョブに `KAIZEN_HOME` を記録し、対話シェルの環境に依存させない
 - `run.mode: smoke` の job は `kaizen smoke --yes` 相当の sandbox issue-to-PR run を実行し、job id を artifact の trigger に記録する
 - `plan` は登録対象の desired state を表示し、変更はしない
 - `set-schedule` は job の schedule expression を `.kaizen/config.yml` に書き込む

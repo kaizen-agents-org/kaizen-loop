@@ -286,6 +286,7 @@ describe('enableScheduler', () => {
         }
       }
     ]);
+    expect(scheduler.kaizenHome).toBe(home);
     const crontabInput = String(runner.mock.calls.find(([command, args]) => command === 'crontab' && args[0] === '-')?.[2]?.input);
     expect(crontabInput).not.toContain('node kaizen run --project owner-repo --scheduled --trigger scheduled');
     expect(crontabInput).toContain('node kaizen run --project other-repo --scheduled');
@@ -296,7 +297,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain(`'${await fs.realpath(process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER!)}'`);
     expect(crontabInput).toContain("PATH='/trusted/bin:");
-    expect(crontabInput).toContain('KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= /bin/sh');
+    expect(crontabInput).toContain(`KAIZEN_HOME='${home}' KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= /bin/sh`);
     expect(crontabInput).not.toContain('GH_TOKEN=');
     expect(crontabInput).not.toContain('publication-token');
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");
@@ -432,12 +433,14 @@ describe('enableScheduler', () => {
     });
 
     expect(scheduler.paths).toHaveLength(1);
+    expect(scheduler.kaizenHome).toBe(home);
     const bootoutCalls = runner.mock.calls.filter(([command, args]) => command === 'launchctl' && args[0] === 'bootout');
     expect(bootoutCalls).toHaveLength(4);
     const plist = await fs.readFile(scheduler.paths![0], 'utf8');
     expect(plist).toContain('<key>StartInterval</key><integer>300</integer>');
     expect(plist).toContain('<string>/bin/sh</string>');
     expect(plist).toContain('<string>issue-watch</string>');
+    expect(plist).toContain(`<key>KAIZEN_HOME</key><string>${home}</string>`);
     expect(plist).toContain('<key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>');
     expect(plist).not.toContain('bin/run-scheduled.sh</string>');
   });
@@ -565,6 +568,84 @@ describe('enableScheduler', () => {
       runCommand: runner,
       platform: 'darwin'
     })).rejects.toThrow('bootstrap failed');
+  });
+
+  it('terminates a running launchd job from its installed Kaizen home', async () => {
+    const userHome = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-user-home-'));
+    const installedHome = path.join(userHome, 'custom-home');
+    const currentHome = path.join(userHome, 'other-home');
+    vi.stubEnv('HOME', userHome);
+    vi.stubEnv('KAIZEN_HOME', installedHome);
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await enableScheduler({
+      slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
+      runCommand: runner, platform: 'darwin'
+    });
+    await fs.writeFile(
+      path.join(installedHome, 'projects', 'owner-repo', 'run.lock'),
+      JSON.stringify({ pid: 43210 })
+    );
+    vi.stubEnv('KAIZEN_HOME', currentHome);
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+    try {
+      await disableScheduler({ slug: 'owner-repo', runCommand: runner, terminateRunning: true, platform: 'darwin' });
+      expect(kill).toHaveBeenCalledWith(43210, 'SIGTERM');
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('terminates a running cron job from its installed Kaizen home', async () => {
+    const installedHome = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-installed-home-'));
+    const currentHome = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-current-home-'));
+    vi.stubEnv('KAIZEN_HOME', installedHome);
+    let crontab = '';
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'crontab' && args[0] === '-') crontab = String(options?.input);
+      return {
+        command,
+        args,
+        exitCode: 0,
+        stdout: command === 'crontab' && args[0] === '-l' ? crontab : '',
+        stderr: '',
+        durationMs: 1
+      };
+    });
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await enableScheduler({
+      slug: 'owner-repo', project, config: configSchema.parse({ version: 1 }),
+      runCommand: runner, platform: 'linux'
+    });
+    await fs.writeFile(
+      path.join(installedHome, 'projects', 'owner-repo', 'run.lock'),
+      JSON.stringify({ pid: 43211 })
+    );
+    vi.stubEnv('KAIZEN_HOME', currentHome);
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+    try {
+      await disableScheduler({ slug: 'owner-repo', runCommand: runner, terminateRunning: true, platform: 'linux' });
+      expect(kill).toHaveBeenCalledWith(43211, 'SIGTERM');
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it('removes legacy and configured scheduler entries when disabling', async () => {
