@@ -37,4 +37,20 @@ describe('private directory validation', () => {
     await expect(assertPrivateDirectory(root)).resolves.toBeUndefined();
     expect((await fs.stat(root)).mode & 0o777).toBe(0o700);
   });
+
+  it.runIf(process.platform === 'darwin')('removes a deny-only ACL without classifying contents as exposed', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-deny-acl-'));
+    const sentinel = path.join(root, 'sentinel');
+    await fs.writeFile(sentinel, 'preserve');
+    await fs.chmod(root, 0o700);
+    await execFileAsync('/bin/chmod', ['+a', 'everyone deny delete', root]);
+
+    await expect(assertPrivateDirectory(root)).rejects.toThrow('extended ACL');
+
+    const repair = await ensurePrivateDirectory(root);
+
+    expect(repair.contentsMayHaveBeenExposed).toBe(false);
+    await expect(assertPrivateDirectory(root)).resolves.toBeUndefined();
+    await expect(fs.readFile(sentinel, 'utf8')).resolves.toBe('preserve');
+  });
 });

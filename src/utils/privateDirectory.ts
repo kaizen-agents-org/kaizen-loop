@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import { promisify } from 'node:util';
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
@@ -27,7 +28,7 @@ export async function privateDirectoryContentsMayHaveBeenExposed(directory: stri
   assertOwnedRealDirectory(directory, before);
   if (process.platform === 'win32') return false;
   const exposed = (before.mode & 0o077) !== 0 ||
-    (process.platform === 'darwin' && await hasExtendedAcl(directory));
+    (process.platform === 'darwin' && await hasExposureGrantAcl(directory));
   const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
   assertSameDirectory(directory, before, await fs.lstat(directory), uid);
   return exposed;
@@ -44,7 +45,7 @@ async function validatePrivateDirectory(
 
   if (process.platform === 'win32') return { contentsMayHaveBeenExposed: false };
   const contentsMayHaveBeenExposed = (before.mode & 0o077) !== 0 ||
-    (process.platform === 'darwin' && await hasExtendedAcl(directory));
+    (process.platform === 'darwin' && await hasExposureGrantAcl(directory));
   if (repairMode && contentsMayHaveBeenExposed) await beforeExposureRepair?.();
   if (!repairMode && (before.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
     throw new Error(`Private directory path must have mode 0700: ${directory}`);
@@ -117,6 +118,19 @@ async function assertNoExtendedAcl(directory: string): Promise<void> {
 }
 
 async function hasExtendedAcl(directory: string): Promise<boolean> {
+  return (await extendedAclEntries(directory)).length > 0;
+}
+
+async function hasExposureGrantAcl(directory: string): Promise<boolean> {
+  const owner = os.userInfo().username;
+  return (await extendedAclEntries(directory)).some((entry) => {
+    if (!/\ballow\b/.test(entry)) return false;
+    const user = entry.match(/^\s*\d+:\s+user:(\S+)\s+/);
+    return user?.[1] !== owner;
+  });
+}
+
+async function extendedAclEntries(directory: string): Promise<string[]> {
   const { stdout } = await execFileAsync('/bin/ls', ['-lde', directory], { encoding: 'utf8' });
-  return String(stdout).split('\n').slice(1).some((line) => /^\s*\d+:/.test(line));
+  return String(stdout).split('\n').slice(1).filter((line) => /^\s*\d+:/.test(line));
 }
