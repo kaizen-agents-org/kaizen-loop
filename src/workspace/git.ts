@@ -214,8 +214,8 @@ export class GitClient {
   }
 
   async checkpointFiles(base: string): Promise<string[]> {
-    const committed = await this.git(['diff', '--name-only', '-z', `${base}...HEAD`]);
-    const working = await this.git(['ls-files', '--modified', '--others', '--exclude-standard', '-z']);
+    const committed = await this.git(['diff', '--name-only', '-z', `${base}...HEAD`], { maxOutputBytes: 2 * 1024 * 1024 });
+    const working = await this.git(['ls-files', '--modified', '--others', '--exclude-standard', '-z'], { maxOutputBytes: 2 * 1024 * 1024 });
     return [...new Set(`${committed.stdout}${working.stdout}`.split('\0').filter(Boolean))];
   }
 
@@ -397,11 +397,12 @@ export class GitClient {
     if (cleanupError !== undefined) throw cleanupError;
   }
 
-  private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv }) {
+  private git(args: string[], options?: { rejectOnNonZero?: boolean; env?: NodeJS.ProcessEnv; maxOutputBytes?: number }) {
     return this.run('git', args, {
       cwd: this.cwd,
       env: options?.env ?? gitCliEnv(),
-      rejectOnNonZero: options?.rejectOnNonZero
+      rejectOnNonZero: options?.rejectOnNonZero,
+      maxOutputBytes: options?.maxOutputBytes
     });
   }
 }

@@ -3854,6 +3854,7 @@ describe('runKaizen PR flow', () => {
     let prBody = '';
     const executionOrder: string[] = [];
     let builderFinished = false;
+    let setupCalls = 0;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(1, { body: 'Users cannot log in when the session cookie expires.' })]));
@@ -3898,7 +3899,9 @@ describe('runKaizen PR flow', () => {
         return result(command, args, workspace, builderFinished ? '4\t1\tsrc/auth/session.ts\n' : '');
       }
       if (command === 'sh' && args.join(' ') === '-lc npm ci') {
+        setupCalls += 1;
         executionOrder.push('setup');
+        if (setupCalls === 3) return failedResult(command, args, workspace, 'transient install failure');
         return result(command, args, workspace, 'dependencies installed');
       }
       if (command === 'sh' && args.join(' ') === '-lc npm test') {
@@ -3942,6 +3945,8 @@ describe('runKaizen PR flow', () => {
     expect(builderIndex).toBeGreaterThanOrEqual(0);
     expect(postBuilderSetupIndex).toBeGreaterThan(builderIndex);
     expect(postBuilderVerifyIndex).toBeGreaterThan(postBuilderSetupIndex);
+    expect(executionOrder.filter((step) => step === 'builder')).toHaveLength(2);
+    expect(setupCalls).toBe(4);
     // 5. verifier verdict と根拠(evidence_grade 含む)
     expect(prBody).toContain('## Verifier verdict');
     expect(prBody).toContain('verifier: open_pr');

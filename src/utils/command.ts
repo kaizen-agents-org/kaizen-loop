@@ -103,6 +103,7 @@ export interface RunCommandOptions {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   rejectOnNonZero?: boolean;
+  maxOutputBytes?: number;
 }
 
 export type CommandRunner = (
@@ -143,6 +144,7 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
     let timeout: NodeJS.Timeout | undefined;
     let forceKillTimeout: NodeJS.Timeout | undefined;
     let timedOut = false;
+    let outputLimitExceeded = false;
     const clearTimers = () => {
       if (timeout) {
         clearTimeout(timeout);
@@ -169,9 +171,17 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
+      if (!outputLimitExceeded && options.maxOutputBytes && Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > options.maxOutputBytes) {
+        outputLimitExceeded = true;
+        terminateProcessTree(child, 'SIGTERM');
+      }
     });
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
+      if (!outputLimitExceeded && options.maxOutputBytes && Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > options.maxOutputBytes) {
+        outputLimitExceeded = true;
+        terminateProcessTree(child, 'SIGTERM');
+      }
     });
 
     child.on('error', (error) => {
@@ -203,6 +213,12 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
         };
         if (timedOut) {
           const err = new Error(`Command timed out after ${options.timeoutMs}ms: ${formatCommand(command, args)}`);
+          Object.assign(err, { result });
+          reject(err);
+          return;
+        }
+        if (outputLimitExceeded) {
+          const err = new Error(`Command output exceeded ${options.maxOutputBytes} bytes: ${formatCommand(command, args)}`);
           Object.assign(err, { result });
           reject(err);
           return;

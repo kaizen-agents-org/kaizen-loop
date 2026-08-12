@@ -964,6 +964,7 @@ async function processIssue(options) {
         let verifyResults = [];
         let previousFailure = previousState?.lastFailure;
         const filedDiscoveredIssues = new Set();
+        let postBuilderSetupPending = false;
         for (let retry = 0; retry <= options.config.run.maxVerifyRetries; retry += 1) {
             let verificationPassedAfterZeroDiff = false;
             const skipBuilder = resumeAtVerifier && retry === 0;
@@ -1025,7 +1026,8 @@ async function processIssue(options) {
             const builderChangedCheckpoint = preBuilderCheckpoint && postBuilderCheckpoint
                 ? postBuilderCheckpoint !== preBuilderCheckpoint
                 : false;
-            if (builderChangedCheckpoint) {
+            postBuilderSetupPending ||= builderChangedCheckpoint;
+            if (postBuilderSetupPending) {
                 const postBuilderSetup = await workspace.runSetup(options.config, options.runDeadlineAt);
                 if (postBuilderSetup && !postBuilderSetup.ok) {
                     await fs.appendFile(path.join(issueDir, 'setup.log'), `\n# Setup after Builder attempt ${retry + 1}: ${postBuilderSetup.command}\n${postBuilderSetup.output}\n`);
@@ -1035,6 +1037,7 @@ async function processIssue(options) {
                     previousFailure = `Setup failed after Builder: ${postBuilderSetup.command}\n\n${tailLines(postBuilderSetup.output, 200)}`;
                     continue;
                 }
+                postBuilderSetupPending = false;
             }
             await commitLeftovers(workspace, options.issue, agentResult, options.config);
             let diff = await workspace.collectDiffStats(options.config);

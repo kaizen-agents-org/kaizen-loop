@@ -174,8 +174,8 @@ export class GitClient {
             .filter(Boolean);
     }
     async checkpointFiles(base) {
-        const committed = await this.git(['diff', '--name-only', '-z', `${base}...HEAD`]);
-        const working = await this.git(['ls-files', '--modified', '--others', '--exclude-standard', '-z']);
+        const committed = await this.git(['diff', '--name-only', '-z', `${base}...HEAD`], { maxOutputBytes: 2 * 1024 * 1024 });
+        const working = await this.git(['ls-files', '--modified', '--others', '--exclude-standard', '-z'], { maxOutputBytes: 2 * 1024 * 1024 });
         return [...new Set(`${committed.stdout}${working.stdout}`.split('\0').filter(Boolean))];
     }
     async diffNumstat(base) {
@@ -359,7 +359,8 @@ export class GitClient {
         return this.run('git', args, {
             cwd: this.cwd,
             env: options?.env ?? gitCliEnv(),
-            rejectOnNonZero: options?.rejectOnNonZero
+            rejectOnNonZero: options?.rejectOnNonZero,
+            maxOutputBytes: options?.maxOutputBytes
         });
     }
 }
