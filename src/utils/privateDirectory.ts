@@ -6,27 +6,46 @@ import { promisify } from 'node:util';
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const execFileAsync = promisify(execFile);
 
-export async function ensurePrivateDirectory(directory: string): Promise<void> {
+export interface PrivateDirectoryRepairResult {
+  contentsMayHaveBeenExposed: boolean;
+}
+
+export async function ensurePrivateDirectory(
+  directory: string,
+  options: { beforeExposureRepair?: () => Promise<void> } = {}
+): Promise<PrivateDirectoryRepairResult> {
   await fs.mkdir(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
-  await validatePrivateDirectory(directory, true);
+  return validatePrivateDirectory(directory, true, options.beforeExposureRepair);
 }
 
 export async function assertPrivateDirectory(directory: string): Promise<void> {
   await validatePrivateDirectory(directory, false);
 }
 
-async function validatePrivateDirectory(directory: string, repairMode: boolean): Promise<void> {
+export async function privateDirectoryContentsMayHaveBeenExposed(directory: string): Promise<boolean> {
   const before = await fs.lstat(directory);
-  if (!before.isDirectory() || before.isSymbolicLink()) {
-    throw new Error(`Private directory path must be a real directory: ${directory}`);
-  }
-
+  assertOwnedRealDirectory(directory, before);
+  if (process.platform === 'win32') return false;
+  const exposed = (before.mode & 0o077) !== 0 ||
+    (process.platform === 'darwin' && await hasExtendedAcl(directory));
   const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
-  if (uid !== undefined && before.uid !== uid) {
-    throw new Error(`Private directory path is owned by a different user: ${directory}`);
-  }
+  assertSameDirectory(directory, before, await fs.lstat(directory), uid);
+  return exposed;
+}
 
-  if (process.platform === 'win32') return;
+async function validatePrivateDirectory(
+  directory: string,
+  repairMode: boolean,
+  beforeExposureRepair?: () => Promise<void>
+): Promise<PrivateDirectoryRepairResult> {
+  const before = await fs.lstat(directory);
+  assertOwnedRealDirectory(directory, before);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+
+  if (process.platform === 'win32') return { contentsMayHaveBeenExposed: false };
+  const contentsMayHaveBeenExposed = (before.mode & 0o077) !== 0 ||
+    (process.platform === 'darwin' && await hasExtendedAcl(directory));
+  if (repairMode && contentsMayHaveBeenExposed) await beforeExposureRepair?.();
   if (!repairMode && (before.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
     throw new Error(`Private directory path must have mode 0700: ${directory}`);
   }
@@ -59,6 +78,20 @@ async function validatePrivateDirectory(directory: string, repairMode: boolean):
   } finally {
     await handle.close();
   }
+  return { contentsMayHaveBeenExposed };
+}
+
+function assertOwnedRealDirectory(
+  directory: string,
+  stats: Awaited<ReturnType<typeof fs.lstat>>
+): void {
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`Private directory path must be a real directory: ${directory}`);
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (uid !== undefined && stats.uid !== uid) {
+    throw new Error(`Private directory path is owned by a different user: ${directory}`);
+  }
 }
 
 function assertSameDirectory(
@@ -78,8 +111,12 @@ function assertSameDirectory(
 }
 
 async function assertNoExtendedAcl(directory: string): Promise<void> {
-  const { stdout } = await execFileAsync('/bin/ls', ['-lde', directory], { encoding: 'utf8' });
-  if (String(stdout).split('\n').slice(1).some((line) => /^\s*\d+:/.test(line))) {
+  if (await hasExtendedAcl(directory)) {
     throw new Error(`Private directory path must not grant access through an extended ACL: ${directory}`);
   }
+}
+
+async function hasExtendedAcl(directory: string): Promise<boolean> {
+  const { stdout } = await execFileAsync('/bin/ls', ['-lde', directory], { encoding: 'utf8' });
+  return String(stdout).split('\n').slice(1).some((line) => /^\s*\d+:/.test(line));
 }

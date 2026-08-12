@@ -14,7 +14,11 @@ import type { CommandRunner } from '../utils/command.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
-import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import {
+  assertPrivateDirectory,
+  ensurePrivateDirectory,
+  privateDirectoryContentsMayHaveBeenExposed
+} from '../utils/privateDirectory.js';
 import { projectStateDir } from '../utils/paths.js';
 import { markWorkspaceContentsUntrusted, workspaceContentsAreUntrusted } from '../utils/workspaceTrust.js';
 
@@ -29,10 +33,14 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     try {
       await assertPrivateDirectory(resolved.project.workspacePath);
     } catch (error) {
-      await markWorkspaceContentsUntrusted(stateDir);
       if (options.repair) {
-        await ensurePrivateDirectory(resolved.project.workspacePath);
+        await ensurePrivateDirectory(resolved.project.workspacePath, {
+          beforeExposureRepair: async () => markWorkspaceContentsUntrusted(stateDir)
+        });
       } else {
+        if (await privateDirectoryContentsMayHaveBeenExposed(resolved.project.workspacePath)) {
+          await markWorkspaceContentsUntrusted(stateDir);
+        }
         throw error;
       }
     }

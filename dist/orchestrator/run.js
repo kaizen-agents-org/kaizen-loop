@@ -469,18 +469,25 @@ async function secureOrRebuildExistingWorkspace(project, stateDir, runCommand) {
         throw error;
     }
     const contentsMarkedUntrusted = await workspaceContentsAreUntrusted(stateDir);
+    let repaired = false;
     try {
         await assertPrivateDirectory(project.workspacePath);
         if (!contentsMarkedUntrusted)
             return;
     }
     catch {
-        await markWorkspaceContentsUntrusted(stateDir);
+        // Repair owner-only modes such as 0600 in place. If group/other access or
+        // an ACL existed, persist the taint before changing permissions so any
+        // later origin lookup, removal, or clone failure remains fail-closed.
+        const repair = await ensurePrivateDirectory(project.workspacePath, {
+            beforeExposureRepair: async () => markWorkspaceContentsUntrusted(stateDir)
+        });
+        repaired = true;
+        if (!contentsMarkedUntrusted && !repair.contentsMayHaveBeenExposed)
+            return;
     }
-    // Validate that the path is an owned real directory before removing any
-    // content. Merely tightening an exposed checkout would preserve files that
-    // another account could already have replaced.
-    await ensurePrivateDirectory(project.workspacePath);
+    if (contentsMarkedUntrusted && !repaired)
+        await ensurePrivateDirectory(project.workspacePath);
     const remoteUrl = await new GitClient(runCommand, project.localPath).remoteUrl('origin');
     await fs.rm(project.workspacePath, { recursive: true, force: true });
     await new WorkspaceManager(runCommand, project.workspacePath, remoteUrl).ensure();
