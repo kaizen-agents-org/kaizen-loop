@@ -947,6 +947,9 @@ async function processIssue(options) {
             await fs.writeFile(path.join(issueDir, 'setup.log'), `# ${setupResult.command}\n${setupResult.output}`);
             return withDiscoveredFollowups(await finishFailed(options, agent, attempts, reason, started, [setupResult]), discoveredFollowups);
         }
+        let builderCheckpoint = options.config.commands.setup
+            ? await workspace.collectCheckpointDiffStats(options.config)
+            : undefined;
         if (!resumeAtVerifier)
             agent = await selectAgent(options.config, options.runCommand);
         const branch = options.branch;
@@ -1004,10 +1007,15 @@ async function processIssue(options) {
             }
             if (!agentResult)
                 throw new Error('Agent did not produce a result.');
-            const postBuilderDiff = !skipBuilder
+            const postBuilderCheckpoint = !skipBuilder && builderCheckpoint
                 ? await workspace.collectCheckpointDiffStats(options.config)
                 : undefined;
-            if (postBuilderDiff && postBuilderDiff.changedFiles > 0) {
+            const builderChangedCheckpoint = builderCheckpoint && postBuilderCheckpoint
+                ? JSON.stringify(postBuilderCheckpoint) !== JSON.stringify(builderCheckpoint)
+                : false;
+            if (postBuilderCheckpoint)
+                builderCheckpoint = postBuilderCheckpoint;
+            if (builderChangedCheckpoint) {
                 const postBuilderSetup = await workspace.runSetup(options.config, options.runDeadlineAt);
                 if (postBuilderSetup && !postBuilderSetup.ok) {
                     await fs.appendFile(path.join(issueDir, 'setup.log'), `\n# Setup after Builder attempt ${retry + 1}: ${postBuilderSetup.command}\n${postBuilderSetup.output}\n`);

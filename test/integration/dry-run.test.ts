@@ -3853,6 +3853,7 @@ describe('runKaizen PR flow', () => {
 
     let prBody = '';
     const executionOrder: string[] = [];
+    let builderFinished = false;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(1, { body: 'Users cannot log in when the session cookie expires.' })]));
@@ -3865,6 +3866,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
         executionOrder.push('builder');
+        builderFinished = true;
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: 'Refreshed the session cookie before it expires so users stay logged in.',
@@ -3886,8 +3888,12 @@ describe('runKaizen PR flow', () => {
       // Builder committed its edit, so the working tree is clean while the
       // branch diff still contains the dependency-affecting change.
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
-      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/auth/session.ts\n');
-      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '4\t1\tsrc/auth/session.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') {
+        return result(command, args, workspace, builderFinished ? 'src/auth/session.ts\n' : '');
+      }
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') {
+        return result(command, args, workspace, builderFinished ? '4\t1\tsrc/auth/session.ts\n' : '');
+      }
       if (command === 'sh' && args.join(' ') === '-lc npm ci') {
         executionOrder.push('setup');
         return result(command, args, workspace, 'dependencies installed');
@@ -4124,7 +4130,7 @@ describe('runKaizen PR flow', () => {
       }
     });
 
-    let statusCalls = 0;
+    let verifierFinished = false;
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue()]));
@@ -4146,12 +4152,12 @@ describe('runKaizen PR flow', () => {
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'verifier') {
         await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
+        verifierFinished = true;
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
       if (command === 'git' && args.join(' ') === 'status --porcelain') {
-        statusCalls += 1;
-        return result(command, args, workspace, statusCalls === 2 ? 'M generated.txt\n' : '');
+        return result(command, args, workspace, verifierFinished ? 'M generated.txt\n' : '');
       }
       // `git diff --cached --quiet` exits non-zero when something is staged.
       // The generated change here is not harness scratch, so it survives the
@@ -4182,7 +4188,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
-    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(3);
+    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
     expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
   });
