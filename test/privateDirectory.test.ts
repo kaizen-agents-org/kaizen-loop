@@ -9,6 +9,16 @@ import { assertPrivateDirectory, ensurePrivateDirectory } from '../src/utils/pri
 const execFileAsync = promisify(execFile);
 
 describe('private directory validation', () => {
+  it.runIf(process.platform !== 'win32')('rejects owner permission sets weaker than 0700', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-mode-'));
+    await fs.chmod(root, 0o600);
+
+    await expect(assertPrivateDirectory(root)).rejects.toThrow('mode 0700');
+
+    await ensurePrivateDirectory(root);
+    expect((await fs.stat(root)).mode & 0o777).toBe(0o700);
+  });
+
   it.runIf(process.platform === 'darwin')('rejects extended ACL grants and removes them during repair', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-acl-'));
     await fs.chmod(root, 0o700);

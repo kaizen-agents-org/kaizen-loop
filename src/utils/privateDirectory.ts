@@ -45,7 +45,7 @@ async function validatePrivateDirectory(directory: string, repairMode: boolean):
     const secured = await handle.stat();
     assertSameDirectory(directory, before, after, uid);
     assertSameDirectory(directory, before, secured, uid);
-    if ((secured.mode & 0o077) !== 0) {
+    if ((secured.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
       throw new Error(`Private directory path must have mode 0700: ${directory}`);
     }
   } finally {
