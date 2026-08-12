@@ -1258,6 +1258,23 @@ async function processIssue(options: {
       }
 
       if (!agentResult) throw new Error('Agent did not produce a result.');
+      if (!skipBuilder && (await workspace.git().statusPorcelain()).trim()) {
+        const postBuilderSetup = await workspace.runSetup(options.config, options.runDeadlineAt);
+        if (postBuilderSetup && !postBuilderSetup.ok) {
+          await fs.appendFile(
+            path.join(issueDir, 'setup.log'),
+            `\n# Setup after Builder attempt ${retry + 1}: ${postBuilderSetup.command}\n${postBuilderSetup.output}\n`
+          );
+          if (retry >= options.config.run.maxVerifyRetries) {
+            return withDiscoveredFollowups(
+              await finishFailed(options, agent, attempts, `Setup failed after Builder: ${postBuilderSetup.command}`, started, [postBuilderSetup]),
+              discoveredFollowups
+            );
+          }
+          previousFailure = `Setup failed after Builder: ${postBuilderSetup.command}\n\n${tailLines(postBuilderSetup.output, 200)}`;
+          continue;
+        }
+      }
       await commitLeftovers(workspace, options.issue, agentResult, options.config);
       let diff = await workspace.collectDiffStats(options.config);
       if (diff.changedFiles === 0) {
@@ -1298,24 +1315,6 @@ async function processIssue(options: {
           await finishFailed(options, agent, attempts, `Forbidden paths changed: ${diff.forbiddenFiles.join(', ')}`, started),
           discoveredFollowups
         );
-      }
-
-      if (!skipBuilder) {
-        const postBuilderSetup = await workspace.runSetup(options.config, options.runDeadlineAt);
-        if (postBuilderSetup && !postBuilderSetup.ok) {
-          await fs.appendFile(
-            path.join(issueDir, 'setup.log'),
-            `\n# Setup after Builder attempt ${retry + 1}: ${postBuilderSetup.command}\n${postBuilderSetup.output}\n`
-          );
-          if (retry >= options.config.run.maxVerifyRetries) {
-            return withDiscoveredFollowups(
-              await finishFailed(options, agent, attempts, `Setup failed after Builder: ${postBuilderSetup.command}`, started, [postBuilderSetup]),
-              discoveredFollowups
-            );
-          }
-          previousFailure = `Setup failed after Builder: ${postBuilderSetup.command}\n\n${tailLines(postBuilderSetup.output, 200)}`;
-          continue;
-        }
       }
 
       await saveImplementationState(options.stateDir, {
