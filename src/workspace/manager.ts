@@ -225,10 +225,10 @@ export class WorkspaceManager {
   }
 
   async checkpointFingerprint(config: KaizenConfig, runDeadlineAt?: number): Promise<string> {
-    const diff = await this.collectCheckpointDiffStats(config);
+    const files = await this.git().checkpointFiles(`origin/${config.git.defaultBranch}`);
     const hash = createHash('sha256');
     const budget = { entries: 0, bytes: 0, runDeadlineAt };
-    for (const file of [...diff.files].sort()) {
+    for (const file of files.sort()) {
       hash.update(`path\0${file}\0`);
       await hashWorkspaceEntry(path.join(this.workspacePath, file), hash, budget);
     }
@@ -380,18 +380,22 @@ async function hashWorkspaceEntry(
   }
   if (stat.isFile()) {
     hash.update('file\0');
-    if (budget.bytes + stat.size > CHECKPOINT_MAX_BYTES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_BYTES} bytes.`);
     const noFollow = process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW;
     const handle = await fs.open(entryPath, fsConstants.O_RDONLY | noFollow);
     try {
       const opened = await handle.stat();
-      if (opened.dev !== stat.dev || opened.ino !== stat.ino || !opened.isFile()) throw new Error('Checkpoint file changed during validation.');
+      if (
+        opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size
+        || opened.mtimeMs !== stat.mtimeMs || opened.mode !== stat.mode || !opened.isFile()
+      ) throw new Error('Checkpoint file changed during validation.');
+      if (budget.bytes + opened.size > CHECKPOINT_MAX_BYTES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_BYTES} bytes.`);
       const buffer = Buffer.allocUnsafe(64 * 1024);
       let position = 0;
       while (position < opened.size) {
         if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt) throw new Error('Checkpoint fingerprint deadline exceeded.');
         const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, opened.size - position), position);
         if (bytesRead === 0) throw new Error('Checkpoint file changed while hashing.');
+        if (budget.bytes + bytesRead > CHECKPOINT_MAX_BYTES) throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_BYTES} bytes.`);
         hash.update(buffer.subarray(0, bytesRead));
         position += bytesRead;
         budget.bytes += bytesRead;

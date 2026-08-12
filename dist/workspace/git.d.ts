@@ -47,6 +47,7 @@ export declare class GitClient {
         ahead: number;
     }>;
     diffNameOnly(base: string): Promise<string[]>;
+    checkpointFiles(base: string): Promise<string[]>;
     diffNumstat(base: string): Promise<Array<{
         file: string;
         added: number;

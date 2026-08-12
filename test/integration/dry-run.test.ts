@@ -3891,6 +3891,9 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') {
         return result(command, args, workspace, builderFinished ? 'src/auth/session.ts\n' : '');
       }
+      if (command === 'git' && args.join(' ') === 'diff --name-only -z origin/main...HEAD') {
+        return result(command, args, workspace, builderFinished ? 'src/auth/session.ts\0' : '');
+      }
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') {
         return result(command, args, workspace, builderFinished ? '4\t1\tsrc/auth/session.ts\n' : '');
       }
