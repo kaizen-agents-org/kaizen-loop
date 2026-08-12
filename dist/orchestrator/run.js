@@ -1004,7 +1004,10 @@ async function processIssue(options) {
             }
             if (!agentResult)
                 throw new Error('Agent did not produce a result.');
-            if (!skipBuilder && (await workspace.git().statusPorcelain()).trim()) {
+            const postBuilderDiff = !skipBuilder
+                ? await workspace.collectCheckpointDiffStats(options.config)
+                : undefined;
+            if (postBuilderDiff && postBuilderDiff.changedFiles > 0) {
                 const postBuilderSetup = await workspace.runSetup(options.config, options.runDeadlineAt);
                 if (postBuilderSetup && !postBuilderSetup.ok) {
                     await fs.appendFile(path.join(issueDir, 'setup.log'), `\n# Setup after Builder attempt ${retry + 1}: ${postBuilderSetup.command}\n${postBuilderSetup.output}\n`);

@@ -3826,7 +3826,7 @@ describe('runKaizen PR flow', () => {
     expect(prBody).toContain('reported: Kaizen Loop ran verifier, but verifier evidence is based on text reporting rather than execution proof');
   });
 
-  it('includes all six evidence-package sections in generated PR bodies', async () => {
+  it('runs setup for committed Builder edits before verification and includes all PR evidence sections', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
@@ -3883,7 +3883,9 @@ describe('runKaizen PR flow', () => {
         return result(command, args, workspace, 'verified');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
-      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, 'M src/auth/session.ts\n');
+      // Builder committed its edit, so the working tree is clean while the
+      // branch diff still contains the dependency-affecting change.
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/auth/session.ts\n');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '4\t1\tsrc/auth/session.ts\n');
       if (command === 'sh' && args.join(' ') === '-lc npm ci') {
@@ -4180,7 +4182,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
     const gitCommands = runner.mock.calls.filter(([command]) => isGitCommand(command)).map(([, args]) => args.join(' '));
     const shellCommands = runner.mock.calls.filter(([command]) => command === 'sh').map(([, args]) => args.join(' '));
-    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(2);
+    expect(shellCommands.filter((command) => command === '-lc npm ci')).toHaveLength(3);
     expect(gitCommands).toContain('commit -m kaizen: 直した (#1)');
     expect(gitCommands.some((command) => command.startsWith('push --no-verify --force-with-lease=refs/heads/kaizen/issue-1-fix-bug:'))).toBe(true);
   });
