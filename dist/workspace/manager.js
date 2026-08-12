@@ -200,7 +200,8 @@ export class WorkspaceManager {
         const budget = { entries: 0, bytes: 0, runDeadlineAt };
         for (const file of files.sort()) {
             hash.update(`path\0${file}\0`);
-            await hashWorkspaceEntry(path.join(this.workspacePath, file), hash, budget, async () => this.git().gitlinkFingerprint(file));
+            const entryPath = await validatedWorkspaceEntryPath(this.workspacePath, file);
+            await hashWorkspaceEntry(entryPath, hash, budget, async () => this.git().gitlinkFingerprint(file));
         }
         return hash.digest('hex');
     }
@@ -297,6 +298,35 @@ function parseStatusFiles(status) {
         .map((line) => line.slice(3))
         .flatMap((file) => file.includes(' -> ') ? file.split(' -> ') : [file])
         .map((file) => file.replace(/^"|"$/g, ''));
+}
+async function validatedWorkspaceEntryPath(workspacePath, inventoryPath) {
+    if (!inventoryPath || path.isAbsolute(inventoryPath)) {
+        throw new Error(`Checkpoint fingerprint refuses path outside workspace: ${inventoryPath}`);
+    }
+    const root = path.resolve(workspacePath);
+    const entry = path.resolve(root, inventoryPath);
+    const relative = path.relative(root, entry);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new Error(`Checkpoint fingerprint refuses path outside workspace: ${inventoryPath}`);
+    }
+    const components = relative.split(path.sep).filter(Boolean);
+    let current = root;
+    for (let index = 0; index < components.length; index += 1) {
+        let stat;
+        try {
+            stat = await fs.lstat(current);
+        }
+        catch (error) {
+            if (error.code === 'ENOENT')
+                return entry;
+            throw error;
+        }
+        if (!stat.isDirectory() || stat.isSymbolicLink()) {
+            throw new Error(`Checkpoint fingerprint refuses symlinked or non-directory parent: ${current}`);
+        }
+        current = path.join(current, components[index]);
+    }
+    return entry;
 }
 async function hashWorkspaceEntry(entryPath, hash, budget, gitlinkFingerprint) {
     if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt)

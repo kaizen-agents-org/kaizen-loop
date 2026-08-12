@@ -80,6 +80,29 @@ describe('workspace branch handling', () => {
     await expect(workspace.checkpointFingerprint(configSchema.parse({ version: 1 }))).rejects.toThrow('inventory failed');
   });
 
+  it('refuses a checkpoint path whose parent symlink points outside the workspace', async () => {
+    if (process.platform === 'win32') return;
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    const externalPath = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-external-'));
+    await fs.writeFile(path.join(externalPath, 'package-lock.json'), 'external secret\n');
+    await fs.symlink(externalPath, path.join(workspacePath, 'nested'));
+    const runner = vi.fn<CommandRunner>(async (command, args) => ({
+      command,
+      args,
+      cwd: workspacePath,
+      exitCode: 0,
+      stdout: args.join(' ') === 'diff --no-renames --name-only -z origin/main...HEAD'
+        ? 'nested/package-lock.json\0'
+        : '',
+      stderr: '',
+      durationMs: 1
+    }));
+    const workspace = new WorkspaceManager(runner, workspacePath);
+
+    await expect(workspace.checkpointFingerprint(configSchema.parse({ version: 1 })))
+      .rejects.toThrow('refuses symlinked or non-directory parent');
+  });
+
   it('fingerprints changed gitlinks without traversing their directories', async () => {
     const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
     await fs.mkdir(path.join(workspacePath, 'vendor', 'dependency'), { recursive: true });
