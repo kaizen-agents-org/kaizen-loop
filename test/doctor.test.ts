@@ -110,6 +110,52 @@ describe('doctorProject', () => {
     await expect(fs.access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it.runIf(process.platform !== 'win32')('reports insecure existing worktree directories', async () => {
+    const { repo, workspace } = await setupProject();
+    const worktreeRoot = `${workspace}-worktrees`;
+    const runDirectory = path.join(worktreeRoot, 'run-1');
+    const worktree = path.join(runDirectory, 'issue-370');
+    await fs.mkdir(worktree, { recursive: true });
+    await fs.chmod(worktree, 0o755);
+
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: trustedRunner(workingDoctorRunner())
+    });
+
+    expect(output.checks.find((item) => item.name === 'workspace permissions')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('mode 0700')
+    });
+  });
+
+  it.runIf(process.platform !== 'win32')('repairs existing issue and Guardian worktree directories', async () => {
+    const { repo, workspace } = await setupProject();
+    const worktreeRoot = `${workspace}-worktrees`;
+    const runDirectory = path.join(worktreeRoot, 'run-1');
+    const worktree = path.join(runDirectory, 'issue-370');
+    const guardianRoot = path.join(process.env.KAIZEN_HOME!, 'projects', 'o-r', 'guardian', 'worktrees');
+    const guardianWorktree = path.join(guardianRoot, 'job-1');
+    await fs.mkdir(worktree, { recursive: true });
+    await fs.mkdir(guardianWorktree, { recursive: true });
+    const directories = [worktreeRoot, runDirectory, worktree, guardianRoot, guardianWorktree];
+    for (const directory of directories) await fs.chmod(directory, 0o755);
+
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: true,
+      runCommand: trustedRunner(workingDoctorRunner())
+    });
+
+    expect(output.checks.find((item) => item.name === 'workspace permissions')).toMatchObject({ ok: true });
+    for (const directory of directories) {
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
+    }
+  });
+
   it('reports an exposed workspace and repairs it to mode 0700', async () => {
     if (process.platform === 'win32') return;
     const { repo, workspace } = await setupProject();
