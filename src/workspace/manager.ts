@@ -372,7 +372,16 @@ async function hashWorkspaceEntry(
   }
   if (stat.isDirectory()) {
     hash.update('directory\0');
-    for (const name of (await fs.readdir(entryPath)).sort()) {
+    const names: string[] = [];
+    const directory = await fs.opendir(entryPath);
+    for await (const entry of directory) {
+      if (budget.runDeadlineAt && Date.now() >= budget.runDeadlineAt) throw new Error('Checkpoint fingerprint deadline exceeded.');
+      names.push(entry.name);
+      if (budget.entries + names.length > CHECKPOINT_MAX_ENTRIES) {
+        throw new Error(`Checkpoint fingerprint exceeds ${CHECKPOINT_MAX_ENTRIES} entries.`);
+      }
+    }
+    for (const name of names.sort()) {
       hash.update(`entry\0${name}\0`);
       await hashWorkspaceEntry(path.join(entryPath, name), hash, budget);
     }
