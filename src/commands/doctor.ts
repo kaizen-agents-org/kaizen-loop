@@ -20,10 +20,20 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
   const resolved = await resolveProject(options.project, options.cwd);
   let workspacePrivate = false;
+  let workspaceContentsTrusted = false;
   await check(checks, 'workspace', async () => {
     await fs.access(resolved.project.workspacePath);
-    if (options.repair) await ensurePrivateDirectory(resolved.project.workspacePath);
-    else await assertPrivateDirectory(resolved.project.workspacePath);
+    if (options.repair) {
+      try {
+        await assertPrivateDirectory(resolved.project.workspacePath);
+        workspaceContentsTrusted = true;
+      } catch {
+        await ensurePrivateDirectory(resolved.project.workspacePath);
+      }
+    } else {
+      await assertPrivateDirectory(resolved.project.workspacePath);
+      workspaceContentsTrusted = true;
+    }
     workspacePrivate = true;
   });
   let localConfig: KaizenConfig | undefined;
@@ -33,6 +43,9 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   });
   await check(checks, 'workspace config', async () => {
     if (!workspacePrivate) throw new Error('skipped because workspace privacy validation failed');
+    if (!workspaceContentsTrusted) {
+      throw new Error('skipped because repaired workspace contents require review or rebuild');
+    }
     workspaceConfig = await loadConfig(resolved.project.workspacePath);
   });
   const config = workspaceConfig ?? localConfig;
@@ -66,6 +79,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     const loaded = config;
     if (!loaded) throw new Error('config unavailable');
     if (!workspacePrivate) throw new Error('skipped because workspace privacy validation failed');
+    if (!workspaceContentsTrusted) throw new Error('skipped because repaired workspace contents require review or rebuild');
     const preferredBackend = loaded.agent.default;
     const fallbackBackend: 'claude' | 'codex' = preferredBackend === 'codex' ? 'claude' : 'codex';
     const preferredBackends: Array<'claude' | 'codex'> = loaded.agent.fallback

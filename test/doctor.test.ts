@@ -161,6 +161,23 @@ describe('doctorProject', () => {
       message: expect.stringContaining('workspace privacy validation failed')
     });
     expect(runner.mock.calls.some(([command]) => command === 'attacker-controlled-builder')).toBe(false);
+
+    const repaired = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: true,
+      runCommand: trustedRunner(runner)
+    });
+    expect(repaired.checks.find((item) => item.name === 'workspace')).toMatchObject({ ok: true });
+    expect(repaired.checks.find((item) => item.name === 'workspace config')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
+    expect(repaired.checks.find((item) => item.name === 'builder agent runtime')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
+    expect(runner.mock.calls.some(([command]) => command === 'attacker-controlled-builder')).toBe(false);
   });
 
   it('fails when the builder command exists but runtime smoke test cannot execute', async () => {

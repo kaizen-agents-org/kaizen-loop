@@ -17,12 +17,22 @@ export async function doctorProject(options) {
     const checks = [];
     const resolved = await resolveProject(options.project, options.cwd);
     let workspacePrivate = false;
+    let workspaceContentsTrusted = false;
     await check(checks, 'workspace', async () => {
         await fs.access(resolved.project.workspacePath);
-        if (options.repair)
-            await ensurePrivateDirectory(resolved.project.workspacePath);
-        else
+        if (options.repair) {
+            try {
+                await assertPrivateDirectory(resolved.project.workspacePath);
+                workspaceContentsTrusted = true;
+            }
+            catch {
+                await ensurePrivateDirectory(resolved.project.workspacePath);
+            }
+        }
+        else {
             await assertPrivateDirectory(resolved.project.workspacePath);
+            workspaceContentsTrusted = true;
+        }
         workspacePrivate = true;
     });
     let localConfig;
@@ -33,6 +43,9 @@ export async function doctorProject(options) {
     await check(checks, 'workspace config', async () => {
         if (!workspacePrivate)
             throw new Error('skipped because workspace privacy validation failed');
+        if (!workspaceContentsTrusted) {
+            throw new Error('skipped because repaired workspace contents require review or rebuild');
+        }
         workspaceConfig = await loadConfig(resolved.project.workspacePath);
     });
     const config = workspaceConfig ?? localConfig;
@@ -74,6 +87,8 @@ export async function doctorProject(options) {
             throw new Error('config unavailable');
         if (!workspacePrivate)
             throw new Error('skipped because workspace privacy validation failed');
+        if (!workspaceContentsTrusted)
+            throw new Error('skipped because repaired workspace contents require review or rebuild');
         const preferredBackend = loaded.agent.default;
         const fallbackBackend = preferredBackend === 'codex' ? 'claude' : 'codex';
         const preferredBackends = loaded.agent.fallback

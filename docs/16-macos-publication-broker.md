@@ -15,7 +15,10 @@ directory, and issue worktree with mode `0700` before untrusted work starts.
 `kaizen doctor` reports an exposed workspace; `kaizen doctor --repair` tightens an
 existing workspace only after confirming that it is a real directory owned by the
 runtime user. On macOS, validation also rejects extended ACL grants and repair removes
-them. Doctor does not launch its Builder smoke test until workspace privacy passes.
+them. A scheduled run rebuilds a formerly exposed workspace from the trusted developer
+checkout's origin before reading its contents. Doctor tightens the directory but does
+not load its config or launch its Builder smoke test in the same repair invocation;
+the operator must first review or rebuild the previously exposed contents.
 
 ## Install
 

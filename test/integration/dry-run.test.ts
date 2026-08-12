@@ -72,16 +72,14 @@ describe('runKaizen dry-run', () => {
       path.join(repo, '.kaizen', 'config.yml'),
       buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
     );
-    await fs.writeFile(
-      path.join(workspace, '.kaizen', 'config.yml'),
-      defaultConfigWith(
-        {
-          safety: { operationMode: 'dogfood' },
-          issues: { selection: { mode: 'opt-in', includeLabel: 'kaizen:ready' } }
-        },
-        { agent: 'claude', setup: null, verify: [] }
-      )
+    const scheduledConfig = defaultConfigWith(
+      {
+        safety: { operationMode: 'dogfood' },
+        issues: { selection: { mode: 'opt-in', includeLabel: 'kaizen:ready' } }
+      },
+      { agent: 'claude', setup: null, verify: [] }
     );
+    await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), scheduledConfig);
     if (process.platform !== 'win32') await fs.chmod(workspace, 0o600);
     await saveRegistryFile({
       version: 1,
@@ -97,6 +95,16 @@ describe('runKaizen dry-run', () => {
       }
     });
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (isGitCommand(command) && args.join(' ') === 'remote get-url origin') {
+        return result(command, args, options?.cwd, 'https://github.com/o/r.git\n');
+      }
+      if (isGitCommand(command) && args[0] === 'clone') {
+        const target = args[2];
+        await fs.mkdir(path.join(target, '.git'), { recursive: true });
+        await fs.mkdir(path.join(target, '.kaizen'), { recursive: true });
+        await fs.writeFile(path.join(target, '.kaizen', 'config.yml'), scheduledConfig);
+        return result(command, args, options?.cwd, 'cloned');
+      }
       if (args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, options?.cwd, JSON.stringify([
           issue(1, { labels: [{ name: 'kaizen' }, { name: 'kaizen:ready' }] })
@@ -125,7 +133,10 @@ describe('runKaizen dry-run', () => {
 
     expect('selected' in selection && selection.selected.map(({ number }) => number)).toEqual([1]);
     if (process.platform !== 'win32') expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
-    expect(runner.mock.calls.every(([, , options]) => options?.cwd === workspace)).toBe(true);
+    expect(runner.mock.calls.some(([command, args]) => isGitCommand(command) && args[0] === 'clone')).toBe(true);
+    expect(runner.mock.calls
+      .filter(([command]) => command === 'gh')
+      .every(([, , options]) => options?.cwd === workspace)).toBe(true);
 
     runner.mockClear();
     const manualSelection = await runKaizen({
