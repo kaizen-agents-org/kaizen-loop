@@ -63,12 +63,18 @@ export async function ensurePrivateProjectStateDirectory(
   stateDir: string
 ): Promise<{ contentsMayHaveBeenExposed: boolean }> {
   let contentsMayHaveBeenExposed = false;
-  for (const directory of projectStateHierarchy(stateDir)) {
+  const hierarchy = projectStateHierarchy(stateDir);
+  for (const [index, directory] of hierarchy.entries()) {
+    let modifiableByOthers = false;
     try {
-      if (await privateDirectoryMayBeModifiedByOthers(directory)) contentsMayHaveBeenExposed = true;
+      modifiableByOthers = await privateDirectoryMayBeModifiedByOthers(directory);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    if (modifiableByOthers && index < hierarchy.length - 1) {
+      throw new Error(`Refusing to repair an exposed project-state ancestor: ${directory}`);
+    }
+    if (modifiableByOthers) contentsMayHaveBeenExposed = true;
     await ensurePrivateDirectory(directory, {
       beforeExposureRepair: async () => undefined
     });

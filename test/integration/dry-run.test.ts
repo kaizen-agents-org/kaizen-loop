@@ -238,6 +238,41 @@ describe('runKaizen dry-run', () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it.runIf(process.platform !== 'win32')('does not repair an exposed project-state ancestor during a normal run', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+    await fs.chmod(workspace, 0o700);
+    const stateDir = projectStateDir('o-r');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.chmod(stateDir, 0o700);
+    const projectsDir = path.dirname(stateDir);
+    await fs.chmod(projectsDir, 0o777);
+    await saveRegistryFile({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r', localPath: repo, workspacePath: workspace, schedule: '02:00', enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(runKaizen({
+      cwd: repo, project: 'o-r', scheduled: false, dryRun: false, json: true, runCommand: runner
+    })).rejects.toThrow('exposed project-state ancestor');
+
+    expect((await fs.stat(projectsDir)).mode & 0o777).toBe(0o777);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('rebuilds exposed workspace contents under the run lock and clears their marker', async () => {
     if (process.platform === 'win32') return;
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));

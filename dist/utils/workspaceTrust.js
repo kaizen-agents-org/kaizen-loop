@@ -60,15 +60,21 @@ export async function markWorkspaceContentsUntrusted(stateDir) {
 }
 export async function ensurePrivateProjectStateDirectory(stateDir) {
     let contentsMayHaveBeenExposed = false;
-    for (const directory of projectStateHierarchy(stateDir)) {
+    const hierarchy = projectStateHierarchy(stateDir);
+    for (const [index, directory] of hierarchy.entries()) {
+        let modifiableByOthers = false;
         try {
-            if (await privateDirectoryMayBeModifiedByOthers(directory))
-                contentsMayHaveBeenExposed = true;
+            modifiableByOthers = await privateDirectoryMayBeModifiedByOthers(directory);
         }
         catch (error) {
             if (error.code !== 'ENOENT')
                 throw error;
         }
+        if (modifiableByOthers && index < hierarchy.length - 1) {
+            throw new Error(`Refusing to repair an exposed project-state ancestor: ${directory}`);
+        }
+        if (modifiableByOthers)
+            contentsMayHaveBeenExposed = true;
         await ensurePrivateDirectory(directory, {
             beforeExposureRepair: async () => undefined
         });
