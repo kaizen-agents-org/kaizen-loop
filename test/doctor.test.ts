@@ -322,6 +322,17 @@ async function setupProject(options: { createWorkspace?: boolean } = {}) {
   return { repo, workspace };
 }
 
+function workingDoctorRunner() {
+  return vi.fn<CommandRunner>(async (command, args, options) => {
+    if (command === 'builder-agent' && args.length === 0) {
+      await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+        status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+      });
+    }
+    return result(command, args, options?.cwd, 'ok');
+  });
+}
+
 async function writeBuilderResult(resultPath: unknown, payload: unknown) {
   if (typeof resultPath !== 'string') throw new Error('missing KAIZEN_BUILD_RESULT_PATH');
   await fs.mkdir(path.dirname(resultPath), { recursive: true });

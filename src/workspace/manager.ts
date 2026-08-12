@@ -3,6 +3,7 @@ import path from 'node:path';
 import { minimatch } from 'minimatch';
 import type { KaizenConfig } from '../config/schema.js';
 import { buildUntrustedEnv, type CommandResult, type CommandRunner } from '../utils/command.js';
+import { worktreesDirForWorkspace } from '../utils/paths.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
@@ -322,7 +323,7 @@ function issueBranchName(config: KaizenConfig, issue: { number: number; title: s
 }
 
 function issueWorktreePath(workspacePath: string, runId: string, issueNumber: number): string {
-  return path.join(path.dirname(workspacePath), `${path.basename(workspacePath)}-worktrees`, runId, `issue-${issueNumber}`);
+  return path.join(worktreesDirForWorkspace(workspacePath), runId, `issue-${issueNumber}`);
 }
 
 function matchesAny(file: string, patterns: string[]): boolean {

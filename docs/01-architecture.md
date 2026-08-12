@@ -118,9 +118,10 @@ Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `agent
 
 - run 開始時に base workspace を `git fetch origin && git checkout main && git reset --hard origin/main && git clean -fdx` で**完全に origin と同期**させる(夜間に人間が push していても追従する)
 - 各 Issue は base workspace から作成した専用 `git worktree` で処理する。builder-agent、verifier、pr-guardian はその Issue 用 worktree だけを作業ディレクトリとして受け取る
+- base workspace、worktree 親ディレクトリ、各 run / Issue 用 worktree は作成後に `0700` へ固定する。`kaizen doctor` は不一致を検出し、`--repair` で既存ディレクトリを修復する
 - 作業ブランチは `kaizen/issue-<番号>-<slug化したタイトル>` 形式
 - 依存インストール(`npm ci` 等)は設定の `commands.setup` で定義し、base workspace のベースライン検証前と各 Issue 用 worktree の処理開始時に実行する
-- ワークスペースが壊れた場合(fetch 失敗が続く等)は実行を中止し、手動の再クローンで復旧する。`kaizen doctor --repair` は現時点では GitHub ラベル修復を担当する
+- ワークスペースが壊れた場合(fetch 失敗が続く等)は実行を中止し、手動の再クローンで復旧する。`kaizen doctor --repair` は権限を修復するが、壊れた Git checkout は再作成しない
 
 > **worktree の責務**: `workspacePath` は同期済み base clone として扱い、Issue 実装は `<workspacePath>-worktrees/<runId>/issue-<N>` で行う。これにより複数 Issue を並列に走らせても、builder-agent が同じ working tree に同時変更を書き込まない。
 

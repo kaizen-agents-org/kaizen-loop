@@ -354,7 +354,8 @@ export class GitClient {
         return this.run('git', args, {
             cwd: this.cwd,
             env: options?.env ?? gitCliEnv(),
-            rejectOnNonZero: options?.rejectOnNonZero
+            rejectOnNonZero: options?.rejectOnNonZero,
+            maxOutputBytes: options?.maxOutputBytes
         });
     }
 }

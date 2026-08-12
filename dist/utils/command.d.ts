@@ -43,6 +43,7 @@ export interface RunCommandOptions {
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
     rejectOnNonZero?: boolean;
+    maxOutputBytes?: number;
 }
 export type CommandRunner = (command: string, args: string[], options?: RunCommandOptions) => Promise<CommandResult>;
 export declare const COMMAND_RUNNER_INJECTION: unique symbol;

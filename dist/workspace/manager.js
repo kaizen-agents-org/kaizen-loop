@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { minimatch } from 'minimatch';
 import { buildUntrustedEnv } from '../utils/command.js';
+import { worktreesDirForWorkspace } from '../utils/paths.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
@@ -281,7 +282,7 @@ function issueBranchName(config, issue) {
     return `${config.git.branchPrefix}issue-${issue.number}-${slugify(issue.title)}`;
 }
 function issueWorktreePath(workspacePath, runId, issueNumber) {
-    return path.join(path.dirname(workspacePath), `${path.basename(workspacePath)}-worktrees`, runId, `issue-${issueNumber}`);
+    return path.join(worktreesDirForWorkspace(workspacePath), runId, `issue-${issueNumber}`);
 }
 function matchesAny(file, patterns) {
     return patterns.some((pattern) => minimatch(file, pattern, { dot: true }));

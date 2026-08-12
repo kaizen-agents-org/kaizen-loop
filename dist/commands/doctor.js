@@ -10,11 +10,11 @@ import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
 import { RunLock } from '../orchestrator/lock.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
+import { projectStateDir } from '../utils/paths.js';
+import { assertPrivateDirectory, ensurePrivateDirectory, privateDirectoryContentsMayHaveBeenExposed } from '../utils/privateDirectory.js';
 import { ensureKaizenTempDir } from '../utils/temp.js';
 import { tailText } from '../utils/text.js';
 import { runtimeIdentity } from '../utils/runtime.js';
-import { assertPrivateDirectory, ensurePrivateDirectory, privateDirectoryContentsMayHaveBeenExposed } from '../utils/privateDirectory.js';
-import { projectStateDir } from '../utils/paths.js';
 import { markWorkspaceContentsUntrusted, workspaceContentsAreUntrusted } from '../utils/workspaceTrust.js';
 export async function doctorProject(options) {
     const checks = [];

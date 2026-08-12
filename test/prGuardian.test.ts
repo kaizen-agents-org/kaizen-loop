@@ -2458,10 +2458,14 @@ describe('runPrGuardianSkill', () => {
       baseBranch: 'main',
       headSha: 'abc123456789'
     });
-    let worktreeMode: number | undefined;
+    const guardianModes: number[] = [];
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
-      if (process.platform !== 'win32' && command === 'git' && args[0] === 'worktree' && args[1] === 'add') {
-        worktreeMode = (await fs.stat(args[args.length - 2])).mode & 0o777;
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const worktreePath = args[4];
+        guardianModes.push(
+          (await fs.stat(worktreePath)).mode & 0o777,
+          (await fs.stat(path.dirname(worktreePath))).mode & 0o777
+        );
       }
       return {
         command,
@@ -2485,8 +2489,8 @@ describe('runPrGuardianSkill', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0].status).toBe('success');
     expect(jobs[0].attemptCount).toBe(1);
+    expect(guardianModes).toEqual([0o700, 0o700]);
     expect((await listPrGuardianJobs(stateDir))[0].status).toBe('success');
-    if (process.platform !== 'win32') expect(worktreeMode).toBe(0o700);
     if (process.platform !== 'win32') expect((await fs.stat(legacyWorktreesRoot)).mode & 0o777).toBe(0o700);
     await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
       phase: 'complete',

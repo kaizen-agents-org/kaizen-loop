@@ -12,15 +12,15 @@ import { RunLock } from '../orchestrator/lock.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
 import type { CommandRunner } from '../utils/command.js';
-import { ensureKaizenTempDir } from '../utils/temp.js';
-import { tailText } from '../utils/text.js';
-import { runtimeIdentity } from '../utils/runtime.js';
+import { projectStateDir } from '../utils/paths.js';
 import {
   assertPrivateDirectory,
   ensurePrivateDirectory,
   privateDirectoryContentsMayHaveBeenExposed
 } from '../utils/privateDirectory.js';
-import { projectStateDir } from '../utils/paths.js';
+import { ensureKaizenTempDir } from '../utils/temp.js';
+import { tailText } from '../utils/text.js';
+import { runtimeIdentity } from '../utils/runtime.js';
 import { markWorkspaceContentsUntrusted, workspaceContentsAreUntrusted } from '../utils/workspaceTrust.js';
 
 export async function doctorProject(options: { cwd: string; project?: string; repair?: boolean; runCommand: CommandRunner }) {

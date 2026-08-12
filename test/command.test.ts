@@ -401,6 +401,48 @@ describe('runCommand', () => {
       })
     ).rejects.toThrow('Command timed out');
   });
+
+  it('bounds captured output before rejecting an overproducing command', async () => {
+    if (process.platform === 'win32') return;
+    const script = [
+      'process.on("SIGTERM", () => {});',
+      'setInterval(() => process.stdout.write("x".repeat(4096)), 1);'
+    ].join('');
+    const started = Date.now();
+    const error = await runCommand(process.execPath, ['-e', script], {
+      maxOutputBytes: 1024
+    }).catch((caught: unknown) => caught as Error & { result?: { stdout: string; stderr: string } });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain('Command output exceeded 1024 bytes');
+    expect(Buffer.byteLength(`${error.result?.stdout ?? ''}${error.result?.stderr ?? ''}`)).toBeLessThanOrEqual(1024);
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  it('clears competing timeout and output-limit kill timers', async () => {
+    if (process.platform === 'win32') return;
+    const script = [
+      'process.on("SIGTERM", () => {});',
+      'setInterval(() => process.stdout.write("x".repeat(4096)), 1);'
+    ].join('');
+    const error = await runCommand(process.execPath, ['-e', script], {
+      timeoutMs: 25,
+      maxOutputBytes: 1024
+    }).catch((caught: unknown) => caught as Error & { result?: { stdout: string; stderr: string } });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(Buffer.byteLength(`${error.result?.stdout ?? ''}${error.result?.stderr ?? ''}`)).toBeLessThanOrEqual(1024);
+  });
+
+  it('does not exceed the output cap at a UTF-8 boundary', async () => {
+    const error = await runCommand(process.execPath, ['-e', 'process.stdout.write("€€")'], {
+      maxOutputBytes: 4
+    }).catch((caught: unknown) => caught as Error & { result?: { stdout: string; stderr: string } });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.result?.stdout).toBe('€');
+    expect(Buffer.byteLength(error.result?.stdout ?? '')).toBeLessThanOrEqual(4);
+  });
 });
 
 describe('withRunDeadline', () => {

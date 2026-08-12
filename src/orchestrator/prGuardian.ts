@@ -10,8 +10,8 @@ import {
   trustedGithubCliEnv,
   type CommandRunner
 } from '../utils/command.js';
-import { envWithKaizenTemp } from '../utils/temp.js';
 import { ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
+import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
 import { isSyncPullRequest } from './wipLimit.js';
