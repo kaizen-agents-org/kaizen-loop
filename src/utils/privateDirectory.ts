@@ -19,6 +19,15 @@ export async function ensurePrivateDirectory(
   return validatePrivateDirectory(directory, true, options.beforeExposureRepair);
 }
 
+export async function ensurePrivateStructureDirectory(directory: string): Promise<void> {
+  await ensurePrivateDirectory(directory, {
+    // Generated worktree parents contain no trusted repository state. Their
+    // child target is removed before reuse, so legacy exposure can be repaired
+    // without laundering a registered workspace.
+    beforeExposureRepair: async () => undefined
+  });
+}
+
 export async function assertPrivateDirectory(directory: string): Promise<void> {
   await validatePrivateDirectory(directory, false);
 }

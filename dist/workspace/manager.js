@@ -4,7 +4,7 @@ import { minimatch } from 'minimatch';
 import { buildUntrustedEnv } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
-import { ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import { ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
 import { GitClient } from './git.js';
 export class CheckpointBranchMissingError extends Error {
     branch;
@@ -139,8 +139,8 @@ export class WorkspaceManager {
         await fs.rm(worktreePath, { recursive: true, force: true });
         const worktreesRoot = path.dirname(path.dirname(worktreePath));
         const runRoot = path.dirname(worktreePath);
-        await ensurePrivateDirectory(worktreesRoot);
-        await ensurePrivateDirectory(runRoot);
+        await ensurePrivateStructureDirectory(worktreesRoot);
+        await ensurePrivateStructureDirectory(runRoot);
         await ensurePrivateDirectory(worktreePath);
         await this.removeWorktreesForBranch(branch);
         if (!options.resume) {

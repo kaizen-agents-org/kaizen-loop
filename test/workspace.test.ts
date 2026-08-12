@@ -75,6 +75,11 @@ describe('workspace branch handling', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-worktree-'));
     const workspacePath = path.join(root, 'workspace');
     await fs.mkdir(path.join(workspacePath, '.git'), { recursive: true });
+    const legacyWorktreesRoot = path.join(root, 'workspace-worktrees');
+    const legacyRunRoot = path.join(legacyWorktreesRoot, 'run-1');
+    await fs.mkdir(legacyRunRoot, { recursive: true });
+    await fs.chmod(legacyWorktreesRoot, 0o755);
+    await fs.chmod(legacyRunRoot, 0o755);
     const observedModes: number[] = [];
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'git' && args[0] === 'worktree' && args[1] === 'add') {

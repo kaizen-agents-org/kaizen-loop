@@ -9,6 +9,14 @@ export async function ensurePrivateDirectory(directory, options = {}) {
     await fs.mkdir(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
     return validatePrivateDirectory(directory, true, options.beforeExposureRepair);
 }
+export async function ensurePrivateStructureDirectory(directory) {
+    await ensurePrivateDirectory(directory, {
+        // Generated worktree parents contain no trusted repository state. Their
+        // child target is removed before reuse, so legacy exposure can be repaired
+        // without laundering a registered workspace.
+        beforeExposureRepair: async () => undefined
+    });
+}
 export async function assertPrivateDirectory(directory) {
     await validatePrivateDirectory(directory, false);
 }
