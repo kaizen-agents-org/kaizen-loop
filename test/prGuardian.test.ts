@@ -2455,26 +2455,38 @@ describe('runPrGuardianSkill', () => {
       baseBranch: 'main',
       headSha: 'abc123456789'
     });
-    const runner = vi.fn<CommandRunner>(async (command, args, options) => ({
-      command,
-      args,
-      cwd: options?.cwd,
-      exitCode: 0,
-      stdout: command === 'gh' ? ghResponse(args, []) : 'done',
-      stderr: '',
-      durationMs: 1
-    }));
+    const guardianModes: number[] = [];
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const worktreePath = args[4];
+        guardianModes.push(
+          (await fs.stat(worktreePath)).mode & 0o777,
+          (await fs.stat(path.dirname(worktreePath))).mode & 0o777
+        );
+      }
+      return {
+        command,
+        args,
+        cwd: options?.cwd,
+        exitCode: 0,
+        stdout: command === 'gh' ? ghResponse(args, []) : 'done',
+        stderr: '',
+        durationMs: 1
+      };
+    });
 
     const jobs = await runPendingPrGuardianJobs({
       stateDir,
       config,
       workspaceDir: '/tmp/workspace',
-      runCommand: trustedRunner(runner)
+      runCommand: trustedRunner(runner),
+      isolateWorktree: true
     });
 
     expect(jobs).toHaveLength(1);
     expect(jobs[0].status).toBe('success');
     expect(jobs[0].attemptCount).toBe(1);
+    expect(guardianModes).toEqual([0o700, 0o700]);
     expect((await listPrGuardianJobs(stateDir))[0].status).toBe('success');
     await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
       phase: 'complete',

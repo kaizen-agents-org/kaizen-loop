@@ -108,6 +108,47 @@ describe('doctorProject', () => {
     await expect(fs.access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('reports insecure workspace and worktree directory permissions', async () => {
+    const { repo, workspace } = await setupProject();
+    const worktreeRoot = `${workspace}-worktrees`;
+    const runDirectory = path.join(worktreeRoot, 'run-1');
+    const worktree = path.join(runDirectory, 'issue-370');
+    await fs.mkdir(worktree, { recursive: true });
+    for (const directory of [workspace, worktreeRoot, runDirectory, worktree]) {
+      await fs.chmod(directory, 0o755);
+    }
+    const runner = workingDoctorRunner();
+
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: trustedRunner(runner) });
+
+    expect(output.ok).toBe(false);
+    expect(output.checks.find((item) => item.name === 'workspace permissions')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('expected mode 0700 but found 0755')
+    });
+  });
+
+  it('repairs existing workspace and worktree directory permissions', async () => {
+    const { repo, workspace } = await setupProject();
+    const worktreeRoot = `${workspace}-worktrees`;
+    const runDirectory = path.join(worktreeRoot, 'run-1');
+    const worktree = path.join(runDirectory, 'issue-370');
+    const guardianRoot = path.join(process.env.KAIZEN_HOME!, 'projects', 'o-r', 'guardian', 'worktrees');
+    const guardianWorktree = path.join(guardianRoot, 'job-1');
+    await fs.mkdir(worktree, { recursive: true });
+    await fs.mkdir(guardianWorktree, { recursive: true });
+    const directories = [workspace, worktreeRoot, runDirectory, worktree, guardianRoot, guardianWorktree];
+    for (const directory of directories) await fs.chmod(directory, 0o755);
+    const runner = workingDoctorRunner();
+
+    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: true, runCommand: trustedRunner(runner) });
+
+    expect(output.checks.find((item) => item.name === 'workspace permissions')).toMatchObject({ ok: true });
+    for (const directory of directories) {
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
+    }
+  });
+
   it('fails when the builder command exists but runtime smoke test cannot execute', async () => {
     const { repo } = await setupProject();
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
@@ -210,6 +251,17 @@ async function setupProject(options: { createWorkspace?: boolean } = {}) {
     }
   });
   return { repo, workspace };
+}
+
+function workingDoctorRunner() {
+  return vi.fn<CommandRunner>(async (command, args, options) => {
+    if (command === 'builder-agent' && args.length === 0) {
+      await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+        status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+      });
+    }
+    return result(command, args, options?.cwd, 'ok');
+  });
 }
 
 async function writeBuilderResult(resultPath: unknown, payload: unknown) {
