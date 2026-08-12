@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { ensurePrivateStructureDirectory } from './privateDirectory.js';
+import { assertPrivateDirectory, ensurePrivateStructureDirectory } from './privateDirectory.js';
 
 const MARKER_NAME = 'workspace-contents-untrusted';
 
@@ -9,6 +9,12 @@ export function workspaceContentsUntrustedMarker(stateDir: string): string {
 }
 
 export async function workspaceContentsAreUntrusted(stateDir: string): Promise<boolean> {
+  try {
+    await assertPrivateDirectory(stateDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
   try {
     await fs.access(workspaceContentsUntrustedMarker(stateDir));
     return true;
