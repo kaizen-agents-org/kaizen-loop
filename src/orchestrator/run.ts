@@ -137,8 +137,57 @@ const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
-  await secureOrRebuildExistingWorkspace(resolved.project, options.runCommand);
-  const initialConfig = await loadOperationalConfig(resolved.project, {
+  if (options.dryRun) {
+    if (options.scheduled) await assertExistingWorkspacePrivate(resolved.project.workspacePath);
+    return runKaizenWithPreparedWorkspace(options, resolved);
+  }
+
+  const stateDir = projectStateDir(resolved.slug);
+  await fs.mkdir(stateDir, { recursive: true });
+  await ensureNotPaused(stateDir);
+  let lock: RunLock;
+  try {
+    lock = options.existingLock ?? await RunLock.acquire(stateDir);
+  } catch (error) {
+    if (!RunLock.isActiveError(error)) throw error;
+    const localConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: false });
+    const scheduledJob = options.job ? schedulerJob(localConfig.config, options.job) : undefined;
+    const trigger = options.trigger ?? scheduledJob?.name ?? options.job ?? (options.scheduled ? 'scheduled' : 'manual');
+    const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
+      ? scheduledJob.config.run.skipIfRunning
+      : trigger === 'watch';
+    if (options.scheduled && skipIfRunning) {
+      const now = new Date().toISOString();
+      return {
+        version: 1,
+        project: resolved.slug,
+        startedAt: now,
+        finishedAt: now,
+        trigger,
+        result: 'success',
+        issues: [],
+        skipped: [{ number: 0, reason: 'run already in progress' }]
+      };
+    }
+    throw error;
+  }
+
+  let handedOff = false;
+  try {
+    await secureOrRebuildExistingWorkspace(resolved.project, options.runCommand);
+    handedOff = true;
+    return await runKaizenWithPreparedWorkspace({ ...options, existingLock: lock }, resolved);
+  } finally {
+    if (!handedOff) await lock.release();
+  }
+}
+
+async function runKaizenWithPreparedWorkspace(
+  options: RunOptions,
+  resolved: Awaited<ReturnType<typeof resolveProject>>
+): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
+  try {
+    const initialConfig = await loadOperationalConfig(resolved.project, {
     preferWorkspace: options.scheduled,
     requireWorkspace: options.scheduled
   });
@@ -247,33 +296,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     return selection;
   }
 
-  await fs.mkdir(stateDir, { recursive: true });
-  await ensureNotPaused(stateDir);
-  let lock: RunLock;
-  try {
-    lock = options.existingLock ?? await RunLock.acquire(stateDir);
-  } catch (error) {
-    const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
-      ? scheduledJob.config.run.skipIfRunning
-      : trigger === 'watch';
-    if (options.scheduled && skipIfRunning && RunLock.isActiveError(error)) {
-      const now = new Date().toISOString();
-      return {
-        version: 1,
-        project: resolved.slug,
-        startedAt: now,
-        finishedAt: now,
-        trigger,
-        result: 'success',
-        issues: [],
-        skipped: [{ number: 0, reason: 'run already in progress' }]
-      };
-    }
-    throw error;
-  }
-
-  try {
-    const latestWorkspaceConfig = options.scheduled
+  const latestWorkspaceConfig = options.scheduled
       ? await loadLatestConfigFromExistingWorkspace({
         config,
         project: resolved.project,
@@ -529,8 +552,18 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 
     return summary;
   } finally {
-    await lock.release();
+    if (!options.dryRun) await options.existingLock?.release();
   }
+}
+
+async function assertExistingWorkspacePrivate(workspacePath: string): Promise<void> {
+  try {
+    await fs.lstat(workspacePath);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  await assertPrivateDirectory(workspacePath);
 }
 
 async function secureOrRebuildExistingWorkspace(

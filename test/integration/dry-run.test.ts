@@ -8,7 +8,9 @@ import { saveRegistry as saveRegistryFile } from '../../src/config/registry.js';
 import type { GitHubIssue } from '../../src/github/types.js';
 import { applyImplementationBudget, runKaizen as runKaizenCore } from '../../src/orchestrator/run.js';
 import { loadImplementationState, saveImplementationState } from '../../src/orchestrator/implementationState.js';
+import { RunLock } from '../../src/orchestrator/lock.js';
 import type { CommandRunner } from '../../src/utils/command.js';
+import { projectStateDir } from '../../src/utils/paths.js';
 import { trustedRunner } from '../helpers/trustedRunner.js';
 
 const testVerifierCommit = 'b'.repeat(40);
@@ -80,7 +82,7 @@ describe('runKaizen dry-run', () => {
       { agent: 'claude', setup: null, verify: [] }
     );
     await fs.writeFile(path.join(workspace, '.kaizen', 'config.yml'), scheduledConfig);
-    if (process.platform !== 'win32') await fs.chmod(workspace, 0o600);
+    if (process.platform !== 'win32') await fs.chmod(workspace, 0o700);
     await saveRegistryFile({
       version: 1,
       projects: {
@@ -133,7 +135,7 @@ describe('runKaizen dry-run', () => {
 
     expect('selected' in selection && selection.selected.map(({ number }) => number)).toEqual([1]);
     if (process.platform !== 'win32') expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
-    expect(runner.mock.calls.some(([command, args]) => isGitCommand(command) && args[0] === 'clone')).toBe(true);
+    expect(runner.mock.calls.some(([command, args]) => isGitCommand(command) && args[0] === 'clone')).toBe(false);
     expect(runner.mock.calls
       .filter(([command]) => command === 'gh')
       .every(([, , options]) => options?.cwd === workspace)).toBe(true);
@@ -152,6 +154,93 @@ describe('runKaizen dry-run', () => {
       { number: 1, reason: 'missing execution authorization label: kaizen:authorized' }
     ]);
     expect(runner.mock.calls.every(([, , options]) => options?.cwd === repo)).toBe(true);
+  });
+
+  it('does not repair or rebuild an exposed workspace during a dry run', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+    const sentinel = path.join(workspace, 'untrusted-sentinel');
+    await fs.writeFile(sentinel, 'preserve');
+    if (process.platform !== 'win32') await fs.chmod(workspace, 0o777);
+    await saveRegistryFile({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      job: 'maintenance',
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    })).rejects.toThrow('mode 0700');
+
+    if (process.platform !== 'win32') expect((await fs.stat(workspace)).mode & 0o777).toBe(0o777);
+    await expect(fs.readFile(sentinel, 'utf8')).resolves.toBe('preserve');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('does not rebuild an exposed workspace when another run holds the project lock', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      buildDefaultConfigYaml({ agent: 'claude', setup: null, verify: [] })
+    );
+    const sentinel = path.join(workspace, 'untrusted-sentinel');
+    await fs.writeFile(sentinel, 'preserve');
+    if (process.platform !== 'win32') await fs.chmod(workspace, 0o777);
+    await saveRegistryFile({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+    const activeLock = await RunLock.acquire(projectStateDir('o-r'));
+    try {
+      await expect(runKaizen({
+        cwd: repo,
+        project: 'o-r',
+        scheduled: false,
+        dryRun: false,
+        json: true,
+        runCommand: vi.fn<CommandRunner>()
+      })).rejects.toThrow('already active');
+    } finally {
+      await activeLock.release();
+    }
+
+    if (process.platform !== 'win32') expect((await fs.stat(workspace)).mode & 0o777).toBe(0o777);
+    await expect(fs.readFile(sentinel, 'utf8')).resolves.toBe('preserve');
   });
 
   it.each([
