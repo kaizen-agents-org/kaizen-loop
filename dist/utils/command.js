@@ -110,7 +110,7 @@ const executeCommand = async (command, args, options = {}) => {
                 return;
             const chunkBytes = Buffer.byteLength(chunk);
             const remaining = options.maxOutputBytes === undefined ? chunkBytes : options.maxOutputBytes - capturedOutputBytes;
-            const captured = remaining >= chunkBytes ? chunk : Buffer.from(chunk).subarray(0, Math.max(0, remaining)).toString();
+            const captured = remaining >= chunkBytes ? chunk : truncateUtf8(chunk, Math.max(0, remaining));
             if (target === 'stdout')
                 stdout += captured;
             else
@@ -191,6 +191,18 @@ const executeCommand = async (command, args, options = {}) => {
     });
 };
 export const runCommand = withTrustedExecutables(executeCommand, initialTrustedExecutables());
+function truncateUtf8(value, maxBytes) {
+    let bytes = 0;
+    let result = '';
+    for (const character of value) {
+        const characterBytes = Buffer.byteLength(character);
+        if (bytes + characterBytes > maxBytes)
+            break;
+        result += character;
+        bytes += characterBytes;
+    }
+    return result;
+}
 function initialTrustedExecutables() {
     return {
         git: INITIAL_GIT_EXECUTABLE,

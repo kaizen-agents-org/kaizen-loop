@@ -433,6 +433,16 @@ describe('runCommand', () => {
     expect(error).toBeInstanceOf(Error);
     expect(Buffer.byteLength(`${error.result?.stdout ?? ''}${error.result?.stderr ?? ''}`)).toBeLessThanOrEqual(1024);
   });
+
+  it('does not exceed the output cap at a UTF-8 boundary', async () => {
+    const error = await runCommand(process.execPath, ['-e', 'process.stdout.write("€€")'], {
+      maxOutputBytes: 4
+    }).catch((caught: unknown) => caught as Error & { result?: { stdout: string; stderr: string } });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.result?.stdout).toBe('€');
+    expect(Buffer.byteLength(error.result?.stdout ?? '')).toBeLessThanOrEqual(4);
+  });
 });
 
 describe('withRunDeadline', () => {
