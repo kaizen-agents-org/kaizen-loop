@@ -12,6 +12,7 @@ export declare function enableScheduler(options: {
     path?: string;
     paths?: string[];
     jobs: SchedulerJob[];
+    kaizenHome: string;
 }>;
 export declare function disableScheduler(options: {
     slug: string;
@@ -29,3 +30,4 @@ export interface SchedulerJob {
 }
 export declare function schedulerJobs(config: KaizenConfig): SchedulerJob[];
 export declare function schedulerJob(config: KaizenConfig, jobName: string): SchedulerJob | undefined;
+export declare function schedulerKaizenHome(): string;

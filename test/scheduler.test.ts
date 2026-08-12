@@ -286,6 +286,7 @@ describe('enableScheduler', () => {
         }
       }
     ]);
+    expect(scheduler.kaizenHome).toBe(home);
     const crontabInput = String(runner.mock.calls.find(([command, args]) => command === 'crontab' && args[0] === '-')?.[2]?.input);
     expect(crontabInput).not.toContain('node kaizen run --project owner-repo --scheduled --trigger scheduled');
     expect(crontabInput).toContain('node kaizen run --project other-repo --scheduled');
@@ -296,7 +297,7 @@ describe('enableScheduler', () => {
     expect(crontabInput).toContain("/bin/sh '");
     expect(crontabInput).toContain(`'${await fs.realpath(process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER!)}'`);
     expect(crontabInput).toContain("PATH='/trusted/bin:");
-    expect(crontabInput).toContain('KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= /bin/sh');
+    expect(crontabInput).toContain(`KAIZEN_HOME='${home}' KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= /bin/sh`);
     expect(crontabInput).not.toContain('GH_TOKEN=');
     expect(crontabInput).not.toContain('publication-token');
     expect(crontabInput).toContain("'owner-repo' 'maintenance'");
@@ -432,12 +433,14 @@ describe('enableScheduler', () => {
     });
 
     expect(scheduler.paths).toHaveLength(1);
+    expect(scheduler.kaizenHome).toBe(home);
     const bootoutCalls = runner.mock.calls.filter(([command, args]) => command === 'launchctl' && args[0] === 'bootout');
     expect(bootoutCalls).toHaveLength(4);
     const plist = await fs.readFile(scheduler.paths![0], 'utf8');
     expect(plist).toContain('<key>StartInterval</key><integer>300</integer>');
     expect(plist).toContain('<string>/bin/sh</string>');
     expect(plist).toContain('<string>issue-watch</string>');
+    expect(plist).toContain(`<key>KAIZEN_HOME</key><string>${home}</string>`);
     expect(plist).toContain('<key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>');
     expect(plist).not.toContain('bin/run-scheduled.sh</string>');
   });

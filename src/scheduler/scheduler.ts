@@ -9,7 +9,7 @@ import {
   type CommandRunner
 } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
-import { projectStateDir } from '../utils/paths.js';
+import { getKaizenHome, projectStateDir } from '../utils/paths.js';
 
 export async function enableScheduler(options: {
   slug: string;
@@ -18,39 +18,41 @@ export async function enableScheduler(options: {
   runCommand: CommandRunner;
   platform?: NodeJS.Platform;
   launcherTrust?: (launcher: string) => boolean;
-}): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[] }> {
+}): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[]; kaizenHome: string }> {
   const jobs = schedulerJobs(options.config);
   const platform = options.platform ?? process.platform;
+  const kaizenHome = schedulerKaizenHome();
+  const stateDir = path.join(kaizenHome, 'projects', options.slug);
   const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher(options.launcherTrust);
   const schedulerPath = jobs.length === 0
     ? undefined
     : pathWithExecutable(requireTrustedGitHubCliExecutable(options.runCommand));
   if (platform === 'darwin') {
-    await fs.mkdir(projectStateDir(options.slug), { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
     const paths: string[] = [];
     for (const job of jobs) {
       const plistPath = launchdPlistPath(options.slug, job.name);
       paths.push(plistPath);
       await fs.mkdir(path.dirname(plistPath), { recursive: true });
-      await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher!, schedulerPath!));
+      await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher!, schedulerPath!, kaizenHome));
       await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath]);
     }
-    return { type: 'launchd', path: paths[0], paths, jobs };
+    return { type: 'launchd', path: paths[0], paths, jobs, kaizenHome };
   }
 
-  await fs.mkdir(projectStateDir(options.slug), { recursive: true });
+  await fs.mkdir(stateDir, { recursive: true });
   const current = await options.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
   const marker = cronMarker(options.slug);
   const lines = removeManagedCronLines(current.stdout, options.slug).filter((line) => line.trim());
   for (const job of jobs) {
     lines.push(`# ${marker} ${job.name}`);
     for (const cronTime of cronTimes(job.config.schedule)) {
-      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!, schedulerPath!)} >> ${shQuote(path.join(projectStateDir(options.slug), `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!, schedulerPath!, kaizenHome)} >> ${shQuote(path.join(stateDir, `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
     }
   }
   await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
-  return { type: 'cron', jobs };
+  return { type: 'cron', jobs, kaizenHome };
 }
 
 export async function disableScheduler(options: {
@@ -87,6 +89,10 @@ export function schedulerJob(config: KaizenConfig, jobName: string): SchedulerJo
   return schedulerJobs(config).find((job) => job.name === jobName);
 }
 
+export function schedulerKaizenHome(): string {
+  return path.resolve(getKaizenHome());
+}
+
 function legacyLaunchdPlistPath(slug: string): string {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.plist`);
 }
@@ -95,8 +101,8 @@ function launchdPlistPath(slug: string, jobName: string): string {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.${jobName}.plist`);
 }
 
-function launchdPlist(slug: string, job: SchedulerJob, launcher: string, schedulerPath: string): string {
-  const stateDir = projectStateDir(slug);
+function launchdPlist(slug: string, job: SchedulerJob, launcher: string, schedulerPath: string, kaizenHome: string): string {
+  const stateDir = path.join(kaizenHome, 'projects', slug);
   const schedule = launchdSchedule(job.config.schedule);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -116,6 +122,7 @@ ${schedule}
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>${escapeXml(schedulerPath)}</string>
+    <key>KAIZEN_HOME</key><string>${escapeXml(kaizenHome)}</string>
     <key>KAIZEN_GITHUB_TOKEN_SOCKET</key><string></string>
     <key>KAIZEN_GITHUB_BROKER_CAPABILITY</key><string></string>
   </dict>
@@ -130,9 +137,9 @@ function cronMarker(slug: string): string {
   return `KAIZEN-LOOP ${slug} (managed by kaizen-loop; do not edit)`;
 }
 
-function commandLine(slug: string, job: SchedulerJob, launcher: string, schedulerPath: string): string {
+function commandLine(slug: string, job: SchedulerJob, launcher: string, schedulerPath: string, kaizenHome: string): string {
   const interpreter = path.extname(launcher) === '.sh' ? '/bin/sh ' : '';
-  const command = `PATH=${shQuote(schedulerPath)} KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= ${interpreter}${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
+  const command = `PATH=${shQuote(schedulerPath)} KAIZEN_HOME=${shQuote(kaizenHome)} KAIZEN_GITHUB_TOKEN_SOCKET= KAIZEN_GITHUB_BROKER_CAPABILITY= ${interpreter}${shQuote(launcher)} ${shQuote(process.execPath)} ${shQuote(slug)} ${shQuote(job.name)}`;
   return command;
 }
 
