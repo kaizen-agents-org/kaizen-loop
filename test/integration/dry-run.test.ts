@@ -82,6 +82,7 @@ describe('runKaizen dry-run', () => {
         { agent: 'claude', setup: null, verify: [] }
       )
     );
+    if (process.platform !== 'win32') await fs.chmod(workspace, 0o600);
     await saveRegistryFile({
       version: 1,
       projects: {
@@ -123,6 +124,7 @@ describe('runKaizen dry-run', () => {
     });
 
     expect('selected' in selection && selection.selected.map(({ number }) => number)).toEqual([1]);
+    if (process.platform !== 'win32') expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
     expect(runner.mock.calls.every(([, , options]) => options?.cwd === workspace)).toBe(true);
 
     runner.mockClear();

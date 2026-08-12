@@ -30,6 +30,7 @@ import {
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
+import { ensurePrivateDirectory } from '../utils/privateDirectory.js';
 import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
 import {
@@ -136,6 +137,7 @@ const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
+  await secureExistingWorkspace(resolved.project.workspacePath);
   const initialConfig = await loadOperationalConfig(resolved.project, {
     preferWorkspace: options.scheduled,
     requireWorkspace: options.scheduled
@@ -529,6 +531,16 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
   } finally {
     await lock.release();
   }
+}
+
+async function secureExistingWorkspace(workspacePath: string): Promise<void> {
+  try {
+    await fs.lstat(workspacePath);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  await ensurePrivateDirectory(workspacePath);
 }
 
 export async function preflightScheduledPublication(options: {
