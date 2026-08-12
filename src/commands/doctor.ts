@@ -8,6 +8,7 @@ import { configDrift } from '../config/operational.js';
 import { resolveProject } from '../config/registry.js';
 import type { KaizenConfig } from '../config/schema.js';
 import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
+import { RunLock } from '../orchestrator/lock.js';
 import { GitHubClient } from '../github/client.js';
 import { isPrGuardianSkillRunnerAvailable } from '../orchestrator/prGuardian.js';
 import type { CommandRunner } from '../utils/command.js';
@@ -26,6 +27,8 @@ export async function doctorProject(options: { cwd: string; project?: string; re
   const checks: Array<{ name: string; ok: boolean; message?: string }> = [];
   const resolved = await resolveProject(options.project, options.cwd);
   const stateDir = projectStateDir(resolved.slug);
+  const repairLock = options.repair ? await RunLock.acquire(stateDir) : undefined;
+  try {
   let workspacePrivate = false;
   let workspaceContentsTrusted = false;
   await check(checks, 'workspace', async () => {
@@ -126,7 +129,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     if (!loaded.guardian.enabled) return;
     if (!(await isPrGuardianSkillRunnerAvailable(loaded, options.runCommand))) throw new Error('unavailable');
   });
-  return {
+    return {
     runtime: runtimeIdentity(),
     slug: resolved.slug,
     configuration: {
@@ -136,7 +139,10 @@ export async function doctorProject(options: { cwd: string; project?: string; re
     },
     checks,
     ok: checks.every((item) => item.ok)
-  };
+    };
+  } finally {
+    await repairLock?.release();
+  }
 }
 
 function builderOptions(config: KaizenConfig) {

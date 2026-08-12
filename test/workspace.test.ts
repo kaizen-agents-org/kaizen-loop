@@ -53,6 +53,23 @@ describe('workspace branch handling', () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it('refuses to launder an exposed existing workspace without a taint handler', async () => {
+    if (process.platform === 'win32') return;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-exposed-workspace-'));
+    const workspacePath = path.join(root, 'workspace');
+    await fs.mkdir(path.join(workspacePath, '.git'), { recursive: true });
+    await fs.writeFile(path.join(workspacePath, 'untrusted-sentinel'), 'preserve');
+    await fs.chmod(workspacePath, 0o755);
+    const runner = vi.fn<CommandRunner>();
+
+    await expect(new WorkspaceManager(runner, workspacePath).ensure())
+      .rejects.toThrow('without a durable taint handler');
+
+    expect((await fs.stat(workspacePath)).mode & 0o777).toBe(0o755);
+    await expect(fs.readFile(path.join(workspacePath, 'untrusted-sentinel'), 'utf8')).resolves.toBe('preserve');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('pre-creates worktree directories with mode 0700', async () => {
     if (process.platform === 'win32') return;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-worktree-'));

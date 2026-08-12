@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { doctorProject } from '../src/commands/doctor.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
+import { RunLock } from '../src/orchestrator/lock.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { projectStateDir } from '../src/utils/paths.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
@@ -135,6 +137,27 @@ describe('doctorProject', () => {
     const after = await doctorProject({ cwd: repo, project: 'o-r', repair: true, runCommand: trustedRunner(runner) });
     expect(after.checks.find((item) => item.name === 'workspace')?.ok).toBe(true);
     expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
+  });
+
+  it('does not repair an exposed workspace while a project run holds the lock', async () => {
+    if (process.platform === 'win32') return;
+    const { repo, workspace } = await setupProject();
+    await fs.chmod(workspace, 0o755);
+    const runner = vi.fn<CommandRunner>();
+    const activeLock = await RunLock.acquire(projectStateDir('o-r'));
+    try {
+      await expect(doctorProject({
+        cwd: repo,
+        project: 'o-r',
+        repair: true,
+        runCommand: trustedRunner(runner)
+      })).rejects.toThrow('already active');
+    } finally {
+      await activeLock.release();
+    }
+
+    expect((await fs.stat(workspace)).mode & 0o777).toBe(0o755);
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it('does not load executable configuration from an exposed workspace', async () => {

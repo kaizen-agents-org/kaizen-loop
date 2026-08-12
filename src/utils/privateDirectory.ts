@@ -46,7 +46,12 @@ async function validatePrivateDirectory(
   if (process.platform === 'win32') return { contentsMayHaveBeenExposed: false };
   const contentsMayHaveBeenExposed = (before.mode & 0o077) !== 0 ||
     (process.platform === 'darwin' && await hasExposureGrantAcl(directory));
-  if (repairMode && contentsMayHaveBeenExposed) await beforeExposureRepair?.();
+  if (repairMode && contentsMayHaveBeenExposed) {
+    if (!beforeExposureRepair) {
+      throw new Error(`Refusing to repair an exposed private directory without a durable taint handler: ${directory}`);
+    }
+    await beforeExposureRepair();
+  }
   if (!repairMode && (before.mode & 0o777) !== PRIVATE_DIRECTORY_MODE) {
     throw new Error(`Private directory path must have mode 0700: ${directory}`);
   }

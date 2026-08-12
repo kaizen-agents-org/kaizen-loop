@@ -745,6 +745,32 @@ describe('refreshFleet', () => {
     expect(shellCommands).toEqual(['npm ci', 'npm test', 'npm install', 'npm run typecheck', 'npm run build']);
   });
 
+  it('refuses to repair and sync an exposed fleet workspace without durable taint handling', async () => {
+    if (process.platform === 'win32') return;
+    const project = await setupProject('o-r', { setup: null, verify: [] });
+    await saveFleet([project]);
+    await fs.writeFile(path.join(project.workspace, 'untrusted-sentinel'), 'preserve');
+    await fs.chmod(project.workspace, 0o755);
+    const runner = vi.fn<CommandRunner>();
+
+    const output = await refreshFleet({
+      cwd: project.repo,
+      project: 'o-r',
+      sync: true,
+      runCommand: trustedRunner(runner)
+    });
+
+    expect(output.ok).toBe(false);
+    expect(output.projects[0].steps).toContainEqual(expect.objectContaining({
+      name: 'workspace',
+      ok: false,
+      message: expect.stringContaining('without a durable taint handler')
+    }));
+    expect((await fs.stat(project.workspace)).mode & 0o777).toBe(0o755);
+    await expect(fs.readFile(path.join(project.workspace, 'untrusted-sentinel'), 'utf8')).resolves.toBe('preserve');
+    expect(runner.mock.calls.map(([, args]) => args.join(' '))).toEqual(['remote get-url origin']);
+  });
+
   it('reports verification failure as fleet readiness failure', async () => {
     const project = await setupProject('o-r', { setup: null, verify: ['npm test', 'npm run build'] });
     await saveFleet([project]);
@@ -980,6 +1006,7 @@ async function saveFleet(projects: Array<{ slug: string; repo: string; workspace
   for (const project of projects) {
     project.workspace = path.join(home, 'workspaces', project.slug);
     await fs.mkdir(path.join(project.workspace, '.git'), { recursive: true });
+    if (process.platform !== 'win32') await fs.chmod(project.workspace, 0o700);
     entries.push([
       project.slug,
       {

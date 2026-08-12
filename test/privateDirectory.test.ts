@@ -31,7 +31,7 @@ describe('private directory validation', () => {
 
     await expect(assertPrivateDirectory(root)).rejects.toThrow('extended ACL');
 
-    const repair = await ensurePrivateDirectory(root);
+    const repair = await ensurePrivateDirectory(root, { beforeExposureRepair: async () => undefined });
 
     expect(repair.contentsMayHaveBeenExposed).toBe(true);
     await expect(assertPrivateDirectory(root)).resolves.toBeUndefined();
