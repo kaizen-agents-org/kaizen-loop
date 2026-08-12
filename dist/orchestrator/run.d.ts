@@ -19,6 +19,7 @@ export interface RunOptions {
     json: boolean;
     assumeYes?: boolean;
     confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
+    /** Caller-owned lock. runKaizen uses it but never releases it. */
     existingLock?: RunLock;
     authorizationEventRetry?: {
         attempts: number;
