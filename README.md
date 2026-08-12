@@ -231,7 +231,8 @@ The important contract points are:
 - `commands.setup` runs after workspace reset and before issue branches are prepared.
 - Builder providers edit the isolated worktree but do not run `commands.setup` or
   `commands.verify`. Kaizen Loop runs those commands afterward in its separate
-  credential-free verification phase and returns failures to the next builder attempt.
+  credential-free verification phase. Local runs return failures to the next Builder
+  attempt; the reusable Actions workflow fails its verification job closed.
 - `commands.verify` is the mechanical gate; every command must pass before PR/direct reflection continues.
 - `builder.command` receives the issue prompt on stdin and writes `builder.resultPath`.
 - `verifier.command` receives a verifier prompt on stdin and writes `verifier.resultPath`.

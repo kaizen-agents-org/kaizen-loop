@@ -4323,14 +4323,16 @@ describe('runKaizen PR flow', () => {
     ]);
   });
 
-  it('fails closed when a fixed result has no diff and configured verification fails', async () => {
+  it('runs configured Cargo verification after Builder and fails closed before publication', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
     vi.stubEnv('KAIZEN_HOME', home);
     await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
     await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
-    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({ agent: 'claude', setup: null, verify: ['npm test'] }));
+    await fs.writeFile(path.join(repo, '.kaizen', 'config.yml'), defaultConfigYaml({
+      agent: 'claude', setup: null, verify: ['cargo test', 'cargo clippy']
+    }));
     await saveRegistry({
       version: 1,
       projects: {
@@ -4341,7 +4343,9 @@ describe('runKaizen PR flow', () => {
       }
     });
 
-    let verifyCalls = 0;
+    const verifyCommands: string[] = [];
+    let clippyCalls = 0;
+    let builderPrompt = '';
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
         return result(command, args, repo, JSON.stringify([issue(193)]));
@@ -4349,6 +4353,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
+        builderPrompt = String(options?.input ?? '');
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed', summary: 'Already fixed.', notes: ''
         });
@@ -4358,11 +4363,16 @@ describe('runKaizen PR flow', () => {
       if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, '');
       if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '');
-      if (command === 'sh' && args.join(' ') === '-lc npm test') {
-        verifyCalls += 1;
-        return verifyCalls === 1
-          ? result(command, args, options?.cwd, 'baseline passed')
-          : failedResult(command, args, options?.cwd, 'verification failed');
+      if (command === 'sh' && args.join(' ') === '-lc cargo test') {
+        verifyCommands.push('cargo test');
+        return result(command, args, options?.cwd, 'cargo tests passed');
+      }
+      if (command === 'sh' && args.join(' ') === '-lc cargo clippy') {
+        verifyCommands.push('cargo clippy');
+        clippyCalls += 1;
+        return clippyCalls === 1
+          ? result(command, args, options?.cwd, 'baseline clippy passed')
+          : failedResult(command, args, options?.cwd, 'post-builder clippy failed');
       }
       return result(command, args, options?.cwd, '');
     });
@@ -4373,12 +4383,17 @@ describe('runKaizen PR flow', () => {
 
     expect('issues' in summary && summary).toMatchObject({
       result: 'failed',
-      issues: [{ number: 193, outcome: 'failed', reason: 'Verification failed: npm test' }],
+      issues: [{ number: 193, outcome: 'failed', reason: 'Verification failed: cargo clippy' }],
       queue: { health: { state: 'blocked' } }
     });
-    expect(verifyCalls).toBe(2);
+    expect(verifyCommands).toEqual(['cargo test', 'cargo clippy', 'cargo test', 'cargo clippy']);
+    expect(builderPrompt).not.toContain('cargo test');
+    expect(builderPrompt).not.toContain('cargo clippy');
     expect(runner.mock.calls.some(([command, args]) =>
       command === 'gh' && args[0] === 'issue' && args[1] === 'close'
+    )).toBe(false);
+    expect(runner.mock.calls.some(([command, args]) =>
+      command === 'gh' && args[0] === 'pr' && args[1] === 'create'
     )).toBe(false);
   });
 

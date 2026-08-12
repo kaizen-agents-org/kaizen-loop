@@ -55,6 +55,8 @@ describe('GitHub Actions fix workflow', () => {
     expect(prompt).toContain('# Issue #199: Add Actions workflow');
     expect(prompt).toContain('Do not run repository setup or verification commands in this provider job');
     expect(prompt).toContain('Kaizen Loop will run every configured command');
+    expect(prompt).toContain('the verification job fails closed if any command fails');
+    expect(prompt).not.toContain('returns any failure for a repair attempt');
     expect(prompt).not.toContain('npm test');
     expect(context).toMatchObject({
       repo: 'owner/repo',
