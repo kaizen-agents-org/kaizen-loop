@@ -401,6 +401,23 @@ describe('runCommand', () => {
       })
     ).rejects.toThrow('Command timed out');
   });
+
+  it('bounds captured output before rejecting an overproducing command', async () => {
+    if (process.platform === 'win32') return;
+    const script = [
+      'process.on("SIGTERM", () => {});',
+      'setInterval(() => process.stdout.write("x".repeat(4096)), 1);'
+    ].join('');
+    const started = Date.now();
+    const error = await runCommand(process.execPath, ['-e', script], {
+      maxOutputBytes: 1024
+    }).catch((caught: unknown) => caught as Error & { result?: { stdout: string; stderr: string } });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain('Command output exceeded 1024 bytes');
+    expect(Buffer.byteLength(`${error.result?.stdout ?? ''}${error.result?.stderr ?? ''}`)).toBeLessThanOrEqual(1024);
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
 });
 
 describe('withRunDeadline', () => {

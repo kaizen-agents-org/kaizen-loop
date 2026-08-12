@@ -84,6 +84,7 @@ const INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS = publicationTimeoutMs(
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const activePublicationSockets = new Set<net.Socket>();
 const PROCESS_TERMINATION_GRACE_MS = 250;
+const OUTPUT_LIMIT_FORCE_KILL_MS = 1_000;
 let shutdownHooksInstalled = false;
 let requestedShutdownSignal: NodeJS.Signals | undefined;
 
@@ -145,6 +146,7 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
     let forceKillTimeout: NodeJS.Timeout | undefined;
     let timedOut = false;
     let outputLimitExceeded = false;
+    let capturedOutputBytes = 0;
     const clearTimers = () => {
       if (timeout) {
         clearTimeout(timeout);
@@ -169,19 +171,26 @@ const executeCommand: CommandRunner = async (command, args, options = {}) => {
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-      if (!outputLimitExceeded && options.maxOutputBytes && Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > options.maxOutputBytes) {
+    const captureOutput = (chunk: string, target: 'stdout' | 'stderr') => {
+      if (outputLimitExceeded) return;
+      const chunkBytes = Buffer.byteLength(chunk);
+      const remaining = options.maxOutputBytes === undefined ? chunkBytes : options.maxOutputBytes - capturedOutputBytes;
+      const captured = remaining >= chunkBytes ? chunk : Buffer.from(chunk).subarray(0, Math.max(0, remaining)).toString();
+      if (target === 'stdout') stdout += captured;
+      else stderr += captured;
+      capturedOutputBytes += Buffer.byteLength(captured);
+      if (options.maxOutputBytes !== undefined && chunkBytes > remaining) {
         outputLimitExceeded = true;
         terminateProcessTree(child, 'SIGTERM');
+        forceKillTimeout = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), OUTPUT_LIMIT_FORCE_KILL_MS);
+        forceKillTimeout.unref();
       }
+    };
+    child.stdout.on('data', (chunk) => {
+      captureOutput(chunk, 'stdout');
     });
     child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-      if (!outputLimitExceeded && options.maxOutputBytes && Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > options.maxOutputBytes) {
-        outputLimitExceeded = true;
-        terminateProcessTree(child, 'SIGTERM');
-      }
+      captureOutput(chunk, 'stderr');
     });
 
     child.on('error', (error) => {
