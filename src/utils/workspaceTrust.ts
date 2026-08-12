@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assertPrivateDirectory, ensurePrivateStructureDirectory } from './privateDirectory.js';
@@ -15,8 +16,10 @@ export async function workspaceContentsAreUntrusted(stateDir: string): Promise<b
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw error;
   }
+  const marker = workspaceContentsUntrustedMarker(stateDir);
   try {
-    await fs.access(workspaceContentsUntrustedMarker(stateDir));
+    const stats = await fs.lstat(marker);
+    assertRegularOwnedMarker(marker, stats);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
@@ -26,13 +29,43 @@ export async function workspaceContentsAreUntrusted(stateDir: string): Promise<b
 
 export async function markWorkspaceContentsUntrusted(stateDir: string): Promise<void> {
   await ensurePrivateStructureDirectory(stateDir);
-  await fs.writeFile(
-    workspaceContentsUntrustedMarker(stateDir),
-    `${JSON.stringify({ detectedAt: new Date().toISOString() })}\n`,
-    { mode: 0o600 }
-  );
+  const marker = workspaceContentsUntrustedMarker(stateDir);
+  try {
+    const existing = await fs.lstat(marker);
+    assertRegularOwnedMarker(marker, existing);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const temporary = path.join(stateDir, `.${MARKER_NAME}.${process.pid}.${Date.now()}.tmp`);
+  const noFollow = constants.O_NOFOLLOW ?? 0;
+  const handle = await fs.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
+  try {
+    try {
+      await handle.writeFile(`${JSON.stringify({ detectedAt: new Date().toISOString() })}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporary, marker);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 export async function clearWorkspaceContentsUntrusted(stateDir: string): Promise<void> {
   await fs.rm(workspaceContentsUntrustedMarker(stateDir), { force: true });
+}
+
+function assertRegularOwnedMarker(
+  marker: string,
+  stats: Awaited<ReturnType<typeof fs.lstat>>
+): void {
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    throw new Error(`Workspace trust marker must be a regular file: ${marker}`);
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (uid !== undefined && stats.uid !== uid) {
+    throw new Error(`Workspace trust marker is owned by a different user: ${marker}`);
+  }
 }
