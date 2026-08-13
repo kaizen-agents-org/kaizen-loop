@@ -14,6 +14,7 @@ import { RunLock } from '../orchestrator/lock.js';
 import type { CommandRunner } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
+import { ensurePrivateProjectStateDirectory } from '../utils/workspaceTrust.js';
 
 export async function listGuardianJobs(options: {
   cwd: string;
@@ -32,6 +33,7 @@ export async function runGuardianForPullRequest(options: {
   const resolved = await resolveProject(options.project, options.cwd);
   const config = await loadConfig(resolved.project.localPath);
   const stateDir = projectStateDir(resolved.slug);
+  await ensurePrivateProjectStateDirectory(stateDir);
   const lock = await RunLock.acquire(stateDir);
   try {
     const github = new GitHubClient(options.runCommand, resolved.project.localPath);
@@ -73,6 +75,7 @@ export async function watchGuardianJobs(options: {
   const config = await loadConfig(resolved.project.localPath);
   if (!config.guardian.enabled) throw new KaizenError('PR guardian is disabled for this project.', 2);
   const stateDir = projectStateDir(resolved.slug);
+  await ensurePrivateProjectStateDirectory(stateDir);
   const lock = await RunLock.acquire(stateDir);
   try {
     const github = new GitHubClient(options.runCommand, resolved.project.localPath);

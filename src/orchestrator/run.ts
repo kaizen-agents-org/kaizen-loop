@@ -30,6 +30,13 @@ import {
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
+import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import {
+  clearWorkspaceContentsUntrusted,
+  ensurePrivateProjectStateDirectory,
+  markWorkspaceContentsUntrusted,
+  workspaceContentsAreUntrusted
+} from '../utils/workspaceTrust.js';
 import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
 import {
@@ -96,6 +103,7 @@ export interface RunOptions {
   json: boolean;
   assumeYes?: boolean;
   confirmDirectCommit?: (context: DirectCommitConfirmation) => Promise<DirectCommitChoice>;
+  /** Caller-owned lock. runKaizen uses it but never releases it. */
   existingLock?: RunLock;
   authorizationEventRetry?: {
     attempts: number;
@@ -136,7 +144,61 @@ const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 
 export async function runKaizen(options: RunOptions): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
   const resolved = await resolveProject(options.project, options.cwd);
-  const initialConfig = await loadOperationalConfig(resolved.project, {
+  if (options.dryRun) {
+    if (options.scheduled) {
+      await assertExistingWorkspacePrivate(resolved.project.workspacePath, projectStateDir(resolved.slug));
+    }
+    return runKaizenWithPreparedWorkspace(options, resolved, false);
+  }
+
+  const stateDir = projectStateDir(resolved.slug);
+  await ensurePrivateProjectStateDirectory(stateDir);
+  await ensureNotPaused(stateDir);
+  const ownsLock = options.existingLock === undefined;
+  let lock: RunLock;
+  try {
+    lock = options.existingLock ?? await RunLock.acquire(stateDir);
+  } catch (error) {
+    if (!RunLock.isActiveError(error)) throw error;
+    const localConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: false });
+    const scheduledJob = options.job ? schedulerJob(localConfig.config, options.job) : undefined;
+    const trigger = options.trigger ?? scheduledJob?.name ?? options.job ?? (options.scheduled ? 'scheduled' : 'manual');
+    const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
+      ? scheduledJob.config.run.skipIfRunning
+      : trigger === 'watch';
+    if (options.scheduled && skipIfRunning) {
+      const now = new Date().toISOString();
+      return {
+        version: 1,
+        project: resolved.slug,
+        startedAt: now,
+        finishedAt: now,
+        trigger,
+        result: 'success',
+        issues: [],
+        skipped: [{ number: 0, reason: 'run already in progress' }]
+      };
+    }
+    throw error;
+  }
+
+  let handedOff = false;
+  try {
+    await secureOrRebuildExistingWorkspace(resolved.project, stateDir, options.runCommand);
+    handedOff = true;
+    return await runKaizenWithPreparedWorkspace({ ...options, existingLock: lock }, resolved, ownsLock);
+  } finally {
+    if (ownsLock && !handedOff) await lock.release();
+  }
+}
+
+async function runKaizenWithPreparedWorkspace(
+  options: RunOptions,
+  resolved: Awaited<ReturnType<typeof resolveProject>>,
+  releaseLock: boolean
+): Promise<RunSummary | { selected: GitHubIssue[]; skipped: Array<{ number: number; reason: string }> }> {
+  try {
+    const initialConfig = await loadOperationalConfig(resolved.project, {
     preferWorkspace: options.scheduled,
     requireWorkspace: options.scheduled
   });
@@ -245,33 +307,7 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
     return selection;
   }
 
-  await fs.mkdir(stateDir, { recursive: true });
-  await ensureNotPaused(stateDir);
-  let lock: RunLock;
-  try {
-    lock = options.existingLock ?? await RunLock.acquire(stateDir);
-  } catch (error) {
-    const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
-      ? scheduledJob.config.run.skipIfRunning
-      : trigger === 'watch';
-    if (options.scheduled && skipIfRunning && RunLock.isActiveError(error)) {
-      const now = new Date().toISOString();
-      return {
-        version: 1,
-        project: resolved.slug,
-        startedAt: now,
-        finishedAt: now,
-        trigger,
-        result: 'success',
-        issues: [],
-        skipped: [{ number: 0, reason: 'run already in progress' }]
-      };
-    }
-    throw error;
-  }
-
-  try {
-    const latestWorkspaceConfig = options.scheduled
+  const latestWorkspaceConfig = options.scheduled
       ? await loadLatestConfigFromExistingWorkspace({
         config,
         project: resolved.project,
@@ -527,8 +563,57 @@ export async function runKaizen(options: RunOptions): Promise<RunSummary | { sel
 
     return summary;
   } finally {
-    await lock.release();
+    if (releaseLock) await options.existingLock?.release();
   }
+}
+
+async function assertExistingWorkspacePrivate(workspacePath: string, stateDir: string): Promise<void> {
+  try {
+    await fs.lstat(workspacePath);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  await assertPrivateDirectory(workspacePath);
+  if (await workspaceContentsAreUntrusted(stateDir)) {
+    throw new Error('Scheduled dry run refused previously exposed workspace contents; run a non-dry command to rebuild them.');
+  }
+}
+
+async function secureOrRebuildExistingWorkspace(
+  project: { localPath: string; workspacePath: string },
+  stateDir: string,
+  runCommand: CommandRunner
+): Promise<void> {
+  try {
+    await fs.lstat(project.workspacePath);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      await clearWorkspaceContentsUntrusted(stateDir);
+      return;
+    }
+    throw error;
+  }
+  const contentsMarkedUntrusted = await workspaceContentsAreUntrusted(stateDir);
+  let repaired = false;
+  try {
+    await assertPrivateDirectory(project.workspacePath);
+    if (!contentsMarkedUntrusted) return;
+  } catch {
+    // Repair owner-only modes such as 0600 in place. If group/other access or
+    // an ACL existed, persist the taint before changing permissions so any
+    // later origin lookup, removal, or clone failure remains fail-closed.
+    const repair = await ensurePrivateDirectory(project.workspacePath, {
+      beforeExposureRepair: async () => markWorkspaceContentsUntrusted(stateDir)
+    });
+    repaired = true;
+    if (!contentsMarkedUntrusted && !repair.contentsMayHaveBeenExposed) return;
+  }
+  if (contentsMarkedUntrusted && !repaired) await ensurePrivateDirectory(project.workspacePath);
+  const remoteUrl = await new GitClient(runCommand, project.localPath).remoteUrl('origin');
+  await fs.rm(project.workspacePath, { recursive: true, force: true });
+  await new WorkspaceManager(runCommand, project.workspacePath, remoteUrl).ensure();
+  await clearWorkspaceContentsUntrusted(stateDir);
 }
 
 export async function preflightScheduledPublication(options: {

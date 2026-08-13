@@ -14,6 +14,8 @@ import { publicationGithubPreflight, publicationGithubToken, throwIfShutdownRequ
 import { assertMinFreeDisk } from '../utils/disk.js';
 import { ConfigError } from '../utils/errors.js';
 import { projectStateDir } from '../utils/paths.js';
+import { assertPrivateDirectory, ensurePrivateDirectory } from '../utils/privateDirectory.js';
+import { clearWorkspaceContentsUntrusted, ensurePrivateProjectStateDirectory, markWorkspaceContentsUntrusted, workspaceContentsAreUntrusted } from '../utils/workspaceTrust.js';
 import { toRunId } from '../utils/runId.js';
 import { tailLines } from '../utils/text.js';
 import { CheckpointBranchDivergedError, CheckpointBranchMissingError, WorkspaceManager } from '../workspace/manager.js';
@@ -33,120 +35,30 @@ import { forbiddenCheckpointPublicationReason, isResumableImplementationState, l
 const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
 export async function runKaizen(options) {
     const resolved = await resolveProject(options.project, options.cwd);
-    const initialConfig = await loadOperationalConfig(resolved.project, {
-        preferWorkspace: options.scheduled,
-        requireWorkspace: options.scheduled
-    });
-    let config = initialConfig.config;
-    if (!options.scheduled || options.dryRun)
-        assertJobEnabled(config, options.job);
-    let scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
-    let trigger = options.trigger ?? scheduledJob?.name ?? options.job ?? (options.scheduled ? 'scheduled' : 'manual');
-    const startedAt = new Date();
-    const runId = toRunId(startedAt);
-    let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
-    let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
-    let github = new GitHubClient(runCommand, initialConfig.path);
-    const stateDir = projectStateDir(resolved.slug);
-    const observesFullBacklog = options.issueNumbers === undefined && options.issue === undefined;
-    const configuredMaxIssues = (requestedIssueNumbers) => options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
-    const selectRunIssues = async () => {
-        const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
-        const maxIssues = configuredMaxIssues(requestedIssueNumbers);
-        const requestedIssues = requestedIssueNumbers
-            ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
-            : undefined;
-        const issues = requestedIssues ?? await github.listIssues(config.issues.label);
-        const reconciled = await reconcileMergedPullRequestIssues({
-            issues,
-            github,
-            dryRun: options.dryRun
-        });
-        const selectableIssues = reconciled.length > 0
-            ? issues.filter((issue) => !reconciled.includes(issue.number))
-            : issues;
-        const automatic = options.scheduled && requestedIssues === undefined;
-        const openPullRequests = automatic || selectableIssues.some(hasPullRequestResultMarker)
-            ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
-            : [];
-        const priorAlreadyResolved = automatic
-            ? selectableIssues.filter((issue) => hasIssueIntakeDecisionComment(issue, 'already_resolved') &&
-                evaluateIssueIntake({
-                    issue,
-                    repo: resolved.project.repo,
-                    openPullRequests
-                }).status === 'already_resolved')
-            : [];
-        const priorAlreadyResolvedNumbers = new Set(priorAlreadyResolved.map((issue) => issue.number));
-        const intakeCandidates = priorAlreadyResolved.length > 0
-            ? selectableIssues.filter((issue) => !priorAlreadyResolvedNumbers.has(issue.number))
-            : selectableIssues;
-        const selection = selectIssues({
-            issues: intakeCandidates,
-            config,
-            maxIssues: config.safety.operationMode === 'external' ? Number.MAX_SAFE_INTEGER : maxIssues,
-            explicit: requestedIssues !== undefined,
-            openPullRequests
-        });
-        selection.skipped.push(...priorAlreadyResolved.map((issue) => ({
-            number: issue.number,
-            reason: 'intake already_resolved: prior intake decision already recorded'
-        })));
-        const authorizedSelection = config.safety.operationMode === 'external'
-            ? await applyExecutionAuthorizationGate({
-                selection,
-                config,
-                repo: resolved.project.repo,
-                github,
-                eventRetry: options.authorizationEventRetry
-            })
-            : selection;
-        const budgetedSelection = config.safety.operationMode === 'external'
-            ? applyImplementationBudget({ ...authorizedSelection, openPullRequests }, maxIssues)
-            : authorizedSelection;
-        const implementationStates = await listImplementationStates(stateDir);
-        const selectedIssueNumbers = new Set(budgetedSelection.selected.map((issue) => issue.number));
-        const selectedResumableStates = implementationStates.filter((state) => selectedIssueNumbers.has(state.issue) && isResumableImplementationState(state));
-        const openCheckpoints = openCheckpointStates(selectedResumableStates, openPullRequests);
-        const resumableIssueNumbers = new Set(selectedResumableStates.map((state) => state.issue));
-        const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
-        const resumeBranchByIssue = new Map(openCheckpoints.map((state) => [state.issue, state.branch]));
-        const limited = await applyOpenPullRequestLimit({
-            config,
-            selection: budgetedSelection,
-            automatic,
-            openPullRequests,
-            resumableIssueNumbers,
-            resumeBranches
-        });
-        const wipLimited = await applyGeneratedPullRequestWipLimit({
-            config,
-            selection: limited,
-            automatic,
-            repo: resolved.project.repo,
-            github,
-            resumableIssueNumbers
-        });
-        const limitedSelection = { ...wipLimited, backlogCount: selectableIssues.length, openPullRequests };
-        return automatic && !options.dryRun
-            ? { ...limitedSelection, resumableIssueNumbers, resumeBranches, resumeBranchByIssue }
-            : limitedSelection;
-    };
     if (options.dryRun) {
-        const { openPullRequests: _openPullRequests, backlogCount: _backlogCount, ...selection } = await selectRunIssues();
-        return selection;
+        if (options.scheduled) {
+            await assertExistingWorkspacePrivate(resolved.project.workspacePath, projectStateDir(resolved.slug));
+        }
+        return runKaizenWithPreparedWorkspace(options, resolved, false);
     }
-    await fs.mkdir(stateDir, { recursive: true });
+    const stateDir = projectStateDir(resolved.slug);
+    await ensurePrivateProjectStateDirectory(stateDir);
     await ensureNotPaused(stateDir);
+    const ownsLock = options.existingLock === undefined;
     let lock;
     try {
         lock = options.existingLock ?? await RunLock.acquire(stateDir);
     }
     catch (error) {
+        if (!RunLock.isActiveError(error))
+            throw error;
+        const localConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: false });
+        const scheduledJob = options.job ? schedulerJob(localConfig.config, options.job) : undefined;
+        const trigger = options.trigger ?? scheduledJob?.name ?? options.job ?? (options.scheduled ? 'scheduled' : 'manual');
         const skipIfRunning = scheduledJob?.config.run.mode === 'watch'
             ? scheduledJob.config.run.skipIfRunning
             : trigger === 'watch';
-        if (options.scheduled && skipIfRunning && RunLock.isActiveError(error)) {
+        if (options.scheduled && skipIfRunning) {
             const now = new Date().toISOString();
             return {
                 version: 1,
@@ -161,7 +73,122 @@ export async function runKaizen(options) {
         }
         throw error;
     }
+    let handedOff = false;
     try {
+        await secureOrRebuildExistingWorkspace(resolved.project, stateDir, options.runCommand);
+        handedOff = true;
+        return await runKaizenWithPreparedWorkspace({ ...options, existingLock: lock }, resolved, ownsLock);
+    }
+    finally {
+        if (ownsLock && !handedOff)
+            await lock.release();
+    }
+}
+async function runKaizenWithPreparedWorkspace(options, resolved, releaseLock) {
+    try {
+        const initialConfig = await loadOperationalConfig(resolved.project, {
+            preferWorkspace: options.scheduled,
+            requireWorkspace: options.scheduled
+        });
+        let config = initialConfig.config;
+        if (!options.scheduled || options.dryRun)
+            assertJobEnabled(config, options.job);
+        let scheduledJob = options.job ? schedulerJob(config, options.job) : undefined;
+        let trigger = options.trigger ?? scheduledJob?.name ?? options.job ?? (options.scheduled ? 'scheduled' : 'manual');
+        const startedAt = new Date();
+        const runId = toRunId(startedAt);
+        let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
+        let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
+        let github = new GitHubClient(runCommand, initialConfig.path);
+        const stateDir = projectStateDir(resolved.slug);
+        const observesFullBacklog = options.issueNumbers === undefined && options.issue === undefined;
+        const configuredMaxIssues = (requestedIssueNumbers) => options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
+        const selectRunIssues = async () => {
+            const requestedIssueNumbers = options.issueNumbers ?? (options.issue ? [options.issue] : undefined);
+            const maxIssues = configuredMaxIssues(requestedIssueNumbers);
+            const requestedIssues = requestedIssueNumbers
+                ? await Promise.all(uniqueIssueNumbers(requestedIssueNumbers).map((issueNumber) => github.getIssue(issueNumber)))
+                : undefined;
+            const issues = requestedIssues ?? await github.listIssues(config.issues.label);
+            const reconciled = await reconcileMergedPullRequestIssues({
+                issues,
+                github,
+                dryRun: options.dryRun
+            });
+            const selectableIssues = reconciled.length > 0
+                ? issues.filter((issue) => !reconciled.includes(issue.number))
+                : issues;
+            const automatic = options.scheduled && requestedIssues === undefined;
+            const openPullRequests = automatic || selectableIssues.some(hasPullRequestResultMarker)
+                ? await github.listOpenPullRequests(openPullRequestFetchLimit(config.run.maxOpenPullRequests))
+                : [];
+            const priorAlreadyResolved = automatic
+                ? selectableIssues.filter((issue) => hasIssueIntakeDecisionComment(issue, 'already_resolved') &&
+                    evaluateIssueIntake({
+                        issue,
+                        repo: resolved.project.repo,
+                        openPullRequests
+                    }).status === 'already_resolved')
+                : [];
+            const priorAlreadyResolvedNumbers = new Set(priorAlreadyResolved.map((issue) => issue.number));
+            const intakeCandidates = priorAlreadyResolved.length > 0
+                ? selectableIssues.filter((issue) => !priorAlreadyResolvedNumbers.has(issue.number))
+                : selectableIssues;
+            const selection = selectIssues({
+                issues: intakeCandidates,
+                config,
+                maxIssues: config.safety.operationMode === 'external' ? Number.MAX_SAFE_INTEGER : maxIssues,
+                explicit: requestedIssues !== undefined,
+                openPullRequests
+            });
+            selection.skipped.push(...priorAlreadyResolved.map((issue) => ({
+                number: issue.number,
+                reason: 'intake already_resolved: prior intake decision already recorded'
+            })));
+            const authorizedSelection = config.safety.operationMode === 'external'
+                ? await applyExecutionAuthorizationGate({
+                    selection,
+                    config,
+                    repo: resolved.project.repo,
+                    github,
+                    eventRetry: options.authorizationEventRetry
+                })
+                : selection;
+            const budgetedSelection = config.safety.operationMode === 'external'
+                ? applyImplementationBudget({ ...authorizedSelection, openPullRequests }, maxIssues)
+                : authorizedSelection;
+            const implementationStates = await listImplementationStates(stateDir);
+            const selectedIssueNumbers = new Set(budgetedSelection.selected.map((issue) => issue.number));
+            const selectedResumableStates = implementationStates.filter((state) => selectedIssueNumbers.has(state.issue) && isResumableImplementationState(state));
+            const openCheckpoints = openCheckpointStates(selectedResumableStates, openPullRequests);
+            const resumableIssueNumbers = new Set(selectedResumableStates.map((state) => state.issue));
+            const resumeBranches = new Set(openCheckpoints.map((state) => state.branch));
+            const resumeBranchByIssue = new Map(openCheckpoints.map((state) => [state.issue, state.branch]));
+            const limited = await applyOpenPullRequestLimit({
+                config,
+                selection: budgetedSelection,
+                automatic,
+                openPullRequests,
+                resumableIssueNumbers,
+                resumeBranches
+            });
+            const wipLimited = await applyGeneratedPullRequestWipLimit({
+                config,
+                selection: limited,
+                automatic,
+                repo: resolved.project.repo,
+                github,
+                resumableIssueNumbers
+            });
+            const limitedSelection = { ...wipLimited, backlogCount: selectableIssues.length, openPullRequests };
+            return automatic && !options.dryRun
+                ? { ...limitedSelection, resumableIssueNumbers, resumeBranches, resumeBranchByIssue }
+                : limitedSelection;
+        };
+        if (options.dryRun) {
+            const { openPullRequests: _openPullRequests, backlogCount: _backlogCount, ...selection } = await selectRunIssues();
+            return selection;
+        }
         const latestWorkspaceConfig = options.scheduled
             ? await loadLatestConfigFromExistingWorkspace({
                 config,
@@ -412,8 +439,59 @@ export async function runKaizen(options) {
         return summary;
     }
     finally {
-        await lock.release();
+        if (releaseLock)
+            await options.existingLock?.release();
     }
+}
+async function assertExistingWorkspacePrivate(workspacePath, stateDir) {
+    try {
+        await fs.lstat(workspacePath);
+    }
+    catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')
+            return;
+        throw error;
+    }
+    await assertPrivateDirectory(workspacePath);
+    if (await workspaceContentsAreUntrusted(stateDir)) {
+        throw new Error('Scheduled dry run refused previously exposed workspace contents; run a non-dry command to rebuild them.');
+    }
+}
+async function secureOrRebuildExistingWorkspace(project, stateDir, runCommand) {
+    try {
+        await fs.lstat(project.workspacePath);
+    }
+    catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            await clearWorkspaceContentsUntrusted(stateDir);
+            return;
+        }
+        throw error;
+    }
+    const contentsMarkedUntrusted = await workspaceContentsAreUntrusted(stateDir);
+    let repaired = false;
+    try {
+        await assertPrivateDirectory(project.workspacePath);
+        if (!contentsMarkedUntrusted)
+            return;
+    }
+    catch {
+        // Repair owner-only modes such as 0600 in place. If group/other access or
+        // an ACL existed, persist the taint before changing permissions so any
+        // later origin lookup, removal, or clone failure remains fail-closed.
+        const repair = await ensurePrivateDirectory(project.workspacePath, {
+            beforeExposureRepair: async () => markWorkspaceContentsUntrusted(stateDir)
+        });
+        repaired = true;
+        if (!contentsMarkedUntrusted && !repair.contentsMayHaveBeenExposed)
+            return;
+    }
+    if (contentsMarkedUntrusted && !repaired)
+        await ensurePrivateDirectory(project.workspacePath);
+    const remoteUrl = await new GitClient(runCommand, project.localPath).remoteUrl('origin');
+    await fs.rm(project.workspacePath, { recursive: true, force: true });
+    await new WorkspaceManager(runCommand, project.workspacePath, remoteUrl).ensure();
+    await clearWorkspaceContentsUntrusted(stateDir);
 }
 export async function preflightScheduledPublication(options) {
     if (!options.scheduled)

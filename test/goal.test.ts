@@ -8,6 +8,7 @@ import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import { createGoalState, goalDir } from '../src/goals/state.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { projectStateDir } from '../src/utils/paths.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 
@@ -56,6 +57,118 @@ describe('goal commands', () => {
     const stopped = await stopGoal({ cwd: repo, project: 'o-r', goalId: goal.id, reason: 'manual pause' });
     expect(stopped.status).toBe('stopped');
     expect(stopped.stoppedReason).toBe('manual pause');
+  });
+
+  it.runIf(process.platform !== 'win32')('refuses to create goals in exposed project-state storage', async () => {
+    const { repo } = await setupProject();
+    const projects = path.dirname(projectStateDir('o-r'));
+    await fs.mkdir(projects, { recursive: true });
+    await fs.chmod(projects, 0o777);
+
+    await expect(createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Untrusted goal',
+      description: 'Must not be persisted.',
+      successCriteria: ['never run'],
+      constraints: []
+    })).rejects.toThrow('exposed project-state storage');
+  });
+
+  it.runIf(process.platform !== 'win32')('refuses exposed goal state before mutation or external actions', async () => {
+    const { repo, workspace } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Protected goal',
+      description: 'Must remain unchanged.',
+      successCriteria: ['never run'],
+      constraints: []
+    });
+    await fs.chmod(projectStateDir('o-r'), 0o777);
+    const runner = goalRunner({ repo, workspace, evaluationStatus: 'succeeded' });
+
+    await expect(runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: trustedRunner(runner)
+    })).rejects.toThrow('exposed project-state storage');
+    await expect(stopGoal({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      reason: 'untrusted mutation'
+    })).rejects.toThrow('exposed project-state storage');
+
+    expect(runner).not.toHaveBeenCalled();
+    const persisted = JSON.parse(await fs.readFile(path.join(goalDir('o-r', goal.id), 'goal.json'), 'utf8')) as {
+      status: string;
+    };
+    expect(persisted.status).toBe('active');
+  });
+
+  it.runIf(process.platform !== 'win32')('revalidates project state after the goal agent returns', async () => {
+    const { repo, workspace } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Revalidate goal state',
+      description: 'Do not trust an exposed result artifact.',
+      successCriteria: ['never create an issue'],
+      constraints: []
+    });
+    const runner = goalRunner({
+      repo,
+      workspace,
+      evaluationStatus: 'succeeded',
+      exposeStateAfterPlanner: true
+    });
+
+    await expect(runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: trustedRunner(runner)
+    })).rejects.toThrow('exposed project-state storage');
+
+    expect(runner.mock.calls.filter(([command, args]) =>
+      command === 'gh' && args[0] === 'issue' && args[1] === 'create')).toHaveLength(0);
+  });
+
+  it.runIf(process.platform !== 'win32')('does not recreate goal state removed by the goal agent', async () => {
+    const { repo, workspace } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Preserve missing state failure',
+      description: 'Fail closed if state disappears.',
+      successCriteria: ['never create an issue'],
+      constraints: []
+    });
+    const runner = goalRunner({
+      repo,
+      workspace,
+      evaluationStatus: 'succeeded',
+      removeStateAfterPlanner: true
+    });
+
+    await expect(runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: trustedRunner(runner)
+    })).rejects.toThrow('disappeared while the goal agent was running');
+
+    await expect(fs.access(projectStateDir('o-r'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runner.mock.calls.filter(([command, args]) =>
+      command === 'gh' && args[0] === 'issue' && args[1] === 'create')).toHaveLength(0);
   });
 
   it('runs one goal iteration through a goal-linked issue and marks the goal succeeded', async () => {
@@ -478,6 +591,8 @@ function goalRunner(options: {
   invalidEvaluator?: boolean;
   failMechanicalEvaluation?: boolean;
   mechanicalEvaluationOutput?: string;
+  exposeStateAfterPlanner?: boolean;
+  removeStateAfterPlanner?: boolean;
 }) {
   return vi.fn<CommandRunner>(async (command, args, runOptions) => {
     if (command === 'goal-agent') {
@@ -508,6 +623,8 @@ function goalRunner(options: {
             }
           });
         }
+        if (options.exposeStateAfterPlanner) await fs.chmod(projectStateDir('o-r'), 0o777);
+        if (options.removeStateAfterPlanner) await fs.rm(projectStateDir('o-r'), { recursive: true });
       } else if (!options.invalidEvaluator) {
         await writeJsonResult(runOptions?.env?.KAIZEN_GOAL_RESULT_PATH, {
           status: options.evaluationStatus,

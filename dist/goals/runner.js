@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import { reportIssue } from '../commands/report.js';
 import { loadConfig } from '../config/config.js';
 import { resolveProject } from '../config/registry.js';
@@ -5,7 +6,9 @@ import { GitHubClient } from '../github/client.js';
 import { runKaizen } from '../orchestrator/run.js';
 import { buildUntrustedEnv } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
+import { projectStateDir } from '../utils/paths.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
+import { ensurePrivateProjectStateDirectory } from '../utils/workspaceTrust.js';
 import { GitClient } from '../workspace/git.js';
 import { goalDir, loadGoalState, saveGoalState, touchGoal } from './state.js';
 import { GoalAgentAdapter } from './agent.js';
@@ -25,6 +28,7 @@ export async function runGoal(options) {
     });
     const stateDir = goalDir(resolved.slug, goal.id);
     const lock = await GoalLock.acquire(stateDir);
+    const stateIdentity = await captureGoalStateIdentity(projectStateDir(resolved.slug), stateDir);
     try {
         goal = await loadGoalState(resolved.slug, options.goalId);
         if (goal.status !== 'active') {
@@ -43,9 +47,12 @@ export async function runGoal(options) {
                 });
             }
             catch (error) {
+                await assertGoalStateIdentity(stateIdentity, lock);
                 goal = await finishGoal(resolved.slug, goal, 'failed', `Goal planner failed: ${String(error)}`);
                 break;
             }
+            await assertGoalStateIdentity(stateIdentity, lock);
+            await ensurePrivateProjectStateDirectory(stateIdentity.project.path);
             if (plan.status === 'succeeded') {
                 goal = await finishGoal(resolved.slug, goal, 'succeeded', plan.reason);
                 break;
@@ -123,6 +130,7 @@ export async function runGoal(options) {
                 }
             }
             catch (error) {
+                await assertGoalStateIdentity(stateIdentity, lock);
                 goal = await failCurrentIteration({
                     projectSlug: resolved.slug,
                     goal,
@@ -157,6 +165,35 @@ export async function runGoal(options) {
     }
     finally {
         await lock.release();
+    }
+}
+async function captureGoalStateIdentity(projectPath, goalPath) {
+    return {
+        project: await captureDirectoryIdentity(projectPath),
+        goal: await captureDirectoryIdentity(goalPath)
+    };
+}
+async function captureDirectoryIdentity(directory) {
+    const stats = await fs.lstat(directory);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+        throw new Error(`Goal state path must be a real directory: ${directory}`);
+    }
+    return { path: directory, dev: stats.dev, ino: stats.ino };
+}
+async function assertGoalStateIdentity(identity, lock) {
+    await assertDirectoryIdentity(identity.project);
+    await assertDirectoryIdentity(identity.goal);
+    await lock.assertHeld();
+}
+async function assertDirectoryIdentity(identity) {
+    const stats = await fs.lstat(identity.path).catch((error) => {
+        if (error.code === 'ENOENT') {
+            throw new Error(`Goal state directory disappeared while the goal agent was running: ${identity.path}`);
+        }
+        throw error;
+    });
+    if (!stats.isDirectory() || stats.isSymbolicLink() || stats.dev !== identity.dev || stats.ino !== identity.ino) {
+        throw new Error(`Goal state directory changed while the goal agent was running: ${identity.path}`);
     }
 }
 async function planNextIteration(options) {

@@ -3,7 +3,10 @@ import path from 'node:path';
 import { ConfigError } from '../utils/errors.js';
 
 export class GoalLock {
-  private constructor(private readonly lockPath: string) {}
+  private constructor(
+    private readonly lockPath: string,
+    private readonly identity: { dev: number; ino: number }
+  ) {}
 
   static async acquire(goalDir: string): Promise<GoalLock> {
     await fs.mkdir(goalDir, { recursive: true });
@@ -17,7 +20,8 @@ export class GoalLock {
       } finally {
         await handle.close();
       }
-      return new GoalLock(lockPath);
+      const stats = await fs.lstat(lockPath);
+      return new GoalLock(lockPath, { dev: stats.dev, ino: stats.ino });
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (await isStale(lockPath)) {
@@ -28,8 +32,25 @@ export class GoalLock {
     }
   }
 
+  async assertHeld(): Promise<void> {
+    const stats = await fs.lstat(this.lockPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`Kaizen goal lock disappeared while the goal was running: ${this.lockPath}`);
+      }
+      throw error;
+    });
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.dev !== this.identity.dev || stats.ino !== this.identity.ino) {
+      throw new Error(`Kaizen goal lock changed while the goal was running: ${this.lockPath}`);
+    }
+  }
+
   async release(): Promise<void> {
-    await fs.rm(this.lockPath, { force: true });
+    try {
+      await this.assertHeld();
+    } catch {
+      return;
+    }
+    await fs.rm(this.lockPath);
   }
 }
 

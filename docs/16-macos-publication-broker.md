@@ -10,6 +10,24 @@ and carry the same capability. A child, sibling, stale PID, or reused PID does n
 match the registered audit identity. Supervisor-start requests additionally require
 the configured immutable launcher executable to be a direct child of macOS launchd;
 another process running under the scheduler UID cannot invoke the broker entry point.
+Kaizen creates and revalidates each registered workspace, worktree parent, run
+directory, and issue worktree with mode `0700` before untrusted work starts.
+`kaizen doctor` reports an exposed workspace; `kaizen doctor --repair` tightens an
+existing workspace only after confirming that it is a real directory owned by the
+runtime user. On macOS, validation also rejects extended ACLs; repair refuses to mutate
+ACL-bearing directories by pathname, so an operator must remove the ACL before retrying.
+Any non-dry run, scheduled or manual, rebuilds a formerly exposed workspace from
+the trusted developer checkout's origin before reading its contents. A dry run never
+repairs or rebuilds a workspace; a scheduled dry run validates privacy and refuses
+exposed or previously marked-untrusted contents.
+Doctor tightens the directory but persists an untrusted-contents marker outside the
+workspace, so later Doctor invocations still refuse its config and Builder smoke test.
+A successful non-dry rebuild clears that marker.
+
+> **Upgrade note:** Workspaces created by versions before private workspace enforcement
+> are normally mode `0755`. The first non-dry run after upgrading rebuilds each such
+> workspace once. Untracked files and unpushed local branches in the managed workspace
+> are discarded; checkpoints already pushed to `origin` remain resumable.
 
 ## Install
 
@@ -110,7 +128,9 @@ sudo rm -R /var/db/kaizen-loop/publication
 
 `test/macos-publication-broker.test.ts` compiles and exercises the native broker on a
 healthy macOS Swift toolchain. It proves that the broker-spawned supervisor passes
-preflight, its same-UID Node child is rejected, and launcher disconnect terminates the
-supervisor process group. Native tests are skipped when Foundation cannot compile
-(including mismatched Command Line Tools/SDK installations); source-contract and
-TypeScript preflight tests still run on every platform.
+preflight, its same-UID Node child is rejected, publication reaches the configured
+remote, and launcher disconnect terminates the supervisor process group. The regular
+cross-platform suite may skip these native cases, but the dedicated
+`native-publication-broker` macOS CI job sets `KAIZEN_REQUIRE_NATIVE_BROKER_TESTS=1`,
+so a missing or broken Swift/Foundation toolchain fails that job instead of silently
+reducing credential-boundary coverage.

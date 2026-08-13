@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { doctorProject } from '../src/commands/doctor.js';
 import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
+import { RunLock } from '../src/orchestrator/lock.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { projectStateDir } from '../src/utils/paths.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 
 afterEach(() => {
@@ -108,27 +110,28 @@ describe('doctorProject', () => {
     await expect(fs.access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('reports insecure workspace and worktree directory permissions', async () => {
+  it.runIf(process.platform !== 'win32')('reports insecure existing worktree directories', async () => {
     const { repo, workspace } = await setupProject();
     const worktreeRoot = `${workspace}-worktrees`;
     const runDirectory = path.join(worktreeRoot, 'run-1');
     const worktree = path.join(runDirectory, 'issue-370');
     await fs.mkdir(worktree, { recursive: true });
-    for (const directory of [workspace, worktreeRoot, runDirectory, worktree]) {
-      await fs.chmod(directory, 0o755);
-    }
-    const runner = workingDoctorRunner();
+    await fs.chmod(worktree, 0o755);
 
-    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: trustedRunner(runner) });
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: trustedRunner(workingDoctorRunner())
+    });
 
-    expect(output.ok).toBe(false);
     expect(output.checks.find((item) => item.name === 'workspace permissions')).toMatchObject({
       ok: false,
-      message: expect.stringContaining('expected mode 0700 but found 0755')
+      message: expect.stringContaining('mode 0700')
     });
   });
 
-  it('repairs existing workspace and worktree directory permissions', async () => {
+  it.runIf(process.platform !== 'win32')('repairs existing issue and Guardian worktree directories', async () => {
     const { repo, workspace } = await setupProject();
     const worktreeRoot = `${workspace}-worktrees`;
     const runDirectory = path.join(worktreeRoot, 'run-1');
@@ -137,16 +140,128 @@ describe('doctorProject', () => {
     const guardianWorktree = path.join(guardianRoot, 'job-1');
     await fs.mkdir(worktree, { recursive: true });
     await fs.mkdir(guardianWorktree, { recursive: true });
-    const directories = [workspace, worktreeRoot, runDirectory, worktree, guardianRoot, guardianWorktree];
+    const directories = [worktreeRoot, runDirectory, worktree, guardianRoot, guardianWorktree];
     for (const directory of directories) await fs.chmod(directory, 0o755);
-    const runner = workingDoctorRunner();
 
-    const output = await doctorProject({ cwd: repo, project: 'o-r', repair: true, runCommand: trustedRunner(runner) });
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: true,
+      runCommand: trustedRunner(workingDoctorRunner())
+    });
 
     expect(output.checks.find((item) => item.name === 'workspace permissions')).toMatchObject({ ok: true });
     for (const directory of directories) {
       expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
     }
+  });
+
+  it('reports an exposed workspace and repairs it to mode 0700', async () => {
+    if (process.platform === 'win32') return;
+    const { repo, workspace } = await setupProject();
+    await fs.chmod(workspace, 0o755);
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'builder-agent' && args.length === 0) {
+        await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+        });
+      }
+      return result(command, args, options?.cwd, 'ok');
+    });
+
+    const before = await doctorProject({ cwd: repo, project: 'o-r', repair: false, runCommand: trustedRunner(runner) });
+    expect(before.checks.find((item) => item.name === 'workspace')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('mode 0700')
+    });
+    expect(before.checks.find((item) => item.name === 'builder agent runtime')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('workspace privacy validation failed')
+    });
+    expect(runner.mock.calls.some(([command, args]) => command === 'builder-agent' && args.length === 0)).toBe(false);
+
+    const after = await doctorProject({ cwd: repo, project: 'o-r', repair: true, runCommand: trustedRunner(runner) });
+    expect(after.checks.find((item) => item.name === 'workspace')?.ok).toBe(true);
+    expect((await fs.stat(workspace)).mode & 0o777).toBe(0o700);
+  });
+
+  it('does not repair an exposed workspace while a project run holds the lock', async () => {
+    if (process.platform === 'win32') return;
+    const { repo, workspace } = await setupProject();
+    await fs.chmod(workspace, 0o755);
+    const runner = vi.fn<CommandRunner>();
+    const activeLock = await RunLock.acquire(projectStateDir('o-r'));
+    try {
+      await expect(doctorProject({
+        cwd: repo,
+        project: 'o-r',
+        repair: true,
+        runCommand: trustedRunner(runner)
+      })).rejects.toThrow('already active');
+    } finally {
+      await activeLock.release();
+    }
+
+    expect((await fs.stat(workspace)).mode & 0o777).toBe(0o755);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('does not load executable configuration from an exposed workspace', async () => {
+    if (process.platform === 'win32') return;
+    const { repo, workspace } = await setupProject();
+    const configPath = path.join(workspace, '.kaizen', 'config.yml');
+    const config = parse(await fs.readFile(configPath, 'utf8')) as Record<string, any>;
+    config.builder.command = 'attacker-controlled-builder';
+    await fs.writeFile(configPath, stringify(config));
+    await fs.chmod(workspace, 0o777);
+    const runner = vi.fn<CommandRunner>(async (command, args, options) =>
+      result(command, args, options?.cwd, 'ok'));
+
+    const output = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: trustedRunner(runner)
+    });
+
+    expect(output.checks.find((item) => item.name === 'workspace')).toMatchObject({ ok: false });
+    expect(output.checks.find((item) => item.name === 'workspace config')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('workspace privacy validation failed')
+    });
+    expect(runner.mock.calls.some(([command]) => command === 'attacker-controlled-builder')).toBe(false);
+
+    const repaired = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: true,
+      runCommand: trustedRunner(runner)
+    });
+    expect(repaired.checks.find((item) => item.name === 'workspace')).toMatchObject({ ok: true });
+    expect(repaired.checks.find((item) => item.name === 'workspace config')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
+    expect(repaired.checks.find((item) => item.name === 'builder agent runtime')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
+
+    const afterRepair = await doctorProject({
+      cwd: repo,
+      project: 'o-r',
+      repair: false,
+      runCommand: trustedRunner(runner)
+    });
+    expect(afterRepair.checks.find((item) => item.name === 'workspace config')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
+    expect(afterRepair.checks.find((item) => item.name === 'builder agent runtime')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('contents require review or rebuild')
+    });
+    expect(runner.mock.calls.some(([command]) => command === 'attacker-controlled-builder')).toBe(false);
   });
 
   it('fails when the builder command exists but runtime smoke test cannot execute', async () => {

@@ -1,13 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ConfigError } from '../utils/errors.js';
+import { ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
 export class RunLock {
     lockPath;
     constructor(lockPath) {
         this.lockPath = lockPath;
     }
     static async acquire(projectDir) {
-        await fs.mkdir(projectDir, { recursive: true });
+        await ensurePrivateStructureDirectory(projectDir);
         const lockPath = path.join(projectDir, 'run.lock');
         const content = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
         try {

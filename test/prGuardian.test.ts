@@ -2432,6 +2432,9 @@ describe('runPrGuardianSkill', () => {
 
   it('runs pending guardian jobs and records the final state', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-state-'));
+    const legacyWorktreesRoot = path.join(stateDir, 'guardian', 'worktrees');
+    await fs.mkdir(legacyWorktreesRoot, { recursive: true });
+    if (process.platform !== 'win32') await fs.chmod(legacyWorktreesRoot, 0o755);
     const config = configSchema.parse({
       version: 1,
       guardian: { enabled: true, mode: 'async', command: 'codex', timeoutMinutes: 1, maxAttempts: 2, reviewSettleSeconds: 0 }
@@ -2488,6 +2491,7 @@ describe('runPrGuardianSkill', () => {
     expect(jobs[0].attemptCount).toBe(1);
     expect(guardianModes).toEqual([0o700, 0o700]);
     expect((await listPrGuardianJobs(stateDir))[0].status).toBe('success');
+    if (process.platform !== 'win32') expect((await fs.stat(legacyWorktreesRoot)).mode & 0o777).toBe(0o700);
     await expect(loadImplementationState(stateDir, 1)).resolves.toMatchObject({
       phase: 'complete',
       attempt: 2,
