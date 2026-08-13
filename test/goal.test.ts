@@ -8,6 +8,7 @@ import { defaultConfigYaml } from '../src/config/config.js';
 import { saveRegistry } from '../src/config/registry.js';
 import { createGoalState, goalDir } from '../src/goals/state.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { projectStateDir } from '../src/utils/paths.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 
@@ -56,6 +57,57 @@ describe('goal commands', () => {
     const stopped = await stopGoal({ cwd: repo, project: 'o-r', goalId: goal.id, reason: 'manual pause' });
     expect(stopped.status).toBe('stopped');
     expect(stopped.stoppedReason).toBe('manual pause');
+  });
+
+  it.runIf(process.platform !== 'win32')('refuses to create goals in exposed project-state storage', async () => {
+    const { repo } = await setupProject();
+    const projects = path.dirname(projectStateDir('o-r'));
+    await fs.mkdir(projects, { recursive: true });
+    await fs.chmod(projects, 0o777);
+
+    await expect(createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Untrusted goal',
+      description: 'Must not be persisted.',
+      successCriteria: ['never run'],
+      constraints: []
+    })).rejects.toThrow('exposed project-state storage');
+  });
+
+  it.runIf(process.platform !== 'win32')('refuses exposed goal state before mutation or external actions', async () => {
+    const { repo, workspace } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Protected goal',
+      description: 'Must remain unchanged.',
+      successCriteria: ['never run'],
+      constraints: []
+    });
+    await fs.chmod(projectStateDir('o-r'), 0o777);
+    const runner = goalRunner({ repo, workspace, evaluationStatus: 'succeeded' });
+
+    await expect(runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: trustedRunner(runner)
+    })).rejects.toThrow('exposed project-state storage');
+    await expect(stopGoal({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      reason: 'untrusted mutation'
+    })).rejects.toThrow('exposed project-state storage');
+
+    expect(runner).not.toHaveBeenCalled();
+    const persisted = JSON.parse(await fs.readFile(path.join(goalDir('o-r', goal.id), 'goal.json'), 'utf8')) as {
+      status: string;
+    };
+    expect(persisted.status).toBe('active');
   });
 
   it('runs one goal iteration through a goal-linked issue and marks the goal succeeded', async () => {

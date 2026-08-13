@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { projectStateDir } from '../utils/paths.js';
 import { slugify } from '../utils/slug.js';
+import { ensurePrivateProjectStateDirectory } from '../utils/workspaceTrust.js';
 import type { GoalState } from './types.js';
 
 const nextIssueSchema = z
@@ -108,11 +109,13 @@ export async function createGoalState(options: {
 }
 
 export async function loadGoalState(projectSlug: string, goalId: string): Promise<GoalState> {
+  await ensurePrivateProjectStateDirectory(projectStateDir(projectSlug));
   const raw = await fs.readFile(goalPath(projectSlug, goalId), 'utf8');
   return goalStateSchema.parse(JSON.parse(raw)) as GoalState;
 }
 
 export async function saveGoalState(projectSlug: string, goal: GoalState): Promise<void> {
+  await ensurePrivateProjectStateDirectory(projectStateDir(projectSlug));
   const dir = goalDir(projectSlug, goal.id);
   await fs.mkdir(dir, { recursive: true });
   const destination = goalPath(projectSlug, goal.id);
@@ -127,6 +130,7 @@ export async function saveGoalState(projectSlug: string, goal: GoalState): Promi
 }
 
 export async function listGoalStates(projectSlug: string): Promise<GoalState[]> {
+  await ensurePrivateProjectStateDirectory(projectStateDir(projectSlug));
   let entries: string[];
   try {
     entries = await fs.readdir(goalsDir(projectSlug));
