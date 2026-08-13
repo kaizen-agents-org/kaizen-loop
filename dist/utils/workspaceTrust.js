@@ -62,19 +62,21 @@ export async function ensurePrivateProjectStateDirectory(stateDir) {
     const hierarchy = projectStateHierarchy(stateDir);
     for (const directory of hierarchy) {
         let modifiableByOthers = false;
+        let existed = true;
         try {
             modifiableByOthers = await privateDirectoryMayBeModifiedByOthers(directory);
         }
         catch (error) {
             if (error.code !== 'ENOENT')
                 throw error;
+            existed = false;
         }
         if (modifiableByOthers) {
             throw new Error(`Refusing to repair exposed project-state storage: ${directory}`);
         }
-        await ensurePrivateDirectory(directory, {
+        await ensurePrivateDirectory(directory, existed ? {
             beforeExposureRepair: async () => undefined
-        });
+        } : undefined);
     }
 }
 async function assertPrivateProjectStateDirectory(stateDir) {

@@ -5,7 +5,9 @@ import { GitHubClient } from '../github/client.js';
 import { runKaizen } from '../orchestrator/run.js';
 import { buildUntrustedEnv } from '../utils/command.js';
 import { KaizenError } from '../utils/errors.js';
+import { projectStateDir } from '../utils/paths.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
+import { ensurePrivateProjectStateDirectory } from '../utils/workspaceTrust.js';
 import { GitClient } from '../workspace/git.js';
 import { goalDir, loadGoalState, saveGoalState, touchGoal } from './state.js';
 import { GoalAgentAdapter } from './agent.js';
@@ -46,6 +48,7 @@ export async function runGoal(options) {
                 goal = await finishGoal(resolved.slug, goal, 'failed', `Goal planner failed: ${String(error)}`);
                 break;
             }
+            await ensurePrivateProjectStateDirectory(projectStateDir(resolved.slug));
             if (plan.status === 'succeeded') {
                 goal = await finishGoal(resolved.slug, goal, 'succeeded', plan.reason);
                 break;

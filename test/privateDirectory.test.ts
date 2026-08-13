@@ -4,7 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
-import { assertPrivateDirectory, ensurePrivateDirectory } from '../src/utils/privateDirectory.js';
+import {
+  assertPrivateDirectory,
+  ensurePrivateDirectory,
+  ensurePrivateStructureDirectory
+} from '../src/utils/privateDirectory.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -68,5 +72,18 @@ describe('private directory validation', () => {
     await expect(ensurePrivateDirectory(root)).rejects.toThrow('extended ACL');
     await expect(assertPrivateDirectory(root)).rejects.toThrow('extended ACL');
     await expect(fs.readFile(sentinel, 'utf8')).resolves.toBe('preserve');
+  });
+
+  it.runIf(process.platform === 'darwin')('fails closed when a new structure directory inherits an ACL', async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-private-inherited-acl-'));
+    const directory = path.join(parent, 'generated');
+    await execFileAsync('/bin/chmod', [
+      '+a',
+      'everyone allow list,search,add_file,add_subdirectory,file_inherit,directory_inherit',
+      parent
+    ]);
+
+    await expect(ensurePrivateStructureDirectory(directory)).rejects.toThrow('durable taint handler');
+    await expect(assertPrivateDirectory(directory)).rejects.toThrow('extended ACL');
   });
 });

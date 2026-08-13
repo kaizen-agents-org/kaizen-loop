@@ -10,12 +10,13 @@ export async function ensurePrivateDirectory(directory, options = {}) {
     return validatePrivateDirectory(directory, true, options.beforeExposureRepair);
 }
 export async function ensurePrivateStructureDirectory(directory) {
-    await ensurePrivateDirectory(directory, {
+    const existed = await pathExists(directory);
+    await ensurePrivateDirectory(directory, existed ? {
         // Generated worktree parents contain no trusted repository state. Their
         // child target is removed before reuse, so legacy exposure can be repaired
         // without laundering a registered workspace.
         beforeExposureRepair: async () => undefined
-    });
+    } : undefined);
 }
 export async function assertPrivateDirectory(directory) {
     await validatePrivateDirectory(directory, false);
@@ -127,5 +128,16 @@ function aclEntriesGrantExposure(entries) {
 async function extendedAclEntries(directory) {
     const { stdout } = await execFileAsync('/bin/ls', ['-lde', directory], { encoding: 'utf8' });
     return String(stdout).split('\n').slice(1).filter((line) => /^\s*\d+:/.test(line));
+}
+async function pathExists(target) {
+    try {
+        await fs.lstat(target);
+        return true;
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return false;
+        throw error;
+    }
 }
 //# sourceMappingURL=privateDirectory.js.map

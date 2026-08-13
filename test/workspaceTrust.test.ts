@@ -1,12 +1,17 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ensurePrivateProjectStateDirectory,
   markWorkspaceContentsUntrusted,
   workspaceContentsAreUntrusted,
   workspaceContentsUntrustedMarker
 } from '../src/utils/workspaceTrust.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('workspace trust marker', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -41,5 +46,19 @@ describe('workspace trust marker', () => {
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('preserve');
     expect((await fs.lstat(marker)).isSymbolicLink()).toBe(true);
     await expect(workspaceContentsAreUntrusted(stateDir)).rejects.toThrow('regular file');
+  });
+
+  it.runIf(process.platform === 'darwin')('fails closed when new project-state storage inherits an ACL', async () => {
+    const container = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-trust-inherited-acl-'));
+    const home = path.join(container, 'home');
+    vi.stubEnv('KAIZEN_HOME', home);
+    await execFileAsync('/bin/chmod', [
+      '+a',
+      'everyone allow list,search,add_file,add_subdirectory,file_inherit,directory_inherit',
+      container
+    ]);
+
+    await expect(ensurePrivateProjectStateDirectory(path.join(home, 'projects', 'test-project')))
+      .rejects.toThrow('durable taint handler');
   });
 });

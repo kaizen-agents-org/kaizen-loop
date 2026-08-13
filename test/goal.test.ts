@@ -110,6 +110,36 @@ describe('goal commands', () => {
     expect(persisted.status).toBe('active');
   });
 
+  it.runIf(process.platform !== 'win32')('revalidates project state after the goal agent returns', async () => {
+    const { repo, workspace } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Revalidate goal state',
+      description: 'Do not trust an exposed result artifact.',
+      successCriteria: ['never create an issue'],
+      constraints: []
+    });
+    const runner = goalRunner({
+      repo,
+      workspace,
+      evaluationStatus: 'succeeded',
+      exposeStateAfterPlanner: true
+    });
+
+    await expect(runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: trustedRunner(runner)
+    })).rejects.toThrow('exposed project-state storage');
+
+    expect(runner.mock.calls.filter(([command, args]) =>
+      command === 'gh' && args[0] === 'issue' && args[1] === 'create')).toHaveLength(0);
+  });
+
   it('runs one goal iteration through a goal-linked issue and marks the goal succeeded', async () => {
     const { repo, workspace } = await setupProject();
     const goal = await createGoal({
@@ -530,6 +560,7 @@ function goalRunner(options: {
   invalidEvaluator?: boolean;
   failMechanicalEvaluation?: boolean;
   mechanicalEvaluationOutput?: string;
+  exposeStateAfterPlanner?: boolean;
 }) {
   return vi.fn<CommandRunner>(async (command, args, runOptions) => {
     if (command === 'goal-agent') {
@@ -560,6 +591,7 @@ function goalRunner(options: {
             }
           });
         }
+        if (options.exposeStateAfterPlanner) await fs.chmod(projectStateDir('o-r'), 0o777);
       } else if (!options.invalidEvaluator) {
         await writeJsonResult(runOptions?.env?.KAIZEN_GOAL_RESULT_PATH, {
           status: options.evaluationStatus,
