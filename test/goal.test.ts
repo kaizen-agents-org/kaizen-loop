@@ -140,6 +140,37 @@ describe('goal commands', () => {
       command === 'gh' && args[0] === 'issue' && args[1] === 'create')).toHaveLength(0);
   });
 
+  it.runIf(process.platform !== 'win32')('does not recreate goal state removed by the goal agent', async () => {
+    const { repo, workspace } = await setupProject();
+    const goal = await createGoal({
+      cwd: repo,
+      project: 'o-r',
+      title: 'Preserve missing state failure',
+      description: 'Fail closed if state disappears.',
+      successCriteria: ['never create an issue'],
+      constraints: []
+    });
+    const runner = goalRunner({
+      repo,
+      workspace,
+      evaluationStatus: 'succeeded',
+      removeStateAfterPlanner: true
+    });
+
+    await expect(runGoalCommand({
+      cwd: repo,
+      project: 'o-r',
+      goalId: goal.id,
+      assumeYes: true,
+      json: true,
+      runCommand: trustedRunner(runner)
+    })).rejects.toThrow('disappeared while the goal agent was running');
+
+    await expect(fs.access(projectStateDir('o-r'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runner.mock.calls.filter(([command, args]) =>
+      command === 'gh' && args[0] === 'issue' && args[1] === 'create')).toHaveLength(0);
+  });
+
   it('runs one goal iteration through a goal-linked issue and marks the goal succeeded', async () => {
     const { repo, workspace } = await setupProject();
     const goal = await createGoal({
@@ -561,6 +592,7 @@ function goalRunner(options: {
   failMechanicalEvaluation?: boolean;
   mechanicalEvaluationOutput?: string;
   exposeStateAfterPlanner?: boolean;
+  removeStateAfterPlanner?: boolean;
 }) {
   return vi.fn<CommandRunner>(async (command, args, runOptions) => {
     if (command === 'goal-agent') {
@@ -592,6 +624,7 @@ function goalRunner(options: {
           });
         }
         if (options.exposeStateAfterPlanner) await fs.chmod(projectStateDir('o-r'), 0o777);
+        if (options.removeStateAfterPlanner) await fs.rm(projectStateDir('o-r'), { recursive: true });
       } else if (!options.invalidEvaluator) {
         await writeJsonResult(runOptions?.env?.KAIZEN_GOAL_RESULT_PATH, {
           status: options.evaluationStatus,
