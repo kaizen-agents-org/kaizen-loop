@@ -31,3 +31,13 @@ export interface SchedulerJob {
 export declare function schedulerJobs(config: KaizenConfig): SchedulerJob[];
 export declare function schedulerJob(config: KaizenConfig, jobName: string): SchedulerJob | undefined;
 export declare function schedulerKaizenHome(): string;
+export interface SchedulerLauncherStatus {
+    scheduledLauncher: string | null;
+    operatorLauncher: string | null;
+    ready: boolean;
+    error?: string;
+}
+export declare function schedulerLauncherStatus(options?: {
+    required?: boolean;
+    launcherTrust?: (launcher: string) => boolean;
+}): Promise<SchedulerLauncherStatus>;
