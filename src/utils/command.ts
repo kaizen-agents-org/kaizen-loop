@@ -497,7 +497,10 @@ function resolveConfiguredBrokerSocket(socketPath: string | undefined): string |
 }
 
 function resolveBrokerCapability(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
+  if (!value) {
+    delete process.env.KAIZEN_GITHUB_BROKER_CAPABILITY;
+    return undefined;
+  }
   if (!/^[a-f0-9]{64}$/.test(value)) {
     throw new Error('KAIZEN_GITHUB_BROKER_CAPABILITY must be a 64-character lowercase hexadecimal value.');
   }
