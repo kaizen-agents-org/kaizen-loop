@@ -176,6 +176,17 @@ private func respond(_ descriptor: Int32, _ ok: Bool) {
     _ = shutdown(descriptor, SHUT_RDWR)
 }
 
+private func respondFailure(_ descriptor: Int32, _ message: String) {
+    let data: Data
+    if let encoded = try? JSONSerialization.data(withJSONObject: ["ok": false, "error": message]) {
+        data = encoded + Data([0x0a])
+    } else {
+        data = Data("{\"ok\":false,\"error\":\"scheduler rejected the request\"}\n".utf8)
+    }
+    _ = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, data.count) }
+    _ = shutdown(descriptor, SHUT_RDWR)
+}
+
 private func exactKeys(_ request: [String: Any], _ keys: Set<String>) -> Bool {
     Set(request.keys) == keys
 }
@@ -399,7 +410,7 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
     return true
 }
 
-private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, request: [String: Any]) throws -> Bool {
+private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, request: [String: Any]) throws -> String? {
     guard exactKeys(request, ["version", "operation", "project", "job", "capability"]),
           request["version"] as? Int == 1,
           request["operation"] as? String == "scheduled-run",
@@ -408,9 +419,11 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
           let capability = request["capability"] as? String,
           capability.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
           project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
-          job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return false }
-    guard let registeredJob = config.scheduledJobs.first(where: { $0.project == project && $0.job == job }) else { return false }
-    guard try authenticateScheduledTrigger(descriptor, config: config) else { return false }
+          job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return "invalid scheduled run request" }
+    guard let registeredJob = config.scheduledJobs.first(where: { $0.project == project && $0.job == job }) else {
+        return "scheduled job is not configured: \(project)/\(job)"
+    }
+    guard try authenticateScheduledTrigger(descriptor, config: config) else { return "scheduled launcher authentication failed" }
 
     let process = try spawnProcess(
         executable: config.supervisorLauncherExecutable,
@@ -422,13 +435,16 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
     while process.isRunning {
         if !connected(descriptor) {
             try cancelProcessGroup(process)
-            return false
+            return "scheduled run client disconnected"
         }
         usleep(50_000)
     }
-    return process.exitedNormally && process.terminationStatus == 0
+    guard process.exitedNormally else { return "scheduled run terminated by signal" }
+    guard process.terminationStatus == 0 else {
+        return "scheduled run exited with status \(process.terminationStatus)"
+    }
+    return nil
 }
-
 private func authenticateSupervisor(_ descriptor: Int32, config: BrokerConfig, capability: String) throws -> Bool {
     let (uid, _, pid) = try peerCredentials(descriptor)
     guard uid == config.runtimeUid else { return false }
@@ -703,10 +719,14 @@ do {
     Thread.detachNewThread {
         serve(schedulerSocket) { descriptor in
             do {
-                respond(descriptor, try handleScheduledRun(descriptor, config: config, request: readRequest(descriptor)))
+                if let failure = try handleScheduledRun(descriptor, config: config, request: readRequest(descriptor)) {
+                    respondFailure(descriptor, failure)
+                } else {
+                    respond(descriptor, true)
+                }
             } catch {
                 logBrokerError("rejected a scheduled request", error)
-                respond(descriptor, false)
+                respondFailure(descriptor, error.localizedDescription)
             }
         }
     }
