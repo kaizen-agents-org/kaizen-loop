@@ -69,6 +69,28 @@ describe('buildUntrustedEnv', () => {
 });
 
 describe('githubCliEnv', () => {
+  it('treats an empty broker capability as unset at startup', () => {
+    const script = `
+      process.argv.splice(1, 0, 'kaizen');
+      const { githubCliEnv } = await import('./src/utils/command.ts');
+      process.stdout.write(JSON.stringify({
+        capability: process.env.KAIZEN_GITHUB_BROKER_CAPABILITY,
+        env: githubCliEnv().KAIZEN_GITHUB_BROKER_CAPABILITY
+      }));
+    `;
+    const stdout = execFileSync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '-e', script, 'actions', 'publish'],
+      {
+        cwd: path.resolve(import.meta.dirname, '..'),
+        env: { ...process.env, KAIZEN_GITHUB_BROKER_CAPABILITY: '' },
+        encoding: 'utf8'
+      }
+    );
+
+    expect(JSON.parse(stdout)).toEqual({});
+  });
+
   it('preserves GitHub CLI token auth without passing unrelated secrets', () => {
     const env = githubCliEnv({
       PATH: '/bin',
