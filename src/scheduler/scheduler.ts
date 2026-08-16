@@ -2,6 +2,7 @@ import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { KaizenConfig, RegistryProject, SchedulerJobConfig, SchedulerSchedule } from '../config/schema.js';
 import {
   isTrustedExecutablePath,
@@ -27,6 +28,9 @@ export async function enableScheduler(options: {
   const schedulerPath = jobs.length === 0
     ? undefined
     : pathWithExecutable(requireTrustedGitHubCliExecutable(options.runCommand));
+  if (scheduledLauncher && path.basename(scheduledLauncher) === 'run-scheduled.sh') {
+    await installOperatorLauncher(kaizenHome);
+  }
   if (platform === 'darwin') {
     await fs.mkdir(stateDir, { recursive: true });
     await removeLaunchdPlists(options.slug, options.runCommand);
@@ -97,6 +101,49 @@ export function schedulerKaizenHome(): string {
   return path.resolve(getKaizenHome());
 }
 
+export interface SchedulerLauncherStatus {
+  scheduledLauncher: string | null;
+  operatorLauncher: string | null;
+  ready: boolean;
+  error?: string;
+}
+
+export async function schedulerLauncherStatus(options: {
+  required?: boolean;
+  launcherTrust?: (launcher: string) => boolean;
+} = {}): Promise<SchedulerLauncherStatus> {
+  if (options.required === false) {
+    return { scheduledLauncher: null, operatorLauncher: null, ready: true };
+  }
+
+  const inspected = inspectScheduledLauncher(options.launcherTrust);
+  if (!inspected.ready) {
+    return {
+      scheduledLauncher: inspected.launcher,
+      operatorLauncher: null,
+      ready: false,
+      error: 'The configured scheduled launcher is missing or is not an immutable operator-managed launcher.'
+    };
+  }
+
+  if (path.basename(inspected.launcher!) !== 'run-scheduled.sh') {
+    return { scheduledLauncher: inspected.launcher, operatorLauncher: null, ready: true };
+  }
+
+  const operatorLauncher = path.join(schedulerKaizenHome(), 'bin', 'kaizen');
+  try {
+    await fs.access(operatorLauncher, fsSync.constants.X_OK);
+    return { scheduledLauncher: inspected.launcher, operatorLauncher, ready: true };
+  } catch {
+    return {
+      scheduledLauncher: inspected.launcher,
+      operatorLauncher,
+      ready: false,
+      error: `Kaizen operator launcher is missing or not executable: ${operatorLauncher}; run scheduler sync.`
+    };
+  }
+}
+
 function legacyLaunchdPlistPath(slug: string): string {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', `com.kaizen-loop.${slug}.plist`);
 }
@@ -157,6 +204,16 @@ function pathWithExecutable(executable: string): string {
 }
 
 function requiredScheduledLauncher(trust = isTrustedExecutablePath): string {
+  const inspected = inspectScheduledLauncher(trust);
+  if (!inspected.ready) {
+    throw new ConfigError(
+      'Managed scheduling requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh or kaizen-scheduled-launcher.'
+    );
+  }
+  return inspected.launcher!;
+}
+
+function inspectScheduledLauncher(trust = isTrustedExecutablePath): { launcher: string | null; ready: boolean } {
   const launcher = process.env.KAIZEN_CRON_SCHEDULED_LAUNCHER;
   let resolvedLauncher: string | undefined;
   let trusted = false;
@@ -172,12 +229,26 @@ function requiredScheduledLauncher(trust = isTrustedExecutablePath): string {
       trusted = false;
     }
   }
-  if (!trusted) {
+  return { launcher: resolvedLauncher ?? launcher ?? null, ready: trusted };
+}
+
+async function installOperatorLauncher(kaizenHome: string): Promise<void> {
+  const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'kaizen-runtime.sh');
+  const destination = path.join(kaizenHome, 'bin', 'kaizen');
+  const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.copyFile(source, temporary);
+    await fs.chmod(temporary, 0o755);
+    await fs.rename(temporary, destination);
+    await fs.access(destination, fsSync.constants.X_OK);
+  } catch (error) {
     throw new ConfigError(
-      'Managed scheduling requires KAIZEN_CRON_SCHEDULED_LAUNCHER to name an absolute, immutable operator-managed run-scheduled.sh or kaizen-scheduled-launcher.'
+      `Cannot provision the Kaizen operator launcher at ${destination}; scheduler jobs were not changed. ${error instanceof Error ? error.message : String(error)}`
     );
+  } finally {
+    await fs.rm(temporary, { force: true });
   }
-  return resolvedLauncher!;
 }
 
 async function removeLaunchdPlists(slug: string, runCommand: CommandRunner): Promise<string[]> {

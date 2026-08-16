@@ -74,8 +74,9 @@ flowchart TB
 Most commands accept `--project <slug>` and `--json`. `run`, `fix`, and `improve` accept `--agent claude|codex` to override the repository default for the current run.
 
 Scheduler synchronization installs a stable operator launcher at
-`$KAIZEN_HOME/bin/kaizen` and a scheduled wrapper at
-`$KAIZEN_HOME/bin/run-scheduled.sh`. Use the stable launcher for `doctor`, `fleet`,
+`$KAIZEN_HOME/bin/kaizen` when the configured immutable scheduled launcher is
+`run-scheduled.sh`. It does not create or replace the operator-managed scheduled
+wrapper. Use the stable launcher for `doctor`, `fleet`,
 monitor checks, and other operator commands; add `$KAIZEN_HOME/bin` before global
 npm locations on `PATH` if the short `kaizen` command is required. Both operator
 and scheduled commands refresh a dedicated runtime clone under

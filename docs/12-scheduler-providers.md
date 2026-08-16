@@ -208,7 +208,7 @@ interface SchedulerProvider {
 現行の macOS 実装を adapter 化する。
 
 - job ごとに `~/Library/LaunchAgents/com.kaizen-loop.<slug>.<job-id>.plist` を管理する
-- operator は [macOS publication broker](./16-macos-publication-broker.md) がインストールする root-owned `kaizen-scheduled-launcher` を `KAIZEN_CRON_SCHEDULED_LAUNCHER` で指定する。`scheduler sync` は launcher を作成・更新せず、信頼条件を満たさないパスや symlink を fail closed で拒否する。LaunchDaemon は user launchd environment を受け取らず、固定された root-owned runtime を runtime user へ権限降下して起動し、その exact PID / audit token だけを publication broker に登録する
+- operator は [macOS publication broker](./16-macos-publication-broker.md) がインストールする root-owned `kaizen-scheduled-launcher` を `KAIZEN_CRON_SCHEDULED_LAUNCHER` で指定する。`scheduler sync` は launcher を作成・更新せず、信頼条件を満たさないパスや symlink を fail closed で拒否する。互換用の immutable `run-scheduled.sh` を指定した場合だけ、その wrapper が呼ぶ user-owned operator launcher を `$KAIZEN_HOME/bin/kaizen` に原子的に配置し、配置できなければ job を変更する前に停止する。LaunchDaemon は user launchd environment を受け取らず、固定された root-owned runtime を runtime user へ権限降下して起動し、その exact PID / audit token だけを publication broker に登録する
 - scheduled run は Issue の list / selection / claim より前に、登録済み supervisor と同じ peer 認証を使う broker preflight を実行する。HTTPS publication に credential-only token も authenticated broker もない場合は intake side effect を発生させず停止する
 - scheduler を同期するプロセスの `PATH` には、root 所有かつ immutable な実体へ解決される `gh` を含める。通常の親ディレクトリは group / other から書込不能でなければならない。root 所有の sticky store は、配下の実体とディレクトリが root 所有かつ書込不能な場合に限り受理するため、multi-user Nix の home profile symlink は実体解決後に利用できる。user-owned Homebrew 実体は受理しない。`scheduler sync` はこの条件を job 置換前に検査し、満たさない場合は既存 plist を変更せず remediation 付きで停止する
 - `schedule.type: daily` / `times` / `weekly` は `StartCalendarInterval`

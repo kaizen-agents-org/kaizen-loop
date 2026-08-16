@@ -22,7 +22,7 @@ import { fleetHasFailures, refreshFleet, syncFleet } from './commands/fleet.js';
 import { runSandboxSmoke } from './commands/smoke.js';
 import { encodeProviderResult, prepareActionsFix, publishActionsFix, verifyActionsFix } from './commands/actions.js';
 import { executeRun } from './commands/run.js';
-import { disableScheduler, enableScheduler, schedulerJobs, schedulerKaizenHome } from './scheduler/scheduler.js';
+import { disableScheduler, enableScheduler, schedulerJobs, schedulerKaizenHome, schedulerLauncherStatus } from './scheduler/scheduler.js';
 const program = new Command();
 const runCommand = processCommandRunner(defaultRunCommand);
 program
@@ -170,12 +170,14 @@ scheduler
     const globals = program.opts();
     const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
     const config = await loadConfig(resolved.project.localPath);
+    const jobs = schedulerJobs(config);
     print({
         slug: resolved.slug,
         provider: config.scheduler.provider ?? defaultSchedulerProvider(),
         kaizenHome: schedulerKaizenHome(),
         enabled: resolved.project.enabled,
-        jobs: schedulerJobs(config)
+        jobs,
+        launcher: await schedulerLauncherStatus({ required: jobs.length > 0 })
     }, Boolean(options.json ?? globals.json));
 });
 scheduler
