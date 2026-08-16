@@ -24,6 +24,16 @@ private struct ScheduledRunRequest: Encodable {
     let capability: String
 }
 
+private let usage = "usage: kaizen-scheduled-launcher <node> <project> <job> | dispatch"
+
+private func launcherError(_ message: String, code: Int = 1) -> NSError {
+    NSError(
+        domain: "KaizenScheduledLauncher",
+        code: code,
+        userInfo: [NSLocalizedDescriptionKey: message]
+    )
+}
+
 private func configPath() -> String {
     if let value = ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"],
        value.hasPrefix("/private/tmp/kaizen-broker-test-") || value.hasPrefix("/tmp/kaizen-broker-test-") { return value }
@@ -32,7 +42,7 @@ private func configPath() -> String {
 
 private func connectUnixSocket(_ socketPath: String) throws -> Int32 {
     guard socketPath.utf8.count < MemoryLayout<sockaddr_un>.size - 2 else {
-        throw NSError(domain: "KaizenScheduledLauncher", code: 1)
+        throw launcherError("scheduler socket path is too long: \(socketPath)")
     }
     let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
     guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
@@ -49,7 +59,11 @@ private func connectUnixSocket(_ socketPath: String) throws -> Int32 {
     guard result == 0 else {
         let code = errno
         close(descriptor)
-        throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        throw NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(code),
+            userInfo: [NSLocalizedDescriptionKey: "could not connect to scheduler socket \(socketPath): \(String(cString: strerror(code)))"]
+        )
     }
     return descriptor
 }
@@ -72,8 +86,12 @@ private func exchange(_ descriptor: Int32, request: Data) throws -> Bool {
         if count == 0 { break }
         response.append(buffer, count: count)
     }
-    let object = try JSONSerialization.jsonObject(with: response) as? [String: Any]
-    return object?.count == 1 && object?["ok"] as? Bool == true
+    guard let object = try JSONSerialization.jsonObject(with: response) as? [String: Any] else {
+        throw launcherError("scheduler returned an invalid response")
+    }
+    if object["ok"] as? Bool == true { return true }
+    let reason = object["error"] as? String ?? "scheduler rejected the scheduled run"
+    throw launcherError(reason)
 }
 
 private func sendScheduledRun(_ config: LauncherConfig, project: String, job: String) throws -> Bool {
@@ -94,12 +112,26 @@ private func sendScheduledRun(_ config: LauncherConfig, project: String, job: St
 }
 
 do {
-    let config = try PropertyListDecoder().decode(LauncherConfig.self, from: Data(contentsOf: URL(fileURLWithPath: configPath())))
+    if CommandLine.arguments.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) {
+        print(usage)
+        exit(0)
+    }
     let isTest = ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"] != nil
-    if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "dispatch" && geteuid() == 0 {
+    let isDispatch = CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "dispatch" && geteuid() == 0
+    guard isDispatch || (isTest && CommandLine.arguments.count == 4) else {
+        throw launcherError("expected a project and job, or the root-only dispatch command; \(usage)", code: 5)
+    }
+    let path = configPath()
+    let config: LauncherConfig
+    do {
+        config = try PropertyListDecoder().decode(LauncherConfig.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+    } catch {
+        throw launcherError("could not load broker configuration at \(path): \(error.localizedDescription)")
+    }
+    if isDispatch {
         let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
         let due = config.scheduledJobs.filter { $0.hour == now.hour && $0.minute == now.minute }
-        guard !due.isEmpty else { throw NSError(domain: "KaizenScheduledLauncher", code: 3) }
+        guard !due.isEmpty else { throw launcherError("no scheduled jobs are due at the current time", code: 3) }
         for entry in due {
             guard try sendScheduledRun(config, project: entry.project, job: entry.job) else {
                 throw NSError(domain: "KaizenScheduledLauncher", code: 4)
@@ -107,11 +139,8 @@ do {
         }
         exit(0)
     }
-    guard isTest, CommandLine.arguments.count == 4 else {
-        throw NSError(domain: "KaizenScheduledLauncher", code: 5)
-    }
     exit(try sendScheduledRun(config, project: CommandLine.arguments[2], job: CommandLine.arguments[3]) ? 0 : 1)
 } catch {
-    FileHandle.standardError.write(Data("Kaizen scheduled publication launcher failed.\n".utf8))
+    FileHandle.standardError.write(Data("Kaizen scheduled publication launcher failed: \(error.localizedDescription)\n".utf8))
     exit(1)
 }
