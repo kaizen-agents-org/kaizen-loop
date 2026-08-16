@@ -10,11 +10,17 @@ Run the complete repository checks before creating a release tag:
 ```sh
 set -euo pipefail
 test -z "$(git status --porcelain)"
+npm run audit:production
 npm test
 npm run typecheck
 npm run check:dist
 npm run build
 ```
+
+The production dependency audit is a fail-closed release gate at `high` severity.
+Resolve reported advisories or document and review an explicit exception before
+cutting a tag; do not rely on a prior CI run because the advisory database can
+change after the commit was tested.
 
 `dist/` is committed and is the CLI shipped by the tag, so `check:dist` is a
 release gate rather than optional generated-file cleanup. The clean-tree check

@@ -22,6 +22,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
     "check:dist": "node scripts/check-dist.js",
+    "audit:production": "npm audit --omit=dev --audit-level=high",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "dev": "tsx src/cli.ts",
@@ -35,7 +36,7 @@
   },
   "dependencies": {
     "commander": "^14.0.2",
-    "minimatch": "^10.1.1",
+    "minimatch": "^10.2.6",
     "yaml": "^2.8.1",
     "zod": "^4.1.13"
   },
