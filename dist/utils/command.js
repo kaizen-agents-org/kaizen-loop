@@ -31,7 +31,8 @@ const SUPERVISOR_CREDENTIAL_ENV = new Set([
     ...GITHUB_CLI_AUTH_ENV_ALLOWLIST,
     ...GIT_CLI_AUTH_ENV_ALLOWLIST,
     'KAIZEN_GITHUB_TOKEN_SOCKET',
-    'KAIZEN_GITHUB_BROKER_CAPABILITY'
+    'KAIZEN_GITHUB_BROKER_CAPABILITY',
+    'KAIZEN_GITHUB_TOKEN_FD'
 ]);
 const TRUSTED_COMMAND_RUNNER = Symbol('trustedCommandRunner');
 export class TrustedGitHubCliUnavailableError extends Error {
@@ -207,6 +208,9 @@ function initialTrustedExecutables() {
     return {
         git: INITIAL_GIT_EXECUTABLE,
         githubCli: INITIAL_GITHUB_CLI_EXECUTABLE,
+        githubCliRunner: INITIAL_GITHUB_TOKEN_SOCKET && INITIAL_GITHUB_CLI_EXECUTABLE
+            ? (args, options = {}) => requestBrokerGitHubCli(INITIAL_GITHUB_TOKEN_SOCKET, INITIAL_GITHUB_BROKER_CAPABILITY, INITIAL_GITHUB_CLI_EXECUTABLE, args, options, Math.min(INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS, options.timeoutMs ?? INITIAL_GITHUB_PUBLICATION_TIMEOUT_MS))
+            : undefined,
         ssh: INITIAL_SSH_EXECUTABLE,
         githubToken: INITIAL_GITHUB_TOKEN,
         githubPublisher: INITIAL_GITHUB_TOKEN_SOCKET
@@ -295,6 +299,20 @@ export function requireTrustedGitHubCliExecutable(command) {
     if (!executable)
         throw new TrustedGitHubCliUnavailableError();
     return executable;
+}
+export function runTrustedGitHubCli(command, args, options = {}) {
+    const trusted = command[TRUSTED_COMMAND_RUNNER];
+    const executable = trusted?.githubCli;
+    if (!executable)
+        throw new TrustedGitHubCliUnavailableError();
+    if (trusted.githubCliRunner) {
+        const { env: _ignoredEnvironment, ...brokerOptions } = options;
+        return trusted.githubCliRunner(args, brokerOptions);
+    }
+    return command(executable, args, {
+        ...options,
+        env: trustedGithubCliEnv(options.env ?? process.env, executable, trusted.git)
+    });
 }
 function trustedGitHubCliRemediation() {
     return 'Trusted GitHub CLI executable was not found before untrusted work. Install gh in an immutable root-owned path reachable on PATH before starting Kaizen, then reinstall managed scheduler jobs.';
@@ -399,6 +417,46 @@ function resolveBrokerCapability(value) {
 export function requestGithubPublication(socketPath, capability, request, timeoutMs) {
     return requestBroker(socketPath, { operation: 'git-push', capability, ...request }, timeoutMs);
 }
+export function requestBrokerGitHubCli(socketPath, capability, executable, args, options, timeoutMs) {
+    const started = Date.now();
+    const maxOutputBytes = options.maxOutputBytes ?? 16 * 1024 * 1024;
+    if (!options.cwd || !path.isAbsolute(options.cwd)) {
+        throw new Error('Brokered GitHub CLI execution requires an absolute working directory.');
+    }
+    if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 16 * 1024 * 1024) {
+        throw new Error('Brokered GitHub CLI maxOutputBytes must be between 1 and 16777216.');
+    }
+    if (args.length === 0 || args.length > 256 || args.some((arg) => Buffer.byteLength(arg) > 262_144 || arg.includes('\0')) ||
+        args.reduce((total, arg) => total + Buffer.byteLength(arg), 0) > 524_288 ||
+        Buffer.byteLength(options.input ?? '') > 524_288) {
+        throw new Error('Brokered GitHub CLI arguments or input exceed the request bounds.');
+    }
+    return requestBrokerCommand(socketPath, {
+        operation: 'github-cli',
+        capability,
+        args,
+        cwd: options.cwd,
+        input: options.input ?? '',
+        timeoutMs,
+        maxOutputBytes
+    }, timeoutMs, maxOutputBytes).then((response) => {
+        const result = {
+            command: executable,
+            args,
+            cwd: options.cwd,
+            exitCode: response.exitCode,
+            stdout: response.stdout,
+            stderr: response.stderr,
+            durationMs: Date.now() - started
+        };
+        if (options.rejectOnNonZero !== false && result.exitCode !== 0) {
+            const error = new Error(formatCommandFailure(result));
+            Object.assign(error, { result });
+            throw error;
+        }
+        return result;
+    });
+}
 function requestGithubPublicationPreflight(socketPath, capability, request, timeoutMs) {
     return requestBroker(socketPath, { operation: 'preflight', capability, ...request }, timeoutMs);
 }
@@ -502,6 +560,89 @@ function requestBroker(socketPath, request, timeoutMs) {
             resolve();
         });
     });
+}
+function requestBrokerCommand(socketPath, request, timeoutMs, maxOutputBytes) {
+    installShutdownHooks();
+    throwIfShutdownRequested();
+    return new Promise((resolve, reject) => {
+        const socket = net.createConnection({ path: socketPath, allowHalfOpen: true });
+        activePublicationSockets.add(socket);
+        let output = '';
+        let settled = false;
+        let absoluteTimeout;
+        const responseLimit = maxOutputBytes * 2 + 8_192;
+        const fail = (detail) => {
+            if (settled)
+                return;
+            settled = true;
+            if (absoluteTimeout)
+                clearTimeout(absoluteTimeout);
+            activePublicationSockets.delete(socket);
+            socket.destroy();
+            reject(new Error(`GitHub credential broker failed to run GitHub CLI: ${detail}`));
+        };
+        absoluteTimeout = setTimeout(() => fail('request timed out'), timeoutMs);
+        absoluteTimeout.unref();
+        socket.setEncoding('utf8');
+        socket.on('connect', () => socket.write(`${JSON.stringify({ version: 1, ...request })}\n`));
+        socket.on('data', (chunk) => {
+            output += chunk;
+            if (Buffer.byteLength(output) > responseLimit)
+                fail('response exceeded the configured output limit');
+        });
+        socket.on('error', (error) => fail(error.code === 'ENOENT' ? 'the broker socket does not exist' : `socket error ${error.code ?? 'unknown'}`));
+        socket.on('close', () => fail('the broker closed the connection without responding'));
+        socket.on('end', () => {
+            if (settled)
+                return;
+            let parsed;
+            try {
+                parsed = JSON.parse(output.trim());
+            }
+            catch {
+                fail('the broker sent a response that is not JSON');
+                return;
+            }
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                fail('the broker sent a response that is not a JSON object');
+                return;
+            }
+            const response = parsed;
+            if (response.ok !== true) {
+                const code = typeof response.error === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(response.error)
+                    ? response.error
+                    : 'unspecified-reason';
+                fail(`the broker refused the request: ${code}`);
+                return;
+            }
+            if (!Number.isSafeInteger(response.exitCode) || response.exitCode < 0 ||
+                response.exitCode > 255 || typeof response.stdoutBase64 !== 'string' ||
+                typeof response.stderrBase64 !== 'string' ||
+                !isCanonicalBase64(response.stdoutBase64) || !isCanonicalBase64(response.stderrBase64)) {
+                fail('the broker sent a malformed command result');
+                return;
+            }
+            const stdout = Buffer.from(response.stdoutBase64, 'base64').toString('utf8');
+            const stderr = Buffer.from(response.stderrBase64, 'base64').toString('utf8');
+            if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > maxOutputBytes) {
+                fail('the broker sent a malformed command result');
+                return;
+            }
+            settled = true;
+            if (absoluteTimeout)
+                clearTimeout(absoluteTimeout);
+            activePublicationSockets.delete(socket);
+            socket.destroy();
+            resolve({
+                exitCode: response.exitCode,
+                stdout,
+                stderr
+            });
+        });
+    });
+}
+function isCanonicalBase64(value) {
+    return value.length % 4 === 0 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
 }
 function publicationTimeoutMs(value) {
     if (!value)
@@ -656,9 +797,16 @@ export function withRunDeadline(runCommand, deadlineAt) {
     if (trustedExecutables) {
         const githubPublisher = trustedExecutables.githubPublisher;
         const githubPublicationPreflight = trustedExecutables.githubPublicationPreflight;
+        const githubCliRunner = trustedExecutables.githubCliRunner;
         Object.defineProperty(deadlineCommand, TRUSTED_COMMAND_RUNNER, {
             value: Object.freeze({
                 ...trustedExecutables,
+                githubCliRunner: githubCliRunner
+                    ? (args, options = {}) => githubCliRunner(args, {
+                        ...options,
+                        timeoutMs: timeoutWithinDeadline(options.timeoutMs, deadlineAt)
+                    })
+                    : undefined,
                 githubPublisher: githubPublisher
                     ? (request, timeoutMs) => githubPublisher(request, timeoutWithinDeadline(timeoutMs, deadlineAt))
                     : undefined,

@@ -1,11 +1,17 @@
 # macOS publication broker
 
 Scheduled HTTPS publication uses a root LaunchDaemon so a GitHub token never enters
-the Kaizen supervisor, builder, verifier, or another process running as the scheduler
-user. The installed scheduler launcher asks the daemon to start one configured Kaizen
-supervisor. The daemon records the launcher's PID and one-run capability, waits for its
-readiness handshake, and then binds the post-`exec` Node process's macOS audit token on
-the first preflight. Publication requests must come from that exact process identity
+the environment of the Kaizen supervisor, builder, verifier, or another process running
+as the scheduler user. Authenticated GitHub CLI operations are sent over the registered
+broker connection. The broker runs one fixed, root-owned `gh` executable from `/var/empty`,
+with a fixed empty configuration directory and the root-only token. It returns bounded
+stdout, stderr, and exit status; neither the token nor an authenticated `gh` environment
+crosses into the runtime user process.
+The installed scheduler launcher asks the
+daemon to start one configured Kaizen supervisor. The daemon records the launcher's PID
+and one-run capability, waits for its readiness handshake, and then binds the post-`exec`
+Node process's macOS audit token on the first preflight. Publication requests must come
+from that exact process identity
 and carry the same capability. A child, sibling, stale PID, or reused PID does not
 match the registered audit identity. Supervisor-start requests additionally require
 the configured immutable launcher executable to be a direct child of macOS launchd;
@@ -46,6 +52,7 @@ sudo scripts/install-macos-publication-broker.sh \
   --repository kaizen-agents-org/kaizen-loop \
   --scheduled-job kaizen-agents-org-kaizen-loop/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
+  --github-cli /usr/local/libexec/kaizen-gh/gh \
   --node "$(command -v node)"
 ```
 
@@ -53,7 +60,9 @@ The installer compiles and installs three root-owned executables, an immutable c
 the built Kaizen runtime, a root-owned mode-`0644` broker configuration containing no
 token value, and
 `/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist`. It refuses an
-unmarked existing installation and validates the Node, npm, and root-only token ownership chain.
+unmarked existing installation and validates the Node, npm, GitHub CLI, and root-only
+token ownership chains. `--github-cli` must identify an immutable, root-owned executable;
+the runtime user's interactive `gh` installation or keychain session is not used.
 Add one `--repository owner/name` for every repository the broker may publish; the
 daemon maps these names to canonical `https://github.com/owner/name.git` URLs and never
 treats a client URL as authority. Add each authorized scheduler project/job pair with
@@ -65,8 +74,10 @@ The installer creates `org.kaizen-agents.scheduled-publication` as a system
 LaunchDaemon with the registered calendar times. Do not install duplicate user
 LaunchAgents for these jobs. The root dispatcher starts the fixed root-owned runtime
 with the registered `PATH` and publication timeout, then injects the publication socket
-and a one-run, non-credential capability. Kaizen captures and removes the capability at
-startup; its normal untrusted child environment allowlist contains neither value.
+and a one-run, non-credential capability. Authenticated GitHub CLI reads are executed by
+the broker from `/var/empty` for the repository bound to that registered project. The
+runtime process and its untrusted children receive neither the credential nor a
+credential-bearing process environment.
 
 ## Broker validation
 
@@ -84,6 +95,10 @@ Before authenticated push, the broker:
 5. runs root Git with system/global config, redirects, and hooks disabled, using a
    credential helper that reads the token from the root-only file; and
 6. replies with only `{"ok":true}` or `{"ok":false}`.
+
+For GitHub metadata and pull-request operations, the broker authenticates the same exact
+registered supervisor, runs only the configured root-owned `gh` executable from
+`/var/empty`, bounds request and output sizes, and returns its output and exit status.
 
 Publication rejects a ref that contains Git LFS pointer files, including a ref whose
 candidate count exceeds the inspection bound. The separate trusted credential path
@@ -128,8 +143,10 @@ sudo rm -R /var/db/kaizen-loop/publication
 
 `test/macos-publication-broker.test.ts` compiles and exercises the native broker on a
 healthy macOS Swift toolchain. It proves that the broker-spawned supervisor passes
-preflight, its same-UID Node child is rejected, publication reaches the configured
-remote, and launcher disconnect terminates the supervisor process group. The regular
+preflight, its same-UID Node child cannot invoke authenticated GitHub CLI work, the
+runtime environment has no token, brokered `gh` receives the credential only under the
+root identity, publication reaches the configured remote, and launcher disconnect
+terminates the supervisor process group. The regular
 cross-platform suite may skip these native cases, but the dedicated
 `native-publication-broker` macOS CI job sets `KAIZEN_REQUIRE_NATIVE_BROKER_TESTS=1`,
 so a missing or broken Swift/Foundation toolchain fails that job instead of silently

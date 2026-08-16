@@ -52,6 +52,7 @@ private func dropPrivileges(_ config: SupervisorConfig) -> Never {
             "USER=\(config.runtimeUser)",
             "LOGNAME=\(config.runtimeUser)",
             "PATH=\(toolPath)",
+            "GH_CONFIG_DIR=/var/empty",
             "KAIZEN_HOME=\(config.runtimeHome)/.kaizen",
             "KAIZEN_GITHUB_TOKEN_SOCKET=\(config.publicationSocketPath)",
             "KAIZEN_GITHUB_BROKER_CAPABILITY=\(capability)",

@@ -1,21 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { buildUntrustedEnv, githubCliExecutable, publicationGitExecutable, trustedGithubCliEnv } from '../utils/command.js';
+import { buildUntrustedEnv, runTrustedGitHubCli } from '../utils/command.js';
 import { ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import { GitClient } from '../workspace/git.js';
 import { loadImplementationState, saveImplementationState } from './implementationState.js';
 import { isSyncPullRequest } from './wipLimit.js';
 export const MANAGED_PR_GUARDIAN_MARKER = '<!-- kaizen-pr-guardian:managed -->';
-function githubCliEnv(command) {
-    return trustedGithubCliEnv(process.env, githubCliExecutable(command), publicationGitExecutable(command));
-}
 function runGitHubCli(command, args, options = {}) {
-    const executable = githubCliExecutable(command);
-    if (!executable)
-        throw new Error('Could not resolve a trusted GitHub CLI executable.');
-    return command(executable, args, { ...options, env: githubCliEnv(command) });
+    return runTrustedGitHubCli(command, args, options);
 }
 export function guardianJobsDir(stateDir) {
     return path.join(stateDir, 'guardian', 'jobs');
@@ -634,7 +628,6 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -658,7 +651,6 @@ async function listCheckAnnotations(runCommand, req, headRefOid) {
                 '--slurp'
             ], {
                 cwd: req.workspaceDir,
-                env: githubCliEnv(runCommand),
                 timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
                 rejectOnNonZero: false
             });
@@ -690,7 +682,6 @@ async function inspectPullRequestTerminalState(runCommand, req) {
         'state,baseRefName,closingIssuesReferences'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -711,7 +702,6 @@ async function inspectPullRequest(runCommand, req) {
             'state,isDraft,mergeStateStatus,mergeable,reviewDecision,reviewRequests,headRefOid,statusCheckRollup'
         ], {
             cwd: req.workspaceDir,
-            env: githubCliEnv(runCommand),
             timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
             rejectOnNonZero: false
         }),
@@ -814,7 +804,6 @@ async function listRequiredChecks(runCommand, req) {
         'name,state,bucket,workflow'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -839,7 +828,6 @@ async function listPullRequestReviews(runCommand, req) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -859,7 +847,6 @@ async function listPullRequestReviewComments(runCommand, req) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });
@@ -889,7 +876,6 @@ async function listPullRequestIssueComments(runCommand, req) {
         '--slurp'
     ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
     });

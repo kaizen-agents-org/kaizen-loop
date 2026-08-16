@@ -8,7 +8,7 @@ import { VerifierAgentAdapter } from '../agents/verifier.js';
 import { assertVerifierRuntimeFresh } from '../agents/verifierFreshness.js';
 import { loadConfig } from '../config/config.js';
 import { GitHubClient } from '../github/client.js';
-import { githubCliExecutable, publicationGitExecutable, runCommand, trustedGithubCliEnv } from '../utils/command.js';
+import { runCommand, runTrustedGitHubCli } from '../utils/command.js';
 import { slugify } from '../utils/slug.js';
 import { GitClient } from '../workspace/git.js';
 import { WorkspaceManager } from '../workspace/manager.js';
@@ -236,13 +236,7 @@ async function loadActionsContext(cwd, issueNumber, command) {
         throw new Error('GitHub Actions execution requires safety.operationMode: external.');
     if (config.policy.mode !== 'pr-only')
         throw new Error('GitHub Actions execution requires policy.mode: pr-only.');
-    const gh = githubCliExecutable(command);
-    if (!gh)
-        throw new Error('Could not resolve a trusted GitHub CLI executable.');
-    const repoResult = await command(gh, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], {
-        cwd,
-        env: trustedGithubCliEnv(process.env, gh, publicationGitExecutable(command))
-    });
+    const repoResult = await runTrustedGitHubCli(command, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], { cwd });
     const repo = repoResult.stdout.trim();
     if (!/^[^/]+\/[^/]+$/.test(repo))
         throw new Error(`Could not resolve GitHub repository: ${repo}`);

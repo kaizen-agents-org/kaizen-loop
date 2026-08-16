@@ -1,8 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
-  trustedGithubCliEnv,
-  requireTrustedGitHubCliExecutable,
-  publicationGitExecutable as resolvePublicationGitExecutable,
+  runTrustedGitHubCli,
   type CommandRunner
 } from '../utils/command.js';
 import {
@@ -534,15 +532,11 @@ export class GitHubClient {
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
-    const githubCliExecutable = requireTrustedGitHubCliExecutable(this.run);
     let lastError: unknown;
     const attempts = options.noRetry ? 1 : 3;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        return await this.run(githubCliExecutable, args, {
-          cwd: this.cwd,
-          env: trustedGithubCliEnv(process.env, githubCliExecutable, resolvePublicationGitExecutable(this.run))
-        });
+        return await runTrustedGitHubCli(this.run, args, { cwd: this.cwd });
       } catch (error) {
         const message = String(error);
         if (options.ignoreAlreadyExists && /already exists/i.test(message)) return emptyResult(args, this.cwd);

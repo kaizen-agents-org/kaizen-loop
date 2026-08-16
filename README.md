@@ -138,7 +138,9 @@ expected commit SHA, and optional force-with-lease value. The broker imports the
 repository as the unprivileged runtime user, then takes ownership, removes untrusted
 Git configuration, revalidates the repository and SHA, performs the authenticated Git
 push under its separate root identity, and returns only a boolean acknowledgement.
-The token never enters a Kaizen or same-UID Git child environment. Publication
+Authenticated GitHub CLI operations also run inside the root broker, from `/var/empty`,
+using a fixed administrator-owned `gh`; only bounded output and exit status return to
+Kaizen. The token never enters a Kaizen or same-UID child environment. Publication
 uses a 30-minute absolute broker publication deadline by default; pass
 `--publication-timeout-ms` to the installer to set 10000–3600000 ms.
 The broker treats socket disconnect as cancellation and terminates its import/push
@@ -156,17 +158,17 @@ authorized the registered job.
 ```sh
 sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop
 sudo sh -c 'umask 077; /bin/cat > /Library/Application\ Support/KaizenLoop/github-token'
+# Install a standalone administrator-owned gh outside the broker-managed runtime root.
+sudo install -d -o root -g wheel -m 0755 /usr/local/libexec/kaizen-gh
+sudo install -o root -g wheel -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-gh/gh
 sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
   --token-file /Library/Application\ Support/KaizenLoop/github-token \
   --repository owner/repo \
   --scheduled-job owner-repo/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
+  --github-cli /usr/local/libexec/kaizen-gh/gh \
   --node "$(command -v node)"
-# Use an immutable Nix-store gh, or install a standalone administrator-owned copy
-# outside the broker-managed installation root.
-sudo install -d -o root -g wheel -m 0755 /usr/local/libexec/kaizen-gh
-sudo install -o root -g wheel -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-gh/gh
 export PATH=/usr/local/libexec/kaizen-gh:$PATH
 kaizen init --agent codex --schedule 02:00
 export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"
