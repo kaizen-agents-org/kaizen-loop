@@ -410,7 +410,7 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
     return true
 }
 
-private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, request: [String: Any]) throws -> Bool {
+private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, request: [String: Any]) throws -> String? {
     guard exactKeys(request, ["version", "operation", "project", "job", "capability"]),
           request["version"] as? Int == 1,
           request["operation"] as? String == "scheduled-run",
@@ -419,9 +419,11 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
           let capability = request["capability"] as? String,
           capability.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
           project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil,
-          job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return false }
-    guard let registeredJob = config.scheduledJobs.first(where: { $0.project == project && $0.job == job }) else { return false }
-    guard try authenticateScheduledTrigger(descriptor, config: config) else { return false }
+          job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil else { return "invalid scheduled run request" }
+    guard let registeredJob = config.scheduledJobs.first(where: { $0.project == project && $0.job == job }) else {
+        return "scheduled job is not configured: \(project)/\(job)"
+    }
+    guard try authenticateScheduledTrigger(descriptor, config: config) else { return "scheduled launcher authentication failed" }
 
     let process = try spawnProcess(
         executable: config.supervisorLauncherExecutable,
@@ -443,7 +445,6 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
     }
     return nil
 }
-
 private func authenticateSupervisor(_ descriptor: Int32, config: BrokerConfig, capability: String) throws -> Bool {
     let (uid, _, pid) = try peerCredentials(descriptor)
     guard uid == config.runtimeUid else { return false }
