@@ -10,6 +10,7 @@ Run the complete repository checks before creating a release tag:
 ```sh
 set -euo pipefail
 test -z "$(git status --porcelain)"
+npm run audit:production
 npm test
 npm run typecheck
 npm run check:dist
