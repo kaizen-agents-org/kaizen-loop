@@ -59,9 +59,15 @@ if [ -z "$node_executable" ]; then node_executable=$(command -v node || true); f
 case "$node_executable" in /*) ;; *) echo "--node must resolve to an absolute executable." >&2; exit 2 ;; esac
 node_executable=$(realpath "$node_executable")
 [ -x "$node_executable" ] || { echo "The configured Node executable is not executable." >&2; exit 1; }
-if [ -z "$github_cli_executable" ]; then github_cli_executable=$(command -v gh || true); fi
-case "$github_cli_executable" in /*) ;; *) echo "--github-cli must resolve to an absolute executable." >&2; exit 2 ;; esac
-github_cli_executable=$(realpath "$github_cli_executable")
+if [ -z "$github_cli_executable" ]; then
+  github_cli_executable=$(command -v gh || true)
+  [ -n "$github_cli_executable" ] || { echo "GitHub CLI was not found on PATH; install gh or pass --github-cli." >&2; exit 1; }
+fi
+case "$github_cli_executable" in /*) ;; *) echo "--github-cli must name an absolute executable." >&2; exit 2 ;; esac
+github_cli_executable=$(realpath "$github_cli_executable" 2>/dev/null) || {
+  echo "The configured --github-cli path does not exist or cannot be resolved." >&2
+  exit 1
+}
 [ -x "$github_cli_executable" ] || { echo "The configured GitHub CLI executable is not executable." >&2; exit 1; }
 npm_executable=$(command -v npm || true)
 case "$npm_executable" in /*) ;; *) echo "A trusted absolute npm executable is required." >&2; exit 1 ;; esac

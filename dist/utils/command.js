@@ -300,16 +300,16 @@ export function requireTrustedGitHubCliExecutable(command) {
         throw new TrustedGitHubCliUnavailableError();
     return executable;
 }
-export function runTrustedGitHubCli(command, args, options = {}) {
+export async function runTrustedGitHubCli(command, args, options = {}) {
     const trusted = command[TRUSTED_COMMAND_RUNNER];
     const executable = trusted?.githubCli;
     if (!executable)
         throw new TrustedGitHubCliUnavailableError();
     if (trusted.githubCliRunner) {
         const { env: _ignoredEnvironment, ...brokerOptions } = options;
-        return trusted.githubCliRunner(args, brokerOptions);
+        return await trusted.githubCliRunner(args, brokerOptions);
     }
-    return command(executable, args, {
+    return await command(executable, args, {
         ...options,
         env: trustedGithubCliEnv(options.env ?? process.env, executable, trusted.git)
     });
@@ -564,10 +564,15 @@ function requestBroker(socketPath, request, timeoutMs) {
 function requestBrokerCommand(socketPath, request, timeoutMs, maxOutputBytes) {
     installShutdownHooks();
     throwIfShutdownRequested();
+    const frame = `${JSON.stringify({ version: 1, ...request })}\n`;
+    if (Buffer.byteLength(frame) > 1_048_576) {
+        return Promise.reject(new Error('GitHub credential broker failed to run GitHub CLI: request exceeded the broker wire limit'));
+    }
     return new Promise((resolve, reject) => {
         const socket = net.createConnection({ path: socketPath, allowHalfOpen: true });
         activePublicationSockets.add(socket);
         let output = '';
+        let outputBytes = 0;
         let settled = false;
         let absoluteTimeout;
         const responseLimit = maxOutputBytes * 2 + 8_192;
@@ -584,10 +589,11 @@ function requestBrokerCommand(socketPath, request, timeoutMs, maxOutputBytes) {
         absoluteTimeout = setTimeout(() => fail('request timed out'), timeoutMs);
         absoluteTimeout.unref();
         socket.setEncoding('utf8');
-        socket.on('connect', () => socket.write(`${JSON.stringify({ version: 1, ...request })}\n`));
+        socket.on('connect', () => socket.write(frame));
         socket.on('data', (chunk) => {
             output += chunk;
-            if (Buffer.byteLength(output) > responseLimit)
+            outputBytes += Buffer.byteLength(chunk);
+            if (outputBytes > responseLimit)
                 fail('response exceeded the configured output limit');
         });
         socket.on('error', (error) => fail(error.code === 'ENOENT' ? 'the broker socket does not exist' : `socket error ${error.code ?? 'unknown'}`));

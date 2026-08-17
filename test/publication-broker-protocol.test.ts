@@ -193,17 +193,15 @@ describe('GitHub CLI broker wire contract', () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-github-cli-broker-'));
     directories.push(directory);
     const socketPath = path.join(directory, 'broker.sock');
-    let clientHalfClosedBeforeRequest = false;
-    let requestComplete = false;
+    let clientHalfClosedBeforeResponse = false;
     const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       let input = '';
       socket.setEncoding('utf8');
-      socket.on('end', () => { if (!requestComplete) clientHalfClosedBeforeRequest = true; });
+      socket.on('end', () => { clientHalfClosedBeforeResponse = true; });
       socket.on('data', (chunk) => {
         input += chunk;
         if (input.endsWith('\n')) {
-          requestComplete = true;
-          socket.end(`${JSON.stringify({ ok: true, exitCode: 0, stdoutBase64: '', stderrBase64: '' })}\n`);
+          setTimeout(() => socket.end(`${JSON.stringify({ ok: true, exitCode: 0, stdoutBase64: '', stderrBase64: '' })}\n`), 25);
         }
       });
     });
@@ -213,7 +211,7 @@ describe('GitHub CLI broker wire contract', () => {
     await expect(requestBrokerGitHubCli(
       socketPath, 'a'.repeat(64), '/trusted/bin/gh', ['api', 'user'], { cwd: '/workspace' }, 10_000
     )).resolves.toMatchObject({ exitCode: 0 });
-    expect(clientHalfClosedBeforeRequest).toBe(false);
+    expect(clientHalfClosedBeforeResponse).toBe(false);
   });
 
   it('returns a bounded command result and sends no credential', async () => {
@@ -275,5 +273,16 @@ describe('GitHub CLI broker wire contract', () => {
     await expect(requestBrokerGitHubCli(
       oversized, undefined, '/trusted/bin/gh', ['auth', 'status'], { cwd: '/workspace', maxOutputBytes: 1 }, 10_000
     )).rejects.toThrow(/output limit|malformed command result/);
+  });
+
+  it('rejects a client-valid request whose serialized frame exceeds the broker limit', async () => {
+    await expect(requestBrokerGitHubCli(
+      '/tmp/unused-broker.sock',
+      'c'.repeat(64),
+      '/trusted/bin/gh',
+      ['x'.repeat(262_144), 'y'.repeat(262_144)],
+      { cwd: '/workspace', input: 'z'.repeat(524_288) },
+      10_000
+    )).rejects.toThrow(/wire limit/);
   });
 });

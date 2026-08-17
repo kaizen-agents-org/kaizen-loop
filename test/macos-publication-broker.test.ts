@@ -188,6 +188,20 @@ const github = () => request({
     args: ['api', 'graphql', '-f', 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}', '-F', 'owner=o', '-F', 'name=r'],
     cwd: '/untrusted/workspace', input: '', timeoutMs: 10000, maxOutputBytes: 65536
   })).ok === true;
+  const ownerSearchAllowed = (await request({
+    operation: 'github-cli',
+    args: ['api', 'graphql', '-f', 'query=query($searchQuery:String!){search(query:$searchQuery,type:ISSUE,first:10){nodes{... on PullRequest{number}}}}', '-F', 'searchQuery=is:pr is:open owner:o'],
+    cwd: '/untrusted/workspace', input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok === true;
+  const extraGraphqlRootRefused = (await request({
+    operation: 'github-cli',
+    args: ['api', 'graphql', '-f', 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id} viewer{login}}', '-F', 'owner=o', '-F', 'name=r'],
+    cwd: '/untrusted/workspace', input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const localBodyFileRefused = (await request({
+    operation: 'github-cli', args: ['issue', 'create', '--body-file', '/etc/passwd'], cwd: '/untrusted/workspace',
+    input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
   const signaledResult = await request({
     operation: 'github-cli', args: ['api', 'user', '--jq', '__signal__'], cwd: '/untrusted/workspace',
     input: '', timeoutMs: 10000, maxOutputBytes: 65536
@@ -204,7 +218,7 @@ const github = () => request({
       expectedSha: ${JSON.stringify(expectedSha)}
     })).ok === true;
   }
-  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
+  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
   if (sleeping) return;
   process.exit(supervisor && child.status === 0 && (!process.argv.includes('publish') || published) ? 0 : 1);
 })().catch(() => process.exit(1));
@@ -285,6 +299,9 @@ const github = () => request({
       crossRepoGraphqlRefused: true,
       unsupportedCommandRefused: true,
       registeredGraphqlAllowed: true,
+      ownerSearchAllowed: true,
+      extraGraphqlRootRefused: true,
+      localBodyFileRefused: true,
       signaledExitCode: 143,
       githubEvidence: { token: 'test-token', repo: 'o/r', config: '/var/empty', cwd: '/private/var/empty' },
       ghConfigDir: '/var/empty',
@@ -312,6 +329,9 @@ const github = () => request({
       crossRepoGraphqlRefused: true,
       unsupportedCommandRefused: true,
       registeredGraphqlAllowed: true,
+      ownerSearchAllowed: true,
+      extraGraphqlRootRefused: true,
+      localBodyFileRefused: true,
       signaledExitCode: 143,
       githubEvidence: { token: 'test-token', repo: 'o/r', config: '/var/empty', cwd: '/private/var/empty' },
       ghConfigDir: '/var/empty',

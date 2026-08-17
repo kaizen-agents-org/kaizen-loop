@@ -418,6 +418,28 @@ private func trustedRootPath(_ candidate: String, regularFile: Bool = true, exac
     }
 }
 
+private func readTrustedToken(_ path: String) -> String? {
+    let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
+    guard descriptor >= 0 else { return nil }
+    defer { close(descriptor) }
+    var status = stat()
+    let expectedOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
+    guard fstat(descriptor, &status) == 0,
+          (status.st_mode & S_IFMT) == S_IFREG,
+          status.st_nlink == 1,
+          status.st_uid == expectedOwner,
+          status.st_mode & 0o777 == 0o600,
+          status.st_size > 0,
+          status.st_size <= 1_025 else { return nil }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    guard let data = try? handle.readToEnd(), data.count <= 1_025 else { return nil }
+    let contents = String(decoding: data, as: UTF8.self)
+    let token = contents.hasSuffix("\n") ? String(contents.dropLast()) : contents
+    guard !token.isEmpty, token.utf8.count <= 1_024,
+          !token.contains("\0"), !token.contains("\r"), !token.contains("\n") else { return nil }
+    return token
+}
+
 private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> Bool {
     let testRoot = testingConfigPath().map { ($0 as NSString).deletingLastPathComponent }
     let scheduledKeys = config.scheduledJobs.map { "\($0.project)/\($0.job)" }
@@ -442,8 +464,7 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
               repository.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil &&
               (url == "https://github.com/\(repository).git" || (testRoot.map { url.hasPrefix("file://\($0)/") } ?? false))
           }),
-          let tokenStatus = try? FileManager.default.attributesOfItem(atPath: config.tokenFile),
-          ((tokenStatus[.size] as? NSNumber)?.intValue ?? 0) > 0 else { return false }
+          readTrustedToken(config.tokenFile) != nil else { return false }
     return true
 }
 
@@ -585,6 +606,11 @@ private struct GitHubCliResult {
     let stderr: String
 }
 
+private enum GitHubCliOutcome {
+    case success(GitHubCliResult)
+    case failure(String)
+}
+
 private func argumentsUseOnlyExpectedValue(_ arguments: [String], names: Set<String>, expected: String) -> Bool {
     for (index, argument) in arguments.enumerated() {
         if names.contains(argument) {
@@ -614,10 +640,93 @@ private func apiEndpoint(_ arguments: [String]) -> String? {
     return nil
 }
 
+private func optionValues(_ arguments: [String], names: Set<String>) -> [String] {
+    var values: [String] = []
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if names.contains(argument), index + 1 < arguments.count {
+            values.append(arguments[index + 1])
+            index += 2
+            continue
+        }
+        for name in names where argument.hasPrefix("\(name)=") {
+            values.append(String(argument.dropFirst(name.count + 1)))
+        }
+        index += 1
+    }
+    return values
+}
+
+private func argumentsAvoidLocalFiles(_ arguments: [String]) -> Bool {
+    guard optionValues(arguments, names: ["--body-file", "--input"]).allSatisfy({ $0 == "-" }) else { return false }
+    return optionValues(arguments, names: ["-F", "--field"]).allSatisfy { field in
+        guard let separator = field.firstIndex(of: "=") else { return true }
+        let value = String(field[field.index(after: separator)...])
+        return !value.hasPrefix("@") || value == "@-"
+    }
+}
+
+private func graphqlRootField(_ queryField: String) -> String? {
+    let query = queryField.hasPrefix("query=") ? String(queryField.dropFirst(6)) : queryField
+    let characters = Array(query)
+    var braceDepth = 0, parenDepth = 0, index = 0
+    var inString = false, escaped = false, inComment = false, sawSelection = false
+    var roots: [String] = []
+    var expectRoot = false
+    while index < characters.count {
+        let character = characters[index]
+        if inComment {
+            if character == "\n" { inComment = false }
+            index += 1; continue
+        }
+        if inString {
+            if escaped { escaped = false }
+            else if character == "\\" { escaped = true }
+            else if character == "\"" { inString = false }
+            index += 1; continue
+        }
+        if character == "#" { inComment = true; index += 1; continue }
+        if character == "\"" { inString = true; index += 1; continue }
+        if character == "(" { parenDepth += 1; index += 1; continue }
+        if character == ")" { parenDepth -= 1; if parenDepth < 0 { return nil }; index += 1; continue }
+        if character == "{" {
+            braceDepth += 1
+            if braceDepth == 1 {
+                if sawSelection { return nil }
+                sawSelection = true; expectRoot = true
+            }
+            index += 1; continue
+        }
+        if character == "}" {
+            if braceDepth == 2 { expectRoot = true }
+            braceDepth -= 1
+            if braceDepth < 0 { return nil }
+            index += 1; continue
+        }
+        if braceDepth == 1 && parenDepth == 0 && expectRoot {
+            if character.isWhitespace || character == "," { index += 1; continue }
+            guard character.isLetter || character == "_" else { return nil }
+            let start = index
+            while index < characters.count && (characters[index].isLetter || characters[index].isNumber || characters[index] == "_") { index += 1 }
+            let root = String(characters[start..<index])
+            var lookahead = index
+            while lookahead < characters.count && characters[lookahead].isWhitespace { lookahead += 1 }
+            guard lookahead >= characters.count || characters[lookahead] != ":" else { return nil }
+            roots.append(root); expectRoot = false
+            continue
+        }
+        index += 1
+    }
+    guard braceDepth == 0, parenDepth == 0, !inString, roots.count == 1 else { return nil }
+    return roots[0]
+}
+
 private func githubArgumentsAllowed(_ arguments: [String], repository: String) -> Bool {
     guard let command = arguments.first else { return false }
     guard argumentsUseOnlyExpectedValue(arguments, names: ["-R", "--repo"], expected: repository),
-          argumentsUseOnlyExpectedValue(arguments, names: ["--hostname"], expected: "github.com") else { return false }
+          argumentsUseOnlyExpectedValue(arguments, names: ["--hostname"], expected: "github.com"),
+          argumentsAvoidLocalFiles(arguments) else { return false }
 
     let allowedSubcommands: [String: Set<String>] = [
         "auth": ["status"],
@@ -644,20 +753,27 @@ private func githubArgumentsAllowed(_ arguments: [String], repository: String) -
         guard let separator = repository.firstIndex(of: "/") else { return false }
         let owner = String(repository[..<separator])
         let name = String(repository[repository.index(after: separator)...])
-        let fields = arguments.enumerated().compactMap { index, argument -> String? in
-            guard ["-F", "--field", "-f", "--raw-field"].contains(argument), index + 1 < arguments.count else { return nil }
-            return arguments[index + 1]
-        }
+        let fields = optionValues(arguments, names: ["-F", "--field", "-f", "--raw-field"])
         let owners = fields.filter { $0.hasPrefix("owner=") }
         let names = fields.filter { $0.hasPrefix("name=") }
         let queries = fields.filter { $0.hasPrefix("query=") }
-        guard !owners.isEmpty, owners.allSatisfy({ $0 == "owner=\(owner)" }),
-              !names.isEmpty, names.allSatisfy({ $0 == "name=\(name)" }),
-              queries.count == 1, let query = queries.first else { return false }
-        let compactQuery = query.filter { !$0.isWhitespace }
-        return compactQuery.contains("repository(owner:$owner,name:$name)") &&
-            compactQuery.components(separatedBy: "repository(").count == 2 &&
-            !["search(", "organization(", "user(", "viewer{", "node(", "nodes("].contains(where: compactQuery.contains)
+        guard queries.count == 1, let query = queries.first, let root = graphqlRootField(query) else { return false }
+        if root == "repository" {
+            let compactQuery = query.filter { !$0.isWhitespace }
+            return !owners.isEmpty && owners.allSatisfy({ $0 == "owner=\(owner)" }) &&
+                !names.isEmpty && names.allSatisfy({ $0 == "name=\(name)" }) &&
+                compactQuery.contains("repository(owner:$owner,name:$name)")
+        }
+        if root == "search" {
+            guard owners.isEmpty, names.isEmpty else { return false }
+            let searchQueries = fields.filter { $0.hasPrefix("searchQuery=") }
+            guard searchQueries.count == 1, let searchQuery = searchQueries.first else { return false }
+            let value = String(searchQuery.dropFirst("searchQuery=".count))
+            let escapedOwner = NSRegularExpression.escapedPattern(for: owner)
+            return value.range(of: "^is:pr is:open owner:\(escapedOwner)$", options: .regularExpression) != nil ||
+                value.range(of: "^is:pr is:merged owner:\(escapedOwner) merged:>=[0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+$", options: .regularExpression) != nil
+        }
+        return false
     }
     let lowercasedEndpoint = endpoint.lowercased()
     guard !endpoint.contains(".."), !endpoint.contains("\\"),
@@ -670,7 +786,7 @@ private func handleGitHubCli(
     _ descriptor: Int32,
     config: BrokerConfig,
     request: [String: Any]
-) throws -> GitHubCliResult? {
+) throws -> GitHubCliOutcome {
     guard exactKeys(request, ["version", "operation", "capability", "args", "cwd", "input", "timeoutMs", "maxOutputBytes"]),
           request["version"] as? Int == 1,
           request["operation"] as? String == "github-cli",
@@ -690,7 +806,7 @@ private func handleGitHubCli(
           let timeoutMs = request["timeoutMs"] as? Int,
           (1...3_600_000).contains(timeoutMs),
           let maxOutputBytes = request["maxOutputBytes"] as? Int,
-          (1...maximumGitHubOutputBytes).contains(maxOutputBytes) else { return nil }
+          (1...maximumGitHubOutputBytes).contains(maxOutputBytes) else { return .failure("github-cli-policy-refused") }
 
     let manager = FileManager.default
     let operationRoot = (config.privateDirectory as NSString).appendingPathComponent("github-cli-\(UUID().uuidString)")
@@ -701,7 +817,7 @@ private func handleGitHubCli(
     let stderrPath = (operationRoot as NSString).appendingPathComponent("stderr")
     try input.write(toFile: inputPath, atomically: false, encoding: .utf8)
     guard manager.createFile(atPath: stdoutPath, contents: nil, attributes: [.posixPermissions: 0o600]),
-          manager.createFile(atPath: stderrPath, contents: nil, attributes: [.posixPermissions: 0o600]) else { return nil }
+          manager.createFile(atPath: stderrPath, contents: nil, attributes: [.posixPermissions: 0o600]) else { return .failure("github-cli-io-failed") }
     let inputHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: inputPath))
     let stdoutHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: stdoutPath))
     let stderrHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: stderrPath))
@@ -710,9 +826,7 @@ private func handleGitHubCli(
         stdoutHandle.closeFile()
         stderrHandle.closeFile()
     }
-    let tokenContents = try String(contentsOfFile: config.tokenFile, encoding: .utf8)
-    let token = tokenContents.hasSuffix("\n") ? String(tokenContents.dropLast()) : tokenContents
-    guard !token.isEmpty, token.utf8.count <= 1_024, !token.contains("\0"), !token.contains("\r"), !token.contains("\n") else { return nil }
+    guard let token = readTrustedToken(config.tokenFile) else { return .failure("github-cli-token-invalid") }
     let process = try spawnProcess(
         executable: config.githubCliExecutable,
         arguments: arguments,
@@ -732,9 +846,17 @@ private func handleGitHubCli(
     while process.isRunning {
         let stdoutSize = ((try? manager.attributesOfItem(atPath: stdoutPath)[.size] as? NSNumber) ?? 0).intValue
         let stderrSize = ((try? manager.attributesOfItem(atPath: stderrPath)[.size] as? NSNumber) ?? 0).intValue
-        if !connected(descriptor) || Date() >= deadline || stdoutSize + stderrSize > maxOutputBytes {
+        if !connected(descriptor) {
             try cancelProcessGroup(process)
-            return nil
+            return .failure("github-cli-client-disconnected")
+        }
+        if Date() >= deadline {
+            try cancelProcessGroup(process)
+            return .failure("github-cli-timeout")
+        }
+        if stdoutSize + stderrSize > maxOutputBytes {
+            try cancelProcessGroup(process)
+            return .failure("github-cli-output-limit")
         }
         usleep(50_000)
     }
@@ -742,24 +864,28 @@ private func handleGitHubCli(
     stderrHandle.synchronizeFile()
     let stdoutData = try Data(contentsOf: URL(fileURLWithPath: stdoutPath))
     let stderrData = try Data(contentsOf: URL(fileURLWithPath: stderrPath))
-    guard stdoutData.count + stderrData.count <= maxOutputBytes else { return nil }
+    guard stdoutData.count + stderrData.count <= maxOutputBytes else { return .failure("github-cli-output-limit") }
     let exitCode = process.exitedNormally ? process.terminationStatus : min(255, 128 + max(1, process.terminationSignal))
-    return GitHubCliResult(
+    return .success(GitHubCliResult(
         exitCode: exitCode,
         stdout: String(decoding: stdoutData, as: UTF8.self),
         stderr: String(decoding: stderrData, as: UTF8.self)
-    )
+    ))
 }
 
-private func respondGitHubCli(_ descriptor: Int32, _ result: GitHubCliResult?) {
-    let object: [String: Any] = result.map {
-        [
+private func respondGitHubCli(_ descriptor: Int32, _ outcome: GitHubCliOutcome) {
+    let object: [String: Any]
+    switch outcome {
+    case .success(let result):
+        object = [
             "ok": true,
-            "exitCode": Int($0.exitCode),
-            "stdoutBase64": Data($0.stdout.utf8).base64EncodedString(),
-            "stderrBase64": Data($0.stderr.utf8).base64EncodedString()
+            "exitCode": Int(result.exitCode),
+            "stdoutBase64": Data(result.stdout.utf8).base64EncodedString(),
+            "stderrBase64": Data(result.stderr.utf8).base64EncodedString()
         ]
-    } ?? ["ok": false, "error": "github-cli-refused"]
+    case .failure(let code):
+        object = ["ok": false, "error": code]
+    }
     guard var data = try? JSONSerialization.data(withJSONObject: object), data.count <= maximumGitHubOutputBytes * 2 + 8_192 else {
         respond(descriptor, false)
         return

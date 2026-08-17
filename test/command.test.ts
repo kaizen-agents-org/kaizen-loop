@@ -183,6 +183,12 @@ describe('githubCliEnv', () => {
     expect(brokered).toHaveBeenCalledWith(['issue', 'list'], { cwd: '/workspace' });
   });
 
+  it('turns missing trusted GitHub CLI setup into a rejected promise', async () => {
+    const command = vi.fn<CommandRunner>();
+    await expect(runTrustedGitHubCli(command, ['issue', 'list'], { cwd: '/workspace' }))
+      .rejects.toThrow(/Trusted GitHub CLI executable/);
+  });
+
   it.each([
     ['run'],
     ['doctor'],
