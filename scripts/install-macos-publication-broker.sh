@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -12,6 +12,7 @@ usage() {
 runtime_user=
 token_file=
 node_executable=
+github_cli_executable=
 source_root=
 repositories=
 scheduled_jobs=
@@ -28,6 +29,7 @@ while [ "$#" -gt 0 ]; do
     --tool-path) [ "$#" -ge 2 ] || usage; tool_path=$2; shift 2 ;;
     --publication-timeout-ms) [ "$#" -ge 2 ] || usage; publication_timeout_ms=$2; shift 2 ;;
     --node) [ "$#" -ge 2 ] || usage; node_executable=$2; shift 2 ;;
+    --github-cli) [ "$#" -ge 2 ] || usage; github_cli_executable=$2; shift 2 ;;
     --source) [ "$#" -ge 2 ] || usage; source_root=$2; shift 2 ;;
     *) usage ;;
   esac
@@ -57,6 +59,16 @@ if [ -z "$node_executable" ]; then node_executable=$(command -v node || true); f
 case "$node_executable" in /*) ;; *) echo "--node must resolve to an absolute executable." >&2; exit 2 ;; esac
 node_executable=$(realpath "$node_executable")
 [ -x "$node_executable" ] || { echo "The configured Node executable is not executable." >&2; exit 1; }
+if [ -z "$github_cli_executable" ]; then
+  github_cli_executable=$(command -v gh || true)
+  [ -n "$github_cli_executable" ] || { echo "GitHub CLI was not found on PATH; install gh or pass --github-cli." >&2; exit 1; }
+fi
+case "$github_cli_executable" in /*) ;; *) echo "--github-cli must name an absolute executable." >&2; exit 2 ;; esac
+github_cli_executable=$(realpath "$github_cli_executable" 2>/dev/null) || {
+  echo "The configured --github-cli path does not exist or cannot be resolved." >&2
+  exit 1
+}
+[ -x "$github_cli_executable" ] || { echo "The configured GitHub CLI executable is not executable." >&2; exit 1; }
 npm_executable=$(command -v npm || true)
 case "$npm_executable" in /*) ;; *) echo "A trusted absolute npm executable is required." >&2; exit 1 ;; esac
 npm_executable=$(realpath "$npm_executable")
@@ -73,6 +85,10 @@ trusted_root_path() {
 }
 trusted_root_path "$node_executable" || {
   echo "Node and every ancestor must be root-owned and group/other non-writable." >&2
+  exit 1
+}
+trusted_root_path "$github_cli_executable" || {
+  echo "GitHub CLI and every ancestor must be root-owned and group/other non-writable." >&2
   exit 1
 }
 trusted_root_path "$npm_executable" || {
@@ -161,6 +177,7 @@ config_stage="$build_dir/publication-broker.plist"
 /usr/libexec/PlistBuddy -c "Add :supervisorLauncherExecutable string $install_root/bin/kaizen-supervisor-launcher" "$config_stage"
 /usr/bin/plutil -insert nodeExecutable -string "$node_executable" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :gitExecutable string /usr/bin/git' "$config_stage"
+/usr/bin/plutil -insert githubCliExecutable -string "$github_cli_executable" "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :cliPath string $install_root/runtime/dist/cli.js" "$config_stage"
 /usr/bin/plutil -insert tokenFile -string "$token_file" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :privateDirectory string /var/db/kaizen-loop/publication' "$config_stage"

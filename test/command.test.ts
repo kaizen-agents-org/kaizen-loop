@@ -20,6 +20,7 @@ import {
   publicationGitExecutable,
   publicationGithubPreflight,
   publicationGithubPublisher,
+  runTrustedGitHubCli,
   runCommand,
   withTrustedExecutables,
   withRunDeadline,
@@ -156,6 +157,36 @@ describe('githubCliEnv', () => {
     });
 
     expect(JSON.parse(stdout)).toEqual({ trusted: 'startup-token' });
+  });
+
+  it('routes scheduled GitHub CLI calls through the broker without adding a token environment', async () => {
+    const direct = vi.fn<CommandRunner>();
+    const brokered = vi.fn(async (args: string[], options = {}) => ({
+      command: '/trusted/bin/gh',
+      args,
+      cwd: options.cwd,
+      exitCode: 0,
+      stdout: 'ok\n',
+      stderr: '',
+      durationMs: 1
+    }));
+    const command = withTrustedExecutables(direct, {
+      githubCli: '/trusted/bin/gh',
+      githubCliRunner: brokered
+    });
+
+    await expect(runTrustedGitHubCli(command, ['issue', 'list'], {
+      cwd: '/workspace',
+      env: { GH_TOKEN: 'must-not-cross-the-boundary' }
+    })).resolves.toMatchObject({ stdout: 'ok\n' });
+    expect(direct).not.toHaveBeenCalled();
+    expect(brokered).toHaveBeenCalledWith(['issue', 'list'], { cwd: '/workspace' });
+  });
+
+  it('turns missing trusted GitHub CLI setup into a rejected promise', async () => {
+    const command = vi.fn<CommandRunner>();
+    await expect(runTrustedGitHubCli(command, ['issue', 'list'], { cwd: '/workspace' }))
+      .rejects.toThrow(/Trusted GitHub CLI executable/);
   });
 
   it.each([

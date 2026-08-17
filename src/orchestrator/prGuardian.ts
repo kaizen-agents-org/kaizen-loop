@@ -5,9 +5,7 @@ import type { KaizenConfig } from '../config/schema.js';
 import type { GitHubPullRequest } from '../github/types.js';
 import {
   buildUntrustedEnv,
-  githubCliExecutable,
-  publicationGitExecutable,
-  trustedGithubCliEnv,
+  runTrustedGitHubCli,
   type CommandRunner
 } from '../utils/command.js';
 import { ensurePrivateDirectory, ensurePrivateStructureDirectory } from '../utils/privateDirectory.js';
@@ -18,18 +16,12 @@ import { isSyncPullRequest } from './wipLimit.js';
 
 export const MANAGED_PR_GUARDIAN_MARKER = '<!-- kaizen-pr-guardian:managed -->';
 
-function githubCliEnv(command: CommandRunner): NodeJS.ProcessEnv {
-  return trustedGithubCliEnv(process.env, githubCliExecutable(command), publicationGitExecutable(command));
-}
-
 function runGitHubCli(
   command: CommandRunner,
   args: string[],
   options: Parameters<CommandRunner>[2] = {}
 ) {
-  const executable = githubCliExecutable(command);
-  if (!executable) throw new Error('Could not resolve a trusted GitHub CLI executable.');
-  return command(executable, args, { ...options, env: githubCliEnv(command) });
+  return runTrustedGitHubCli(command, args, options);
 }
 
 export interface PrGuardianSkillRequest {
@@ -902,7 +894,6 @@ async function listCheckAnnotations(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -930,7 +921,6 @@ async function listCheckAnnotations(
         '--slurp'
       ], {
         cwd: req.workspaceDir,
-        env: githubCliEnv(runCommand),
         timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
         rejectOnNonZero: false
       });
@@ -971,7 +961,6 @@ async function inspectPullRequestTerminalState(
     'state,baseRefName,closingIssuesReferences'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -996,7 +985,6 @@ async function inspectPullRequest(
       'state,isDraft,mergeStateStatus,mergeable,reviewDecision,reviewRequests,headRefOid,statusCheckRollup'
     ], {
       cwd: req.workspaceDir,
-      env: githubCliEnv(runCommand),
       timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
       rejectOnNonZero: false
     }),
@@ -1103,7 +1091,6 @@ async function listRequiredChecks(runCommand: CommandRunner, req: PrGuardianSkil
     'name,state,bucket,workflow'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -1130,7 +1117,6 @@ async function listPullRequestReviews(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -1154,7 +1140,6 @@ async function listPullRequestReviewComments(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });
@@ -1190,7 +1175,6 @@ async function listPullRequestIssueComments(
     '--slurp'
   ], {
     cwd: req.workspaceDir,
-    env: githubCliEnv(runCommand),
     timeoutMs: boundedTimeoutMs(60_000, req.runDeadlineAt),
     rejectOnNonZero: false
   });

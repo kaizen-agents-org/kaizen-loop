@@ -11,6 +11,7 @@ private struct BrokerConfig: Decodable {
     let nodeExecutable: String
     let cliPath: String
     let gitExecutable: String
+    let githubCliExecutable: String
     let tokenFile: String
     let privateDirectory: String
     let allowedRepositories: [String: String]
@@ -34,28 +35,29 @@ private struct ProcessIdentity: Equatable {
 private struct Registration {
     let identity: ProcessIdentity
     let capability: String
+    let repository: String
 }
 
 private final class RegistrationStore: @unchecked Sendable {
     private var registrations: [pid_t: Registration] = [:]
-    private var pending: [pid_t: String] = [:]
+    private var pending: [pid_t: (capability: String, repository: String)] = [:]
     private let lock = NSLock()
 
-    func expect(pid: pid_t, capability: String) {
+    func expect(pid: pid_t, capability: String, repository: String) {
         lock.lock(); defer { lock.unlock() }
-        pending[pid] = capability
+        pending[pid] = (capability, repository)
     }
 
     func isExpected(pid: pid_t, capability: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard let expected = pending[pid] else { return false }
-        return constantTimeEqual(expected, capability)
+        return constantTimeEqual(expected.capability, capability)
     }
 
     func promote(identity: ProcessIdentity, capability: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let expected = pending.removeValue(forKey: identity.pid), constantTimeEqual(expected, capability) else { return false }
-        registrations[identity.pid] = Registration(identity: identity, capability: capability)
+        guard let expected = pending.removeValue(forKey: identity.pid), constantTimeEqual(expected.capability, capability) else { return false }
+        registrations[identity.pid] = Registration(identity: identity, capability: capability, repository: expected.repository)
         return true
     }
 
@@ -70,9 +72,17 @@ private final class RegistrationStore: @unchecked Sendable {
         guard let registration = registrations[identity.pid] else { return false }
         return registration.identity == identity && constantTimeEqual(registration.capability, capability)
     }
+
+    func repository(_ identity: ProcessIdentity, capability: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard let registration = registrations[identity.pid], registration.identity == identity,
+              constantTimeEqual(registration.capability, capability) else { return nil }
+        return registration.repository
+    }
 }
 
-private let maximumRequestBytes = 65_536
+private let maximumRequestBytes = 1_048_576
+private let maximumGitHubOutputBytes = 16 * 1_024 * 1_024
 private let registrations = RegistrationStore()
 
 private func testingConfigPath() -> String? {
@@ -187,6 +197,19 @@ private func respondFailure(_ descriptor: Int32, _ message: String) {
     _ = shutdown(descriptor, SHUT_RDWR)
 }
 
+private func writeAll(_ descriptor: Int32, _ data: Data) -> Bool {
+    var offset = 0
+    while offset < data.count {
+        let count = data.withUnsafeBytes {
+            Darwin.write(descriptor, $0.baseAddress!.advanced(by: offset), data.count - offset)
+        }
+        if count < 0 && errno == EINTR { continue }
+        if count <= 0 { return false }
+        offset += count
+    }
+    return true
+}
+
 private func exactKeys(_ request: [String: Any], _ keys: Set<String>) -> Bool {
     Set(request.keys) == keys
 }
@@ -240,6 +263,11 @@ private final class SpawnedProcess {
         waitUntilExit()
         return waitStatus.map { ($0 >> 8) & 0xff } ?? -1
     }
+
+    var terminationSignal: Int32 {
+        waitUntilExit()
+        return waitStatus.map { $0 & 0x7f } ?? 0
+    }
 }
 
 private func withCStringArray<Result>(
@@ -265,7 +293,10 @@ private func spawnProcess(
     executable: String,
     arguments: [String],
     environment: [String: String],
-    standardOutput: Int32 = STDERR_FILENO
+    standardInput: Int32? = nil,
+    standardOutput: Int32 = STDERR_FILENO,
+    standardError: Int32 = STDERR_FILENO,
+    workingDirectory: String? = nil
 ) throws -> SpawnedProcess {
     var actions: posix_spawn_file_actions_t?
     let actionsResult = posix_spawn_file_actions_init(&actions)
@@ -278,10 +309,14 @@ private func spawnProcess(
     let nullDescriptor = open("/dev/null", O_RDONLY | O_CLOEXEC)
     guard nullDescriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
     defer { close(nullDescriptor) }
+    if let workingDirectory {
+        let result = posix_spawn_file_actions_addchdir_np(&actions, workingDirectory)
+        guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(result)) }
+    }
     for (source, destination) in [
-        (nullDescriptor, STDIN_FILENO),
+        (standardInput ?? nullDescriptor, STDIN_FILENO),
         (standardOutput, STDOUT_FILENO),
-        (STDERR_FILENO, STDERR_FILENO)
+        (standardError, STDERR_FILENO)
     ] {
         let result = posix_spawn_file_actions_adddup2(&actions, source, destination)
         guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(result)) }
@@ -383,6 +418,28 @@ private func trustedRootPath(_ candidate: String, regularFile: Bool = true, exac
     }
 }
 
+private func readTrustedToken(_ path: String) -> String? {
+    let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
+    guard descriptor >= 0 else { return nil }
+    defer { close(descriptor) }
+    var status = stat()
+    let expectedOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
+    guard fstat(descriptor, &status) == 0,
+          (status.st_mode & S_IFMT) == S_IFREG,
+          status.st_nlink == 1,
+          status.st_uid == expectedOwner,
+          status.st_mode & 0o777 == 0o600,
+          status.st_size > 0,
+          status.st_size <= 1_025 else { return nil }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    guard let data = try? handle.readToEnd(), data.count <= 1_025 else { return nil }
+    let contents = String(decoding: data, as: UTF8.self)
+    let token = contents.hasSuffix("\n") ? String(contents.dropLast()) : contents
+    guard !token.isEmpty, token.utf8.count <= 1_024,
+          !token.contains("\0"), !token.contains("\r"), !token.contains("\n") else { return nil }
+    return token
+}
+
 private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> Bool {
     let testRoot = testingConfigPath().map { ($0 as NSString).deletingLastPathComponent }
     let scheduledKeys = config.scheduledJobs.map { "\($0.project)/\($0.job)" }
@@ -393,9 +450,11 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
           trustedRootPath(config.nodeExecutable),
           trustedRootPath(config.cliPath),
           trustedRootPath(config.gitExecutable),
+          trustedRootPath(config.githubCliExecutable),
           Set(scheduledKeys).count == scheduledKeys.count,
           config.scheduledJobs.allSatisfy({ entry in
               entry.project.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil &&
+              config.allowedRepositories.keys.filter({ $0.replacingOccurrences(of: "/", with: "-") == entry.project }).count == 1 &&
               entry.job.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"#, options: .regularExpression) != nil &&
               validatedToolPath(entry.toolPath) != nil &&
               (0...23).contains(entry.hour) && (0...59).contains(entry.minute) &&
@@ -405,8 +464,7 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
               repository.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil &&
               (url == "https://github.com/\(repository).git" || (testRoot.map { url.hasPrefix("file://\($0)/") } ?? false))
           }),
-          let tokenStatus = try? FileManager.default.attributesOfItem(atPath: config.tokenFile),
-          ((tokenStatus[.size] as? NSNumber)?.intValue ?? 0) > 0 else { return false }
+          readTrustedToken(config.tokenFile) != nil else { return false }
     return true
 }
 
@@ -430,7 +488,12 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
         arguments: ["run", capability, project, job, registeredJob.toolPath, String(registeredJob.publicationTimeoutMs)],
         environment: safeEnvironment()
     )
-    registrations.expect(pid: process.processIdentifier, capability: capability)
+    let repositories = config.allowedRepositories.keys.filter { $0.replacingOccurrences(of: "/", with: "-") == project }
+    guard repositories.count == 1, let repository = repositories.first else {
+        try cancelProcessGroup(process)
+        return "scheduled job repository mapping is invalid: \(project)"
+    }
+    registrations.expect(pid: process.processIdentifier, capability: capability, repository: repository)
     defer { registrations.remove(pid: process.processIdentifier) }
     while process.isRunning {
         if !connected(descriptor) {
@@ -451,6 +514,17 @@ private func authenticateSupervisor(_ descriptor: Int32, config: BrokerConfig, c
     let processIdentity = try identity(descriptor, pid: pid)
     return registrations.matches(processIdentity, capability: capability)
         || registrations.promote(identity: processIdentity, capability: capability)
+}
+
+private func authenticatedRepository(_ descriptor: Int32, config: BrokerConfig, capability: String) throws -> String? {
+    let (uid, _, pid) = try peerCredentials(descriptor)
+    guard uid == config.runtimeUid else { return nil }
+    let processIdentity = try identity(descriptor, pid: pid)
+    if registrations.matches(processIdentity, capability: capability) {
+        return registrations.repository(processIdentity, capability: capability)
+    }
+    guard registrations.promote(identity: processIdentity, capability: capability) else { return nil }
+    return registrations.repository(processIdentity, capability: capability)
 }
 
 private func validateTreeAndTakeOwnership(_ root: String) throws {
@@ -524,6 +598,301 @@ private func runGit(
         throw NSError(domain: "KaizenPublicationBroker", code: 6)
     }
     return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private struct GitHubCliResult {
+    let exitCode: Int32
+    let stdout: String
+    let stderr: String
+}
+
+private enum GitHubCliOutcome {
+    case success(GitHubCliResult)
+    case failure(String)
+}
+
+private func argumentsUseOnlyExpectedValue(_ arguments: [String], names: Set<String>, expected: String) -> Bool {
+    for (index, argument) in arguments.enumerated() {
+        if names.contains(argument) {
+            guard index + 1 < arguments.count, arguments[index + 1] == expected else { return false }
+        }
+        for name in names where argument.hasPrefix("\(name)=") {
+            guard String(argument.dropFirst(name.count + 1)) == expected else { return false }
+        }
+        if names.contains("-R"), argument.hasPrefix("-R"), argument.count > 2 {
+            guard String(argument.dropFirst(2)) == expected else { return false }
+        }
+    }
+    return true
+}
+
+private func apiEndpoint(_ arguments: [String]) -> String? {
+    let valueOptions: Set<String> = ["--cache", "-F", "--field", "-f", "--raw-field", "-H", "--header", "--hostname", "--input", "--jq", "-X", "--method", "--template"]
+    let flagOptions: Set<String> = ["--include", "-i", "--paginate", "--silent", "--slurp", "--verbose"]
+    var index = 1
+    while index < arguments.count {
+        let argument = arguments[index]
+        if valueOptions.contains(argument) { index += 2; continue }
+        if flagOptions.contains(argument) { index += 1; continue }
+        if valueOptions.contains(where: { argument.hasPrefix("\($0)=") }) { index += 1; continue }
+        return argument
+    }
+    return nil
+}
+
+private func optionValues(_ arguments: [String], names: Set<String>) -> [String] {
+    var values: [String] = []
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if names.contains(argument), index + 1 < arguments.count {
+            values.append(arguments[index + 1])
+            index += 2
+            continue
+        }
+        for name in names where argument.hasPrefix("\(name)=") {
+            values.append(String(argument.dropFirst(name.count + 1)))
+        }
+        index += 1
+    }
+    return values
+}
+
+private func argumentsAvoidLocalFiles(_ arguments: [String]) -> Bool {
+    guard optionValues(arguments, names: ["--body-file", "--input"]).allSatisfy({ $0 == "-" }) else { return false }
+    return optionValues(arguments, names: ["-F", "--field"]).allSatisfy { field in
+        guard let separator = field.firstIndex(of: "=") else { return true }
+        let value = String(field[field.index(after: separator)...])
+        return !value.hasPrefix("@") || value == "@-"
+    }
+}
+
+private func graphqlRootField(_ queryField: String) -> String? {
+    let query = queryField.hasPrefix("query=") ? String(queryField.dropFirst(6)) : queryField
+    let characters = Array(query)
+    var braceDepth = 0, parenDepth = 0, index = 0
+    var inString = false, escaped = false, inComment = false, sawSelection = false
+    var roots: [String] = []
+    var expectRoot = false
+    while index < characters.count {
+        let character = characters[index]
+        if inComment {
+            if character == "\n" { inComment = false }
+            index += 1; continue
+        }
+        if inString {
+            if escaped { escaped = false }
+            else if character == "\\" { escaped = true }
+            else if character == "\"" { inString = false }
+            index += 1; continue
+        }
+        if character == "#" { inComment = true; index += 1; continue }
+        if character == "\"" { inString = true; index += 1; continue }
+        if character == "(" { parenDepth += 1; index += 1; continue }
+        if character == ")" { parenDepth -= 1; if parenDepth < 0 { return nil }; index += 1; continue }
+        if character == "{" {
+            braceDepth += 1
+            if braceDepth == 1 {
+                if sawSelection { return nil }
+                sawSelection = true; expectRoot = true
+            }
+            index += 1; continue
+        }
+        if character == "}" {
+            if braceDepth == 2 { expectRoot = true }
+            braceDepth -= 1
+            if braceDepth < 0 { return nil }
+            index += 1; continue
+        }
+        if braceDepth == 1 && parenDepth == 0 && expectRoot {
+            if character.isWhitespace || character == "," { index += 1; continue }
+            guard character.isLetter || character == "_" else { return nil }
+            let start = index
+            while index < characters.count && (characters[index].isLetter || characters[index].isNumber || characters[index] == "_") { index += 1 }
+            let root = String(characters[start..<index])
+            var lookahead = index
+            while lookahead < characters.count && characters[lookahead].isWhitespace { lookahead += 1 }
+            guard lookahead >= characters.count || characters[lookahead] != ":" else { return nil }
+            roots.append(root); expectRoot = false
+            continue
+        }
+        index += 1
+    }
+    guard braceDepth == 0, parenDepth == 0, !inString, roots.count == 1 else { return nil }
+    return roots[0]
+}
+
+private func githubArgumentsAllowed(_ arguments: [String], repository: String) -> Bool {
+    guard let command = arguments.first else { return false }
+    guard argumentsUseOnlyExpectedValue(arguments, names: ["-R", "--repo"], expected: repository),
+          argumentsUseOnlyExpectedValue(arguments, names: ["--hostname"], expected: "github.com"),
+          argumentsAvoidLocalFiles(arguments) else { return false }
+
+    let allowedSubcommands: [String: Set<String>] = [
+        "auth": ["status"],
+        "issue": ["close", "comment", "create", "edit", "list", "view"],
+        "label": ["create"],
+        "pr": ["checks", "create", "edit", "list", "ready", "view"],
+        "repo": ["view"]
+    ]
+    if command != "api" {
+        guard arguments.count >= 2, allowedSubcommands[command]?.contains(arguments[1]) == true else { return false }
+        if ["issue", "pr"].contains(command),
+           ["close", "comment", "edit", "ready", "view", "checks"].contains(arguments[1]),
+           arguments.count >= 3,
+           arguments[2].range(of: #"^[1-9][0-9]*$"#, options: .regularExpression) == nil {
+            return false
+        }
+        if command == "repo", arguments.count >= 3, !arguments[2].hasPrefix("-") { return false }
+        return true
+    }
+
+    guard let endpoint = apiEndpoint(arguments) else { return false }
+    if endpoint == "user" { return true }
+    if endpoint == "graphql" {
+        guard let separator = repository.firstIndex(of: "/") else { return false }
+        let owner = String(repository[..<separator])
+        let name = String(repository[repository.index(after: separator)...])
+        let fields = optionValues(arguments, names: ["-F", "--field", "-f", "--raw-field"])
+        let owners = fields.filter { $0.hasPrefix("owner=") }
+        let names = fields.filter { $0.hasPrefix("name=") }
+        let queries = fields.filter { $0.hasPrefix("query=") }
+        guard queries.count == 1, let query = queries.first, let root = graphqlRootField(query) else { return false }
+        if root == "repository" {
+            let compactQuery = query.filter { !$0.isWhitespace }
+            return !owners.isEmpty && owners.allSatisfy({ $0 == "owner=\(owner)" }) &&
+                !names.isEmpty && names.allSatisfy({ $0 == "name=\(name)" }) &&
+                compactQuery.contains("repository(owner:$owner,name:$name)")
+        }
+        if root == "search" {
+            guard owners.isEmpty, names.isEmpty else { return false }
+            let searchQueries = fields.filter { $0.hasPrefix("searchQuery=") }
+            guard searchQueries.count == 1, let searchQuery = searchQueries.first else { return false }
+            let value = String(searchQuery.dropFirst("searchQuery=".count))
+            let escapedOwner = NSRegularExpression.escapedPattern(for: owner)
+            return value.range(of: "^is:pr is:open owner:\(escapedOwner)$", options: .regularExpression) != nil ||
+                value.range(of: "^is:pr is:merged owner:\(escapedOwner) merged:>=[0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+$", options: .regularExpression) != nil
+        }
+        return false
+    }
+    let lowercasedEndpoint = endpoint.lowercased()
+    guard !endpoint.contains(".."), !endpoint.contains("\\"),
+          !lowercasedEndpoint.contains("%2f"), !lowercasedEndpoint.contains("%5c") else { return false }
+    return endpoint == "repos/{owner}/{repo}" || endpoint.hasPrefix("repos/{owner}/{repo}/") ||
+        endpoint == "repos/\(repository)" || endpoint.hasPrefix("repos/\(repository)/")
+}
+
+private func handleGitHubCli(
+    _ descriptor: Int32,
+    config: BrokerConfig,
+    request: [String: Any]
+) throws -> GitHubCliOutcome {
+    guard exactKeys(request, ["version", "operation", "capability", "args", "cwd", "input", "timeoutMs", "maxOutputBytes"]),
+          request["version"] as? Int == 1,
+          request["operation"] as? String == "github-cli",
+          let capability = request["capability"] as? String,
+          let repository = try authenticatedRepository(descriptor, config: config, capability: capability),
+          let arguments = request["args"] as? [String],
+          githubArgumentsAllowed(arguments, repository: repository),
+          !arguments.contains("--show-token"),
+          arguments.count <= 256,
+          arguments.allSatisfy({ $0.utf8.count <= 262_144 && !$0.contains("\0") }),
+          arguments.reduce(0, { $0 + $1.utf8.count }) <= 524_288,
+          let requestedCwd = request["cwd"] as? String,
+          requestedCwd.hasPrefix("/"), requestedCwd.utf8.count <= 4_096,
+          !requestedCwd.contains("\0"), !requestedCwd.contains("\n"), !requestedCwd.contains("\r"),
+          let input = request["input"] as? String,
+          input.utf8.count <= 524_288,
+          let timeoutMs = request["timeoutMs"] as? Int,
+          (1...3_600_000).contains(timeoutMs),
+          let maxOutputBytes = request["maxOutputBytes"] as? Int,
+          (1...maximumGitHubOutputBytes).contains(maxOutputBytes) else { return .failure("github-cli-policy-refused") }
+
+    let manager = FileManager.default
+    let operationRoot = (config.privateDirectory as NSString).appendingPathComponent("github-cli-\(UUID().uuidString)")
+    try manager.createDirectory(atPath: operationRoot, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? manager.removeItem(atPath: operationRoot) }
+    let inputPath = (operationRoot as NSString).appendingPathComponent("stdin")
+    let stdoutPath = (operationRoot as NSString).appendingPathComponent("stdout")
+    let stderrPath = (operationRoot as NSString).appendingPathComponent("stderr")
+    try input.write(toFile: inputPath, atomically: false, encoding: .utf8)
+    guard manager.createFile(atPath: stdoutPath, contents: nil, attributes: [.posixPermissions: 0o600]),
+          manager.createFile(atPath: stderrPath, contents: nil, attributes: [.posixPermissions: 0o600]) else { return .failure("github-cli-io-failed") }
+    let inputHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: inputPath))
+    let stdoutHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: stdoutPath))
+    let stderrHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: stderrPath))
+    defer {
+        inputHandle.closeFile()
+        stdoutHandle.closeFile()
+        stderrHandle.closeFile()
+    }
+    guard let token = readTrustedToken(config.tokenFile) else { return .failure("github-cli-token-invalid") }
+    let process = try spawnProcess(
+        executable: config.githubCliExecutable,
+        arguments: arguments,
+        environment: safeEnvironment([
+            "GH_TOKEN": token,
+            "GH_CONFIG_DIR": "/var/empty",
+            "GH_PAGER": "cat",
+            "GH_PROMPT_DISABLED": "1",
+            "GH_REPO": repository
+        ]),
+        standardInput: inputHandle.fileDescriptor,
+        standardOutput: stdoutHandle.fileDescriptor,
+        standardError: stderrHandle.fileDescriptor,
+        workingDirectory: "/var/empty"
+    )
+    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1_000)
+    while process.isRunning {
+        let stdoutSize = ((try? manager.attributesOfItem(atPath: stdoutPath)[.size] as? NSNumber) ?? 0).intValue
+        let stderrSize = ((try? manager.attributesOfItem(atPath: stderrPath)[.size] as? NSNumber) ?? 0).intValue
+        if !connected(descriptor) {
+            try cancelProcessGroup(process)
+            return .failure("github-cli-client-disconnected")
+        }
+        if Date() >= deadline {
+            try cancelProcessGroup(process)
+            return .failure("github-cli-timeout")
+        }
+        if stdoutSize + stderrSize > maxOutputBytes {
+            try cancelProcessGroup(process)
+            return .failure("github-cli-output-limit")
+        }
+        usleep(50_000)
+    }
+    stdoutHandle.synchronizeFile()
+    stderrHandle.synchronizeFile()
+    let stdoutData = try Data(contentsOf: URL(fileURLWithPath: stdoutPath))
+    let stderrData = try Data(contentsOf: URL(fileURLWithPath: stderrPath))
+    guard stdoutData.count + stderrData.count <= maxOutputBytes else { return .failure("github-cli-output-limit") }
+    let exitCode = process.exitedNormally ? process.terminationStatus : min(255, 128 + max(1, process.terminationSignal))
+    return .success(GitHubCliResult(
+        exitCode: exitCode,
+        stdout: String(decoding: stdoutData, as: UTF8.self),
+        stderr: String(decoding: stderrData, as: UTF8.self)
+    ))
+}
+
+private func respondGitHubCli(_ descriptor: Int32, _ outcome: GitHubCliOutcome) {
+    let object: [String: Any]
+    switch outcome {
+    case .success(let result):
+        object = [
+            "ok": true,
+            "exitCode": Int(result.exitCode),
+            "stdoutBase64": Data(result.stdout.utf8).base64EncodedString(),
+            "stderrBase64": Data(result.stderr.utf8).base64EncodedString()
+        ]
+    case .failure(let code):
+        object = ["ok": false, "error": code]
+    }
+    guard var data = try? JSONSerialization.data(withJSONObject: object), data.count <= maximumGitHubOutputBytes * 2 + 8_192 else {
+        respond(descriptor, false)
+        return
+    }
+    data.append(0x0a)
+    _ = writeAll(descriptor, data)
+    _ = shutdown(descriptor, SHUT_RDWR)
 }
 
 private func shellQuote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
@@ -732,7 +1101,12 @@ do {
     }
     serve(publicationSocket) { descriptor in
         do {
-            respond(descriptor, try handlePublication(descriptor, config: config, request: readRequest(descriptor)))
+            let request = try readRequest(descriptor)
+            if request["operation"] as? String == "github-cli" {
+                respondGitHubCli(descriptor, try handleGitHubCli(descriptor, config: config, request: request))
+            } else {
+                respond(descriptor, try handlePublication(descriptor, config: config, request: request))
+            }
         } catch {
             logBrokerError("rejected a publication request", error)
             respond(descriptor, false)

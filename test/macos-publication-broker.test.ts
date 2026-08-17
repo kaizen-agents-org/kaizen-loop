@@ -60,6 +60,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
   let sourceRepository: string;
   let remoteRepository: string;
   let expectedSha: string;
+  let githubCliPath: string;
 
   beforeAll(async () => {
     root = await fs.mkdtemp('/private/tmp/kaizen-broker-test-');
@@ -103,6 +104,8 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
     expectedSha = execFileSync('/usr/bin/git', ['-C', workRepository, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     execFileSync('/usr/bin/git', ['clone', '--bare', workRepository, sourceRepository], { stdio: 'pipe' });
     execFileSync('/usr/bin/git', ['init', '--bare', remoteRepository], { stdio: 'pipe' });
+    githubCliPath = path.join(root, 'github-cli.cjs');
+    await fs.writeFile(githubCliPath, `#!${process.execPath}\nif (process.argv.includes('__signal__')) process.kill(process.pid, 'SIGTERM');\nprocess.stdout.write(JSON.stringify({ token: process.env.GH_TOKEN, repo: process.env.GH_REPO, config: process.env.GH_CONFIG_DIR, cwd: process.cwd() }));\n`, { mode: 0o755 });
 
     const fixturePath = path.join(root, 'supervisor.cjs');
     await fs.writeFile(fixturePath, `
@@ -118,17 +121,28 @@ function request(payload) {
     socket.setEncoding('utf8');
     socket.on('connect', () => socket.write(JSON.stringify({ version: 1, capability, ...payload }) + '\\n'));
     socket.on('data', (chunk) => { output += chunk; });
-    socket.on('end', () => resolve(JSON.parse(output).ok === true));
-    socket.on('error', () => resolve(false));
+    socket.on('end', () => resolve(JSON.parse(output)));
+    socket.on('error', () => resolve({ ok: false }));
   });
 }
-const preflight = () => request({
+const preflight = async () => (await request({
   operation: 'preflight',
   pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
   expectedRepo: 'o/r'
+})).ok === true;
+const github = () => request({
+  operation: 'github-cli',
+  args: ['api', 'user'],
+  cwd: '/untrusted/workspace',
+  input: '',
+  timeoutMs: 10000,
+  maxOutputBytes: 65536
 });
 (async () => {
-  if (process.env.KAIZEN_BROKER_CHILD === '1') process.exit((await preflight()) ? 9 : 0);
+  if (process.env.KAIZEN_BROKER_CHILD === '1') {
+    const githubResult = await github();
+    process.exit(process.env.GH_TOKEN === undefined && !(await preflight()) && githubResult.ok !== true ? 0 : 9);
+  }
   const sleeping = process.argv.includes('sleep');
   const descendant = sleeping
     ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
@@ -136,19 +150,75 @@ const preflight = () => request({
   fs.writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ supervisor: process.pid, descendant: descendant?.pid }));
   if (sleeping) setInterval(() => {}, 1000);
   const supervisor = await preflight();
+  const githubResult = await github();
+  const githubEvidence = githubResult.ok === true
+    ? JSON.parse(Buffer.from(githubResult.stdoutBase64, 'base64').toString('utf8'))
+    : {};
+  const tokenCommandRefused = (await request({
+    operation: 'github-cli',
+    args: ['auth', 'token'],
+    cwd: '/untrusted/workspace',
+    input: '',
+    timeoutMs: 10000,
+    maxOutputBytes: 65536
+  })).ok !== true;
+  const mismatchedRepoRefused = (await request({
+    operation: 'github-cli', args: ['issue', 'view', '1', '--repo', 'o/r', '--repo', 'other/repo'], cwd: '/untrusted/workspace',
+    input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const hostileHostnameRefused = (await request({
+    operation: 'github-cli', args: ['api', 'user', '--hostname', 'example.invalid'], cwd: '/untrusted/workspace',
+    input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const crossRepoApiRefused = (await request({
+    operation: 'github-cli', args: ['api', 'repos/other/repo/issues'], cwd: '/untrusted/workspace',
+    input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const crossRepoGraphqlRefused = (await request({
+    operation: 'github-cli',
+    args: ['api', 'graphql', '-f', 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}', '-F', 'owner=other', '-F', 'name=repo'],
+    cwd: '/untrusted/workspace', input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const unsupportedCommandRefused = (await request({
+    operation: 'github-cli', args: ['repo', 'clone', 'other/repo'], cwd: '/untrusted/workspace',
+    input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const registeredGraphqlAllowed = (await request({
+    operation: 'github-cli',
+    args: ['api', 'graphql', '-f', 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}', '-F', 'owner=o', '-F', 'name=r'],
+    cwd: '/untrusted/workspace', input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok === true;
+  const ownerSearchAllowed = (await request({
+    operation: 'github-cli',
+    args: ['api', 'graphql', '-f', 'query=query($searchQuery:String!){search(query:$searchQuery,type:ISSUE,first:10){nodes{... on PullRequest{number}}}}', '-F', 'searchQuery=is:pr is:open owner:o'],
+    cwd: '/untrusted/workspace', input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok === true;
+  const extraGraphqlRootRefused = (await request({
+    operation: 'github-cli',
+    args: ['api', 'graphql', '-f', 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id} viewer{login}}', '-F', 'owner=o', '-F', 'name=r'],
+    cwd: '/untrusted/workspace', input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const localBodyFileRefused = (await request({
+    operation: 'github-cli', args: ['issue', 'create', '--body-file', '/etc/passwd'], cwd: '/untrusted/workspace',
+    input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  })).ok !== true;
+  const signaledResult = await request({
+    operation: 'github-cli', args: ['api', 'user', '--jq', '__signal__'], cwd: '/untrusted/workspace',
+    input: '', timeoutMs: 10000, maxOutputBytes: 65536
+  });
   const child = spawnSync(process.execPath, [__filename], { env: { ...process.env, KAIZEN_BROKER_CHILD: '1' } });
   let published = false;
   if (process.argv.includes('publish')) {
-    published = await request({
+    published = (await request({
       operation: 'git-push',
       cwd: ${JSON.stringify(sourceRepository)},
       pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
       refspec: 'kaizen/test:refs/heads/kaizen/test',
       expectedRepo: 'o/r',
       expectedSha: ${JSON.stringify(expectedSha)}
-    });
+    })).ok === true;
   }
-  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
+  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
   if (sleeping) return;
   process.exit(supervisor && child.status === 0 && (!process.argv.includes('publish') || published) ? 0 : 1);
 })().catch(() => process.exit(1));
@@ -168,6 +238,7 @@ const preflight = () => request({
 <key>supervisorLauncherExecutable</key><string>${xml(supervisorPath)}</string>
 <key>nodeExecutable</key><string>${xml(process.execPath)}</string>
 <key>gitExecutable</key><string>/usr/bin/git</string>
+<key>githubCliExecutable</key><string>${xml(githubCliPath)}</string>
 <key>cliPath</key><string>${xml(fixturePath)}</string>
 <key>tokenFile</key><string>${xml(path.join(root, 'token'))}</string>
 <key>privateDirectory</key><string>${xml(path.join(root, 'private'))}</string>
@@ -220,6 +291,20 @@ const preflight = () => request({
       supervisor: true,
       childRejected: true,
       published: false,
+      runtimeTokenAbsent: true,
+      tokenCommandRefused: true,
+      mismatchedRepoRefused: true,
+      hostileHostnameRefused: true,
+      crossRepoApiRefused: true,
+      crossRepoGraphqlRefused: true,
+      unsupportedCommandRefused: true,
+      registeredGraphqlAllowed: true,
+      ownerSearchAllowed: true,
+      extraGraphqlRootRefused: true,
+      localBodyFileRefused: true,
+      signaledExitCode: 143,
+      githubEvidence: { token: 'test-token', repo: 'o/r', config: '/var/empty', cwd: '/private/var/empty' },
+      ghConfigDir: '/var/empty',
       toolPath: scheduledToolPath,
       publicationTimeout: '1800000'
     });
@@ -236,6 +321,20 @@ const preflight = () => request({
       supervisor: true,
       childRejected: true,
       published: true,
+      runtimeTokenAbsent: true,
+      tokenCommandRefused: true,
+      mismatchedRepoRefused: true,
+      hostileHostnameRefused: true,
+      crossRepoApiRefused: true,
+      crossRepoGraphqlRefused: true,
+      unsupportedCommandRefused: true,
+      registeredGraphqlAllowed: true,
+      ownerSearchAllowed: true,
+      extraGraphqlRootRefused: true,
+      localBodyFileRefused: true,
+      signaledExitCode: 143,
+      githubEvidence: { token: 'test-token', repo: 'o/r', config: '/var/empty', cwd: '/private/var/empty' },
+      ghConfigDir: '/var/empty',
       toolPath: scheduledToolPath,
       publicationTimeout: '1800000'
     });
@@ -272,13 +371,14 @@ const preflight = () => request({
 });
 
 describe('publication broker source contract', () => {
-  it('keeps wire responses boolean-only and installer credentials root-only', async () => {
+  it('keeps credentials root-only and broker responses bounded', async () => {
     const sourceRoot = path.resolve(import.meta.dirname, '..');
     const brokerSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-publication-broker.swift'), 'utf8');
+    const supervisorSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-supervisor-launcher.swift'), 'utf8');
     const installer = await fs.readFile(path.join(sourceRoot, 'scripts/install-macos-publication-broker.sh'), 'utf8');
     expect(brokerSource).toContain('{\\"ok\\":true}');
     expect(brokerSource).toContain('{\\"ok\\":false}');
-    expect(brokerSource).not.toMatch(/response.*error|error.*response/i);
+    expect(brokerSource).toContain('maximumGitHubOutputBytes');
     expect(installer).toContain('token file mode must be 0600');
     expect(installer).not.toMatch(/cat .*token_file|echo .*token_file/);
     expect(installer).toContain('Refusing to replace an installation without the Kaizen publication broker marker');
@@ -299,5 +399,11 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('org.kaizen-agents.scheduled-publication');
     expect(installer).toContain('cp -p "$build_dir/config.backup" "$config_path"');
     expect(installer).toContain('launchctl bootstrap system "$daemon_path"');
+    expect(brokerSource).toContain('"GH_TOKEN": token');
+    expect(brokerSource).toContain('workingDirectory: "/var/empty"');
+    expect(supervisorSource).not.toContain('GH_TOKEN');
+    expect(supervisorSource).not.toContain('KAIZEN_GITHUB_TOKEN_FD');
+    expect(supervisorSource).toContain('GH_CONFIG_DIR=/var/empty');
+    expect(supervisorSource).toContain('arguments.count == 7 && arguments[1] == "run"');
   });
 });
