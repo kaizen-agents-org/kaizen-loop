@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--kaizen-home <absolute-kaizen-home>] [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -14,6 +14,7 @@ token_file=
 node_executable=
 github_cli_executable=
 source_root=
+kaizen_home=
 repositories=
 scheduled_jobs=
 tool_path=
@@ -30,6 +31,7 @@ while [ "$#" -gt 0 ]; do
     --publication-timeout-ms) [ "$#" -ge 2 ] || usage; publication_timeout_ms=$2; shift 2 ;;
     --node) [ "$#" -ge 2 ] || usage; node_executable=$2; shift 2 ;;
     --github-cli) [ "$#" -ge 2 ] || usage; github_cli_executable=$2; shift 2 ;;
+    --kaizen-home) [ "$#" -ge 2 ] || usage; kaizen_home=$2; shift 2 ;;
     --source) [ "$#" -ge 2 ] || usage; source_root=$2; shift 2 ;;
     *) usage ;;
   esac
@@ -44,6 +46,8 @@ runtime_uid=$(id -u "$runtime_user")
 runtime_gid=$(id -g "$runtime_user")
 runtime_home=$(dscl . -read "/Users/$runtime_user" NFSHomeDirectory | sed 's/^NFSHomeDirectory: //')
 [ -n "$runtime_home" ] || { echo "Could not resolve the runtime user's home." >&2; exit 1; }
+if [ -z "$kaizen_home" ]; then kaizen_home="$runtime_home/.kaizen"; fi
+case "$kaizen_home" in /*) ;; *) echo "--kaizen-home must be absolute." >&2; exit 2 ;; esac
 
 if [ -z "$source_root" ]; then
   source_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
@@ -109,6 +113,7 @@ for repository in $repositories; do
   echo "$repository" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || { echo "Invalid repository: $repository" >&2; exit 2; }
 done
 IFS=$old_ifs
+
 printf '%s\n' "$tool_path" | awk -F: '
   length($0) > 16384 || NF > 128 { exit 1 }
   { for (i = 1; i <= NF; i++) if ($i !~ /^\// || length($i) > 4096) exit 1 }
@@ -123,8 +128,37 @@ for scheduled_job in $scheduled_jobs; do
 done
 IFS=$old_ifs
 
+registry_path="$kaizen_home/registry.json"
+scheduled_projects=
+IFS='
+'
+for scheduled_job in $scheduled_jobs; do
+  scheduled_identity=${scheduled_job%@*}
+  scheduled_projects="${scheduled_projects}${scheduled_projects:+
+}${scheduled_identity%/*}"
+done
+IFS=$old_ifs
+"$node_executable" -e '
+const fs = require("node:fs");
+const registryPath = process.argv[1];
+const projects = process.argv.slice(2);
+let registry;
+try { registry = JSON.parse(fs.readFileSync(registryPath, "utf8")); }
+catch (error) {
+  console.error(`Could not read Kaizen registry at ${registryPath}: ${error.message}`);
+  process.exit(1);
+}
+const registered = registry && registry.projects && typeof registry.projects === "object" ? registry.projects : {};
+const missing = [...new Set(projects)].filter((project) => !Object.prototype.hasOwnProperty.call(registered, project));
+if (missing.length > 0) {
+  console.error(`Scheduled project(s) are not registered in ${registryPath}: ${missing.join(", ")}`);
+  process.exit(1);
+}
+' "$registry_path" $scheduled_projects
+
 install_root=/usr/local/libexec/kaizen-loop
 config_dir='/Library/Application Support/KaizenLoop'
+log_dir=/var/log/kaizen-loop
 config_path="$config_dir/publication-broker.plist"
 daemon_path=/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
 schedule_daemon_path=/Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
@@ -137,6 +171,8 @@ if [ -d "$config_dir" ]; then
 else
   install -d -o root -g wheel -m 0755 "$config_dir"
 fi
+install -d -o root -g wheel -m 0755 "$log_dir"
+trusted_root_path "$log_dir" || { echo "$log_dir must be root-owned and group/other non-writable." >&2; exit 1; }
 marker="$install_root/.kaizen-publication-broker-install"
 if [ -e "$install_root" ] && [ ! -f "$marker" ]; then
   echo "Refusing to replace an installation without the Kaizen publication broker marker." >&2
@@ -171,6 +207,7 @@ config_stage="$build_dir/publication-broker.plist"
 /usr/libexec/PlistBuddy -c "Add :runtimeUid integer $runtime_uid" "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :runtimeGid integer $runtime_gid" "$config_stage"
 /usr/bin/plutil -insert runtimeHome -string "$runtime_home" "$config_stage"
+/usr/bin/plutil -insert kaizenHome -string "$kaizen_home" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :schedulerSocketPath string /opt/kaizen/run/scheduler.sock' "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :publicationSocketPath string /opt/kaizen/run/publication.sock' "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :scheduledLauncherExecutable string $install_root/bin/kaizen-scheduled-launcher" "$config_stage"
@@ -221,6 +258,8 @@ daemon_stage="$build_dir/publication-broker-daemon.plist"
 /usr/libexec/PlistBuddy -c 'Add :RunAtLoad bool true' "$daemon_stage"
 /usr/libexec/PlistBuddy -c 'Add :KeepAlive bool true' "$daemon_stage"
 /usr/libexec/PlistBuddy -c 'Add :ProcessType string Background' "$daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardOutPath string $log_dir/publication-broker.out.log" "$daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardErrorPath string $log_dir/publication-broker.err.log" "$daemon_stage"
 chown root:wheel "$daemon_stage"
 chmod 0644 "$daemon_stage"
 
@@ -248,6 +287,8 @@ while IFS=: read -r scheduled_hour scheduled_minute; do
   schedule_index=$((schedule_index + 1))
 done < "$schedule_times"
 /usr/libexec/PlistBuddy -c 'Add :ProcessType string Background' "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardOutPath string $log_dir/scheduled-publication.out.log" "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardErrorPath string $log_dir/scheduled-publication.err.log" "$schedule_daemon_stage"
 chown root:wheel "$schedule_daemon_stage"
 chmod 0644 "$schedule_daemon_stage"
 
