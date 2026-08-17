@@ -79,6 +79,14 @@ the broker from `/var/empty` for the repository bound to that registered project
 runtime process and its untrusted children receive neither the credential nor a
 credential-bearing process environment.
 
+The installer uses `<runtime-user home>/.kaizen` by default. When the registered
+projects live in another state directory, pass `--kaizen-home /absolute/path`.
+Every `--scheduled-job` project must already exist in that home's `registry.json`; the
+installer fails before replacing the runtime or launchd configuration when it does not.
+Both root launchd daemons write stdout and stderr to `/var/log/kaizen-loop/` so
+scheduled-dispatch and broker startup failures remain diagnosable with `tail` or
+the Console app.
+
 ## Broker validation
 
 Before authenticated push, the broker:

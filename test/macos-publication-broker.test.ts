@@ -218,7 +218,7 @@ const github = () => request({
       expectedSha: ${JSON.stringify(expectedSha)}
     })).ok === true;
   }
-  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
+  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, kaizenHome: process.env.KAIZEN_HOME, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
   if (sleeping) return;
   process.exit(supervisor && child.status === 0 && (!process.argv.includes('publish') || published) ? 0 : 1);
 })().catch(() => process.exit(1));
@@ -232,6 +232,7 @@ const github = () => request({
 <key>runtimeUid</key><integer>${process.getuid!()}</integer>
 <key>runtimeGid</key><integer>${process.getgid!()}</integer>
 <key>runtimeHome</key><string>${xml(user.homedir)}</string>
+<key>kaizenHome</key><string>${xml(path.join(root, 'custom-kaizen-home'))}</string>
 <key>schedulerSocketPath</key><string>${xml(schedulerSocket)}</string>
 <key>publicationSocketPath</key><string>${xml(publicationSocket)}</string>
 <key>scheduledLauncherExecutable</key><string>${xml(scheduledPath)}</string>
@@ -305,6 +306,7 @@ const github = () => request({
       signaledExitCode: 143,
       githubEvidence: { token: 'test-token', repo: 'o/r', config: '/var/empty', cwd: '/private/var/empty' },
       ghConfigDir: '/var/empty',
+      kaizenHome: path.join(root, 'custom-kaizen-home'),
       toolPath: scheduledToolPath,
       publicationTimeout: '1800000'
     });
@@ -335,6 +337,7 @@ const github = () => request({
       signaledExitCode: 143,
       githubEvidence: { token: 'test-token', repo: 'o/r', config: '/var/empty', cwd: '/private/var/empty' },
       ghConfigDir: '/var/empty',
+      kaizenHome: path.join(root, 'custom-kaizen-home'),
       toolPath: scheduledToolPath,
       publicationTimeout: '1800000'
     });
@@ -385,6 +388,13 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('install -o root -g wheel -m 0644 "$config_stage" "$config_path"');
     expect(installer).toContain('install -o root -g wheel -m 0644 "$daemon_stage" "$daemon_path"');
     expect(installer).toContain('chmod 0755 "$config_dir"');
+    expect(installer).toContain('--kaizen-home <absolute-kaizen-home>');
+    expect(installer).toContain('Scheduled project(s) are not registered');
+    expect(installer).toContain('sudo -u "$runtime_user" -- "$node_executable"');
+    expect(installer).toContain('plutil -insert kaizenHome');
+    expect(installer).toContain('install -o root -g wheel -m 0600 /dev/null');
+    expect(installer).toContain('StandardOutPath');
+    expect(installer).toContain('StandardErrorPath');
     expect(brokerSource).toContain('chown(config.privateDirectory, 0, config.runtimeGid)');
     expect(brokerSource).toContain('chmod(config.privateDirectory, 0o710)');
     expect(brokerSource).toContain('processPath(pid) == config.scheduledLauncherExecutable');
@@ -404,6 +414,7 @@ describe('publication broker source contract', () => {
     expect(supervisorSource).not.toContain('GH_TOKEN');
     expect(supervisorSource).not.toContain('KAIZEN_GITHUB_TOKEN_FD');
     expect(supervisorSource).toContain('GH_CONFIG_DIR=/var/empty');
+    expect(supervisorSource).toContain('KAIZEN_HOME=\\(config.kaizenHome)');
     expect(supervisorSource).toContain('arguments.count == 7 && arguments[1] == "run"');
   });
 });

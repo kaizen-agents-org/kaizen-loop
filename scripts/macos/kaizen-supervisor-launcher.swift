@@ -6,6 +6,7 @@ private struct SupervisorConfig: Decodable {
     let runtimeUid: UInt32
     let runtimeGid: UInt32
     let runtimeHome: String
+    let kaizenHome: String
     let publicationSocketPath: String
     let nodeExecutable: String
     let cliPath: String
@@ -53,7 +54,7 @@ private func dropPrivileges(_ config: SupervisorConfig) -> Never {
             "LOGNAME=\(config.runtimeUser)",
             "PATH=\(toolPath)",
             "GH_CONFIG_DIR=/var/empty",
-            "KAIZEN_HOME=\(config.runtimeHome)/.kaizen",
+            "KAIZEN_HOME=\(config.kaizenHome)",
             "KAIZEN_GITHUB_TOKEN_SOCKET=\(config.publicationSocketPath)",
             "KAIZEN_GITHUB_BROKER_CAPABILITY=\(capability)",
             "KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS=\(publicationTimeoutMs)"
