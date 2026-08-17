@@ -138,7 +138,7 @@ for scheduled_job in $scheduled_jobs; do
 }${scheduled_identity%/*}"
 done
 IFS=$old_ifs
-"$node_executable" -e '
+sudo -u "$runtime_user" -- "$node_executable" -e '
 const fs = require("node:fs");
 const registryPath = process.argv[1];
 const projects = process.argv.slice(2);
@@ -159,6 +159,10 @@ if (missing.length > 0) {
 install_root=/usr/local/libexec/kaizen-loop
 config_dir='/Library/Application Support/KaizenLoop'
 log_dir=/var/log/kaizen-loop
+broker_out_log="$log_dir/publication-broker.out.log"
+broker_err_log="$log_dir/publication-broker.err.log"
+scheduled_out_log="$log_dir/scheduled-publication.out.log"
+scheduled_err_log="$log_dir/scheduled-publication.err.log"
 config_path="$config_dir/publication-broker.plist"
 daemon_path=/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
 schedule_daemon_path=/Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
@@ -173,6 +177,10 @@ else
 fi
 install -d -o root -g wheel -m 0755 "$log_dir"
 trusted_root_path "$log_dir" || { echo "$log_dir must be root-owned and group/other non-writable." >&2; exit 1; }
+install -o root -g wheel -m 0600 /dev/null "$broker_out_log"
+install -o root -g wheel -m 0600 /dev/null "$broker_err_log"
+install -o root -g wheel -m 0600 /dev/null "$scheduled_out_log"
+install -o root -g wheel -m 0600 /dev/null "$scheduled_err_log"
 marker="$install_root/.kaizen-publication-broker-install"
 if [ -e "$install_root" ] && [ ! -f "$marker" ]; then
   echo "Refusing to replace an installation without the Kaizen publication broker marker." >&2
@@ -258,8 +266,8 @@ daemon_stage="$build_dir/publication-broker-daemon.plist"
 /usr/libexec/PlistBuddy -c 'Add :RunAtLoad bool true' "$daemon_stage"
 /usr/libexec/PlistBuddy -c 'Add :KeepAlive bool true' "$daemon_stage"
 /usr/libexec/PlistBuddy -c 'Add :ProcessType string Background' "$daemon_stage"
-/usr/libexec/PlistBuddy -c "Add :StandardOutPath string $log_dir/publication-broker.out.log" "$daemon_stage"
-/usr/libexec/PlistBuddy -c "Add :StandardErrorPath string $log_dir/publication-broker.err.log" "$daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardOutPath string $broker_out_log" "$daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardErrorPath string $broker_err_log" "$daemon_stage"
 chown root:wheel "$daemon_stage"
 chmod 0644 "$daemon_stage"
 
@@ -287,8 +295,8 @@ while IFS=: read -r scheduled_hour scheduled_minute; do
   schedule_index=$((schedule_index + 1))
 done < "$schedule_times"
 /usr/libexec/PlistBuddy -c 'Add :ProcessType string Background' "$schedule_daemon_stage"
-/usr/libexec/PlistBuddy -c "Add :StandardOutPath string $log_dir/scheduled-publication.out.log" "$schedule_daemon_stage"
-/usr/libexec/PlistBuddy -c "Add :StandardErrorPath string $log_dir/scheduled-publication.err.log" "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardOutPath string $scheduled_out_log" "$schedule_daemon_stage"
+/usr/libexec/PlistBuddy -c "Add :StandardErrorPath string $scheduled_err_log" "$schedule_daemon_stage"
 chown root:wheel "$schedule_daemon_stage"
 chmod 0644 "$schedule_daemon_stage"
 

@@ -390,7 +390,9 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('chmod 0755 "$config_dir"');
     expect(installer).toContain('--kaizen-home <absolute-kaizen-home>');
     expect(installer).toContain('Scheduled project(s) are not registered');
+    expect(installer).toContain('sudo -u "$runtime_user" -- "$node_executable"');
     expect(installer).toContain('plutil -insert kaizenHome');
+    expect(installer).toContain('install -o root -g wheel -m 0600 /dev/null');
     expect(installer).toContain('StandardOutPath');
     expect(installer).toContain('StandardErrorPath');
     expect(brokerSource).toContain('chown(config.privateDirectory, 0, config.runtimeGid)');
