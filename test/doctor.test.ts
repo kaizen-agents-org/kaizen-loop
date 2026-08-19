@@ -15,6 +15,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+const doctorNotes = 'Verification: smoke response returned.\nResidual risk: none.';
+
 describe('doctorProject', () => {
   it('reports drift while using the fleet workspace config for operational checks', async () => {
     const { repo, workspace } = await setupProject();
@@ -29,7 +31,7 @@ describe('doctorProject', () => {
         await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: 'doctor smoke ok',
-          notes: '',
+          notes: doctorNotes,
           discoveredIssues: []
         });
       }
@@ -57,7 +59,7 @@ describe('doctorProject', () => {
         await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: 'doctor smoke ok',
-          notes: '',
+          notes: doctorNotes,
           discoveredIssues: []
         });
       }
@@ -163,7 +165,7 @@ describe('doctorProject', () => {
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'builder-agent' && args.length === 0) {
         await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
-          status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+          status: 'fixed', summary: 'doctor smoke ok', notes: doctorNotes, discoveredIssues: []
         });
       }
       return result(command, args, options?.cwd, 'ok');
@@ -307,7 +309,7 @@ describe('doctorProject', () => {
     const runner = vi.fn<CommandRunner>(async (command, args, options) => {
       if (command === 'builder-agent' && args.length === 0) {
         await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
-          status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+          status: 'fixed', summary: 'doctor smoke ok', notes: doctorNotes, discoveredIssues: []
         });
       }
       if (command === 'git' && args[0] === 'ls-remote') {
@@ -372,7 +374,7 @@ function workingDoctorRunner() {
   return vi.fn<CommandRunner>(async (command, args, options) => {
     if (command === 'builder-agent' && args.length === 0) {
       await writeBuilderResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
-        status: 'fixed', summary: 'doctor smoke ok', notes: '', discoveredIssues: []
+        status: 'fixed', summary: 'doctor smoke ok', notes: doctorNotes, discoveredIssues: []
       });
     }
     return result(command, args, options?.cwd, 'ok');

@@ -5,19 +5,49 @@ import { buildUntrustedEnv, type CommandRunner } from '../utils/command.js';
 import { envWithKaizenTemp } from '../utils/temp.js';
 import type { AgentAdapter, AgentRequest, AgentResult } from './types.js';
 
-const discoveredIssueSchema = z
+const PARTIAL_NOTE_LABELS = ['Completed scope', 'Incomplete scope', 'Verification', 'Residual risk'];
+const FIXED_NOTE_LABELS = ['Verification', 'Residual risk'];
+const NOTE_SECTION_PREFIX = '(?:^|[\\s.;])(?:(?:[-*+]|\\d+[.)])\\s+)?';
+const noteSectionPattern = (labelPattern: string) => `(?:${labelPattern}\\s*:|\\*\\*${labelPattern}\\s*:\\*\\*)`;
+const MEANINGFUL_NOTE_CONTENT = /[^\s.;,:—–\-_*+|#>]/;
+const SKIPPED_VERIFICATION = /^(?:skipped|\*\*skipped\*\*|__skipped__|\*skipped\*|_skipped_|`skipped`)(?=$|[\s.;,:—–-])/i;
+const SKIPPED_VERIFICATION_WITH_REASON = /^(?:skipped|\*\*skipped\*\*|__skipped__|\*skipped\*|_skipped_|`skipped`)[ \t]*[—–-][ \t]*([\s\S]*)$/i;
+
+const discoveredIssueInputSchema = z
   .object({
-    title: z.string().min(1),
+    title: z.string(),
     body: z.string().optional(),
-    expected: z.string().optional(),
-    evidence: z.string().optional(),
+    expected: z.string(),
+    evidence: z.string(),
     repo: z.string().optional(),
     severity: z.string().optional(),
     labels: z.array(z.string()).optional()
   })
-  .strict();
+  .strict()
+  .superRefine((issue, context) => {
+    for (const field of ['title', 'expected', 'evidence'] as const) {
+      if (!issue[field].trim()) {
+        context.addIssue({ code: 'custom', path: [field], message: `${field} must be a non-empty string` });
+      }
+    }
+    issue.labels?.forEach((label, index) => {
+      if (!label.trim()) {
+        context.addIssue({ code: 'custom', path: ['labels', index], message: 'label must be a non-empty string' });
+      }
+    });
+  });
 
-const builderPayloadSchema = z
+const discoveredIssueSchema = discoveredIssueInputSchema.transform((issue) => ({
+  title: issue.title.trim(),
+  expected: issue.expected.trim(),
+  evidence: issue.evidence.trim(),
+  ...optionalTrimmedField('body', issue.body),
+  ...optionalTrimmedField('repo', issue.repo),
+  ...optionalTrimmedField('severity', issue.severity),
+  ...(issue.labels ? { labels: [...new Set(issue.labels.map((label) => label.trim()))] } : {})
+}));
+
+const builderPayloadInputSchema = z
   .object({
     status: z.enum(['fixed', 'partial', 'blocked']),
     summary: z.string(),
@@ -35,12 +65,35 @@ const builderPayloadSchema = z
         'other_approval'
       ]),
       requestKey: z.string().regex(/^[a-z0-9][a-z0-9._:-]*$/),
-      question: z.string().min(1)
+      question: z.string()
     }).strict().optional(),
     discoveredIssues: z.array(discoveredIssueSchema).default([])
   })
   .strict()
   .superRefine((payload, context) => {
+    if (!payload.summary.trim()) {
+      context.addIssue({ code: 'custom', path: ['summary'], message: 'summary must be a non-empty string' });
+    }
+    const labels = payload.status === 'fixed'
+      ? FIXED_NOTE_LABELS
+      : payload.status === 'partial'
+        ? PARTIAL_NOTE_LABELS
+        : undefined;
+    if (labels && !hasStructuredNotes(payload.notes, labels)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['notes'],
+        message: payload.status === 'fixed'
+          ? 'notes must describe verification status and residual risk when status is fixed'
+          : 'notes must describe completed scope, incomplete scope, verification status, and residual risk when status is partial'
+      });
+    }
+    const blockedReason = payload.blockedReason?.trim();
+    if (payload.status === 'blocked' && !blockedReason) {
+      context.addIssue({ code: 'custom', path: ['blockedReason'], message: 'blockedReason must be a non-empty string when status is blocked' });
+    } else if (payload.status !== 'blocked' && blockedReason) {
+      context.addIssue({ code: 'custom', path: ['blockedReason'], message: 'blockedReason is only valid when status is blocked' });
+    }
     if (payload.humanRequest && payload.status !== 'blocked') {
       context.addIssue({
         code: 'custom',
@@ -48,7 +101,45 @@ const builderPayloadSchema = z
         message: 'humanRequest is only valid when status is blocked'
       });
     }
+    if (payload.humanRequest && !payload.humanRequest.question.trim()) {
+      context.addIssue({ code: 'custom', path: ['humanRequest', 'question'], message: 'question must be a non-empty string' });
+    }
   });
+
+const builderPayloadSchema = builderPayloadInputSchema.transform((payload) => ({
+  status: payload.status,
+  summary: payload.summary.trim(),
+  notes: payload.notes,
+  discoveredIssues: payload.discoveredIssues,
+  ...(payload.blockedReason?.trim() ? { blockedReason: payload.blockedReason.trim() } : {}),
+  ...(payload.humanRequest ? {
+    humanRequest: { ...payload.humanRequest, question: payload.humanRequest.question.trim() }
+  } : {})
+}));
+
+function optionalTrimmedField<Key extends 'body' | 'repo' | 'severity'>(key: Key, value: string | undefined): Partial<Record<Key, string>> {
+  const trimmed = value?.trim();
+  return trimmed ? { [key]: trimmed } as Record<Key, string> : {};
+}
+
+function hasStructuredNotes(notes: string, labels: string[]): boolean {
+  const sectionPattern = noteSectionPattern(`(?:${labels.join('|')})`);
+  const contentPattern = `(?=(?:(?!${NOTE_SECTION_PREFIX}${sectionPattern})[\\s\\S])*?[^\\s.;,:—–\\-_*+|#>])`;
+  if (!labels.every((label) => (
+    notes.match(new RegExp(`${NOTE_SECTION_PREFIX}${noteSectionPattern(label)}`, 'g'))?.length === 1 &&
+    new RegExp(`${NOTE_SECTION_PREFIX}${noteSectionPattern(label)}${contentPattern}`).test(notes)
+  ))) {
+    return false;
+  }
+
+  const verification = new RegExp(
+    `${NOTE_SECTION_PREFIX}${noteSectionPattern('Verification')}\\s*([\\s\\S]*?)(?=${NOTE_SECTION_PREFIX}${sectionPattern}|$)`
+  ).exec(notes)?.[1].trim();
+  if (!verification || !SKIPPED_VERIFICATION.test(verification)) return true;
+
+  const reason = SKIPPED_VERIFICATION_WITH_REASON.exec(verification)?.[1];
+  return Boolean(reason && MEANINGFUL_NOTE_CONTENT.test(reason));
+}
 
 export interface BuilderAgentOptions {
   command: string;

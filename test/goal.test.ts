@@ -12,6 +12,8 @@ import { projectStateDir } from '../src/utils/paths.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 import { resolveKaizenTempDir } from '../src/utils/temp.js';
 
+const fixedBuilderNotes = 'Verification: npm test passed.\nResidual risk: none.';
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -650,7 +652,7 @@ function goalRunner(options: {
 
     if (command === 'builder-agent' && args[0] === '--version') return result(command, args, options.workspace, 'ok');
     if (command === 'builder-agent') {
-      await writeJsonResult(runOptions?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'fixed', notes: '' });
+      await writeJsonResult(runOptions?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'fixed', notes: fixedBuilderNotes });
       return result(command, args, runOptions?.cwd, 'built');
     }
 

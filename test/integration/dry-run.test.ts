@@ -14,6 +14,7 @@ import { projectStateDir } from '../../src/utils/paths.js';
 import { trustedRunner } from '../helpers/trustedRunner.js';
 
 const testVerifierCommit = 'b'.repeat(40);
+const fixedBuilderNotes = 'Verification: npm test passed.\nResidual risk: none.';
 
 function isGitCommand(command: string): boolean {
   return /^git(?:\.exe)?$/i.test(path.basename(command));
@@ -2753,7 +2754,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: '直した',
-          notes: 'Protected path changed: .github/workflows/ci.yml'
+          notes: `${fixedBuilderNotes}\nProtected path changed: .github/workflows/ci.yml`
         });
         return result(command, args, workspace, 'built');
       }
@@ -2869,7 +2870,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: '直した',
-          notes: ''
+          notes: fixedBuilderNotes
         });
         return result(command, args, workspace, 'built');
       }
@@ -2946,7 +2947,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
@@ -3033,7 +3034,7 @@ describe('runKaizen PR flow', () => {
         maxActiveBuilders = Math.max(maxActiveBuilders, activeBuilders);
         builderWorkspaces.add(String(options?.cwd));
         await new Promise((resolve) => setTimeout(resolve, 20));
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         activeBuilders -= 1;
         return result(command, args, options?.cwd, 'built');
       }
@@ -3140,7 +3141,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: '直した',
-          notes: '',
+          notes: fixedBuilderNotes,
           discoveredIssues: [
             {
               title: 'Verifier false-positive on legacy status words',
@@ -3311,7 +3312,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(resultPath, {
           status: 'fixed',
           summary: 'implemented',
-          notes: '',
+          notes: fixedBuilderNotes,
           humanRequest: { reasonCode: 'credentials', requestKey: 'invalid-sibling', question: 'Invalid on fixed output' }
         });
         if (typeof resultPath !== 'string') throw new Error('missing result path');
@@ -3401,7 +3402,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: '直した',
-          notes: '',
+          notes: fixedBuilderNotes,
           discoveredIssues: [
             {
               title: 'Verifier workspace verification failed',
@@ -3532,12 +3533,13 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: '直した',
-          notes: '',
+          notes: fixedBuilderNotes,
           discoveredIssues: [
             {
               title: 'External repo bug',
               repo: 'external/project',
               body: 'A separate bug was observed.',
+              expected: 'The external project should avoid the observed bug.',
               evidence: 'log excerpt',
               severity: 'P2'
             }
@@ -3615,18 +3617,20 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: '直した',
-          notes: '',
+          notes: fixedBuilderNotes,
           discoveredIssues: [
             {
               title: 'CodeRabbit rule regression',
               repo: 'coderabbit',
               body: 'CodeRabbit configuration missed a project rule.',
+              expected: 'CodeRabbit should apply the project rule.',
               evidence: 'coderabbit.yml'
             },
             {
               title: 'Renovate preset regression',
               repo: 'renovate-config',
               body: 'Renovate configuration missed a preset.',
+              expected: 'Renovate should apply the preset.',
               evidence: 'renovate.json'
             }
           ]
@@ -3720,7 +3724,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
@@ -3870,7 +3874,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, options?.cwd, 'built');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
@@ -3945,7 +3949,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'builder-agent') {
         builderRuns += 1;
         builderPrompts.push(String(options?.input ?? ''));
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: `直した${builderRuns}`, notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: `直した${builderRuns}`, notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
@@ -4072,7 +4076,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
@@ -4176,7 +4180,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
@@ -4273,7 +4277,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: 'Refreshed the session cookie before it expires so users stay logged in.',
-          notes: 'Also added a regression test for the refresh timing edge case.'
+          notes: `${fixedBuilderNotes}\nAlso added a regression test for the refresh timing edge case.`
         });
         return result(command, args, workspace, 'built');
       }
@@ -4392,7 +4396,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
@@ -4436,7 +4440,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'Implemented safely.', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'Implemented safely.', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');
@@ -4486,7 +4490,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
@@ -4551,7 +4555,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(
           command,
           args,
@@ -4637,7 +4641,7 @@ describe('runKaizen PR flow', () => {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
           status: 'fixed',
           summary: 'origin/main already contains the requested change.',
-          notes: ''
+          notes: fixedBuilderNotes
         });
         return result(command, args, workspace, 'built');
       }
@@ -4716,7 +4720,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
-          status: 'fixed', summary: 'Already fixed.', notes: ''
+          status: 'fixed', summary: 'Already fixed.', notes: fixedBuilderNotes
         });
         return result(command, args, workspace, 'built');
       }
@@ -4794,7 +4798,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'builder-agent') {
         builderPrompt = String(options?.input ?? '');
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
-          status: 'fixed', summary: 'Already fixed.', notes: ''
+          status: 'fixed', summary: 'Already fixed.', notes: fixedBuilderNotes
         });
         return result(command, args, workspace, 'built');
       }
@@ -4862,7 +4866,7 @@ describe('runKaizen PR flow', () => {
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
         await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
-          status: 'fixed', summary: 'Already fixed.', notes: ''
+          status: 'fixed', summary: 'Already fixed.', notes: fixedBuilderNotes
         });
         return result(command, args, workspace, 'built');
       }

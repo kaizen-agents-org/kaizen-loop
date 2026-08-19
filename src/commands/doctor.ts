@@ -115,7 +115,7 @@ export async function doctorProject(options: { cwd: string; project?: string; re
         'Kaizen doctor smoke test.',
         'Do not inspect or edit files.',
         'Return only this JSON in a json code fence:',
-        '{"status":"fixed","summary":"doctor smoke ok","notes":"","discoveredIssues":[]}'
+        '{"status":"fixed","summary":"doctor smoke ok","notes":"Verification: smoke response returned.\\nResidual risk: none.","discoveredIssues":[]}'
       ].join('\n'),
       timeoutMs: 60_000,
       preferredBackends,
