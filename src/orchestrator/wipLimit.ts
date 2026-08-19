@@ -12,7 +12,7 @@ export interface GeneratedPullRequestBacklog {
 export const GENERATED_PULL_REQUEST_FETCH_LIMIT = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GENERATED_BRANCH_PREFIXES = ['kaizen/', 'codex/', 'claude/'];
-const GENERATED_TITLE_PREFIXES = ['[scout]', '[monitor]', 'kaizen:'];
+const GENERATED_TITLE_PREFIXES = ['[WIP] kaizen:', '[scout]', '[monitor]', 'kaizen:'];
 
 export function summarizeGeneratedPullRequestBacklog(options: {
   pullRequests: GitHubPullRequest[];
@@ -47,8 +47,7 @@ export function isGeneratedPullRequest(pullRequest: GitHubPullRequest): boolean 
   if (isSyncPullRequest(pullRequest)) return false;
   if (GENERATED_BRANCH_PREFIXES.some((prefix) => pullRequest.headRefName?.startsWith(prefix))) return true;
   if (GENERATED_TITLE_PREFIXES.some((prefix) => pullRequest.title?.startsWith(prefix))) return true;
-  const author = pullRequest.author;
-  return Boolean(author?.is_bot || author?.type?.toLowerCase() === 'bot' || author?.login?.endsWith('[bot]'));
+  return false;
 }
 
 export function isSyncPullRequest(pullRequest: GitHubPullRequest): boolean {
