@@ -1,7 +1,7 @@
 export const GENERATED_PULL_REQUEST_FETCH_LIMIT = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GENERATED_BRANCH_PREFIXES = ['kaizen/', 'codex/', 'claude/'];
-const GENERATED_TITLE_PREFIXES = ['[scout]', '[monitor]', 'kaizen:'];
+const GENERATED_TITLE_PREFIXES = ['[WIP] kaizen:', '[scout]', '[monitor]', 'kaizen:'];
 export function summarizeGeneratedPullRequestBacklog(options) {
     const generatedPullRequests = options.pullRequests.filter(isGeneratedPullRequest);
     const normalizedRepo = options.repo.toLowerCase();

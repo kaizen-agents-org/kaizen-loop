@@ -10,7 +10,7 @@ describe('isGeneratedPullRequest', () => {
     }
   );
 
-  it.each(['[scout] Improve WIP classification', '[monitor] Repair CI', 'kaizen: update generated docs'])(
+  it.each(['[WIP] kaizen: Save checkpoint', '[scout] Improve WIP classification', '[monitor] Repair CI', 'kaizen: update generated docs'])(
     'classifies the human-authored %s title as generated',
     (title) => {
       expect(isGeneratedPullRequest(pullRequest({ title }))).toBe(true);
@@ -39,6 +39,14 @@ describe('isGeneratedPullRequest', () => {
   it('still classifies an explicitly marked bot-authored pull request as generated', () => {
     expect(isGeneratedPullRequest(pullRequest({
       headRefName: 'kaizen/issue-398-fix',
+      author: { login: 'github-actions[bot]', type: 'Bot' }
+    }))).toBe(true);
+  });
+
+  it('classifies a checkpoint pull request with a custom branch prefix as generated', () => {
+    expect(isGeneratedPullRequest(pullRequest({
+      headRefName: 'custom/issue-398-fix',
+      title: '[WIP] kaizen: Save partial implementation (#398)',
       author: { login: 'github-actions[bot]', type: 'Bot' }
     }))).toBe(true);
   });
