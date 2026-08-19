@@ -29,8 +29,7 @@ export function isGeneratedPullRequest(pullRequest) {
         return true;
     if (GENERATED_TITLE_PREFIXES.some((prefix) => pullRequest.title?.startsWith(prefix)))
         return true;
-    const author = pullRequest.author;
-    return Boolean(author?.is_bot || author?.type?.toLowerCase() === 'bot' || author?.login?.endsWith('[bot]'));
+    return false;
 }
 export function isSyncPullRequest(pullRequest) {
     return [

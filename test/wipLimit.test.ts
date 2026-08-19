@@ -24,6 +24,25 @@ describe('isGeneratedPullRequest', () => {
     }))).toBe(false);
   });
 
+  it.each([
+    { login: 'renovate[bot]', type: 'Bot' },
+    { login: 'dependabot[bot]', type: 'Bot' },
+    { login: 'github-actions[bot]', type: 'Bot' }
+  ])('does not classify an unmarked bot-authored pull request as generated', (author) => {
+    expect(isGeneratedPullRequest(pullRequest({
+      headRefName: 'feature/dependency-update',
+      title: 'Update dependency lockfile',
+      author
+    }))).toBe(false);
+  });
+
+  it('still classifies an explicitly marked bot-authored pull request as generated', () => {
+    expect(isGeneratedPullRequest(pullRequest({
+      headRefName: 'kaizen/issue-398-fix',
+      author: { login: 'github-actions[bot]', type: 'Bot' }
+    }))).toBe(true);
+  });
+
   it('does not classify an ordinary human-authored pull request as generated', () => {
     expect(isGeneratedPullRequest(pullRequest({
       headRefName: 'feature/update-readme',
