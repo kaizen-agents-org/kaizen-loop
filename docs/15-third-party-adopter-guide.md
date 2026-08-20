@@ -215,7 +215,7 @@ threads, before merging.
 For the local scheduled path, two backpressure settings limit unattended intake:
 
 - `run.maxOpenPullRequests` limits open pull requests in one repository;
-- `safety.wipLimit` limits open generated pull requests across the owner.
+- `safety.wipLimit` limits open generated pull requests across registered repositories under the target owner; unregistered repositories do not consume the limit.
 
 When either limit is reached, scheduled intake skips new work so maintainers can
 review the oldest generated pull requests first. Explicit `kaizen fix` runs are

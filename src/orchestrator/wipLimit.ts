@@ -14,6 +14,20 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const GENERATED_BRANCH_PREFIXES = ['kaizen/', 'codex/', 'claude/'];
 const GENERATED_TITLE_PREFIXES = ['[WIP] kaizen:', '[scout]', '[monitor]', 'kaizen:'];
 
+export function pullRequestsInRepositories(
+  pullRequests: GitHubPullRequest[],
+  repositories: Iterable<string>
+): GitHubPullRequest[] {
+  const normalizedRepositories = new Set(Array.from(repositories, (repo) => repo.toLowerCase()));
+  return pullRequests.filter((pullRequest) => {
+    const repo = pullRequest.repository?.nameWithOwner;
+    if (repo === undefined) {
+      throw new Error(`Cannot scope pull request #${pullRequest.number}: repository is missing`);
+    }
+    return normalizedRepositories.has(repo.toLowerCase());
+  });
+}
+
 export function summarizeGeneratedPullRequestBacklog(options: {
   pullRequests: GitHubPullRequest[];
   repo: string;

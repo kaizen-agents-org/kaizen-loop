@@ -7,10 +7,11 @@ import { projectStateDir } from '../utils/paths.js';
 import { GitClient } from '../workspace/git.js';
 import { listPrGuardianJobs } from '../orchestrator/prGuardian.js';
 import { listImplementationStates } from '../orchestrator/implementationState.js';
-import { GENERATED_PULL_REQUEST_FETCH_LIMIT, isGeneratedPullRequest, summarizeGeneratedPullRequestBacklog } from '../orchestrator/wipLimit.js';
+import { GENERATED_PULL_REQUEST_FETCH_LIMIT, isGeneratedPullRequest, pullRequestsInRepositories, summarizeGeneratedPullRequestBacklog } from '../orchestrator/wipLimit.js';
 const PULL_REQUEST_RECONCILIATION_CONCURRENCY = 4;
 export async function statusProject(options) {
     const resolved = await resolveProject(options.project, options.cwd);
+    const registry = options.metrics ? await loadRegistry() : undefined;
     const operationalConfig = await loadOperationalConfig(resolved.project, { preferWorkspace: true });
     const config = operationalConfig.config;
     const github = new GitHubClient(options.runCommand, operationalConfig.path);
@@ -21,6 +22,7 @@ export async function statusProject(options) {
             github,
             owner: resolved.project.repo.split('/')[0],
             repo: resolved.project.repo,
+            registeredRepos: Object.values(registry?.projects ?? {}).map((project) => project.repo),
             wipLimit: config.safety.wipLimit
         })
         : undefined;
@@ -302,8 +304,10 @@ async function collectGeneratedPullRequestMetrics(options) {
         options.github.searchOpenPullRequestsForOwner(options.owner, GENERATED_PULL_REQUEST_FETCH_LIMIT),
         options.github.searchMergedPullRequestsForOwner(options.owner, reviewWindowSince.toISOString().slice(0, 10), GENERATED_PULL_REQUEST_FETCH_LIMIT)
     ]);
-    const openGeneratedPullRequests = openPullRequests.filter(isGeneratedPullRequest);
-    const mergedGeneratedPullRequests = mergedPullRequests.filter((pullRequest) => {
+    const registeredOpenPullRequests = pullRequestsInRepositories(openPullRequests, options.registeredRepos);
+    const registeredMergedPullRequests = pullRequestsInRepositories(mergedPullRequests, options.registeredRepos);
+    const openGeneratedPullRequests = registeredOpenPullRequests.filter(isGeneratedPullRequest);
+    const mergedGeneratedPullRequests = registeredMergedPullRequests.filter((pullRequest) => {
         if (!isGeneratedPullRequest(pullRequest))
             return false;
         const mergedAt = Date.parse(pullRequest.mergedAt ?? '');
@@ -312,7 +316,7 @@ async function collectGeneratedPullRequestMetrics(options) {
     const sourcePullRequests = mergedGeneratedPullRequests.map(toMergedGeneratedPullRequestMetric);
     return {
         wipLimit: summarizeGeneratedPullRequestBacklog({
-            pullRequests: openPullRequests,
+            pullRequests: registeredOpenPullRequests,
             repo: options.repo,
             wipLimit: options.wipLimit
         }),

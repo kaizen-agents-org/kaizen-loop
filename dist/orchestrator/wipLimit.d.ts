@@ -8,6 +8,7 @@ export interface GeneratedPullRequestBacklog {
     oldestGeneratedPullRequestAgeDays?: number;
 }
 export declare const GENERATED_PULL_REQUEST_FETCH_LIMIT = 1000;
+export declare function pullRequestsInRepositories(pullRequests: GitHubPullRequest[], repositories: Iterable<string>): GitHubPullRequest[];
 export declare function summarizeGeneratedPullRequestBacklog(options: {
     pullRequests: GitHubPullRequest[];
     repo: string;

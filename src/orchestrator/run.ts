@@ -76,6 +76,7 @@ import {
   GENERATED_PULL_REQUEST_FETCH_LIMIT,
   generatedPullRequestWipLimitReason,
   isSyncPullRequest,
+  pullRequestsInRepositories,
   summarizeGeneratedPullRequestBacklog
 } from './wipLimit.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
@@ -1116,8 +1117,13 @@ async function applyGeneratedPullRequestWipLimit(options: {
   if (!options.automatic || options.selection.selected.length === 0) return options.selection;
   const owner = options.repo.split('/')[0];
   const pullRequests = await options.github.searchOpenPullRequestsForOwner(owner, GENERATED_PULL_REQUEST_FETCH_LIMIT);
-  const backlog = summarizeGeneratedPullRequestBacklog({
+  const registry = await loadRegistry();
+  const registeredPullRequests = pullRequestsInRepositories(
     pullRequests,
+    Object.values(registry.projects).map((project) => project.repo)
+  );
+  const backlog = summarizeGeneratedPullRequestBacklog({
+    pullRequests: registeredPullRequests,
     repo: options.repo,
     wipLimit: options.config.safety.wipLimit
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isGeneratedPullRequest } from '../src/orchestrator/wipLimit.js';
+import { isGeneratedPullRequest, pullRequestsInRepositories } from '../src/orchestrator/wipLimit.js';
 import type { GitHubPullRequest } from '../src/github/types.js';
 
 describe('isGeneratedPullRequest', () => {
@@ -56,6 +56,20 @@ describe('isGeneratedPullRequest', () => {
       headRefName: 'feature/update-readme',
       title: 'Update the README'
     }))).toBe(false);
+  });
+});
+
+describe('pullRequestsInRepositories', () => {
+  it('keeps only pull requests whose repository is registered, case-insensitively', () => {
+    const registered = pullRequest({ number: 1, repository: { nameWithOwner: 'Owner/Registered' } });
+    const unregistered = pullRequest({ number: 2, repository: { nameWithOwner: 'owner/unregistered' } });
+
+    expect(pullRequestsInRepositories([registered, unregistered], ['owner/registered'])).toEqual([registered]);
+  });
+
+  it('fails closed when a pull request has no repository identity', () => {
+    expect(() => pullRequestsInRepositories([pullRequest({ number: 3 })], ['owner/registered']))
+      .toThrow('Cannot scope pull request #3: repository is missing');
   });
 });
 
