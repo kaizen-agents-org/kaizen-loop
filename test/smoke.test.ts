@@ -9,6 +9,8 @@ import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 
+const fixedBuilderNotes = 'Verification: npm test passed.\nResidual risk: none.';
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -41,7 +43,7 @@ describe('runSandboxSmoke', () => {
       if (command === 'gh') return result(command, args, repo, '');
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'smoke updated', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'smoke updated', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args.join(' ') === '--version --json') return result(command, args, workspace, verifierVersion());
@@ -188,7 +190,7 @@ describe('runSandboxSmoke', () => {
       if (command === 'gh') return result(command, args, repo, '');
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'smoke updated', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'smoke updated', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args.join(' ') === '--version --json') return result(command, args, workspace, verifierVersion());

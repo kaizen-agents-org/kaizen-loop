@@ -12,6 +12,7 @@ import { trustedRunner } from './helpers/trustedRunner.js';
 
 const execFileAsync = promisify(execFile);
 const CLI_TEST_TIMEOUT_MS = 20_000;
+const fixedBuilderNotes = 'Verification: npm test passed.\nResidual risk: none.';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -194,7 +195,7 @@ describe('reportIssueNow', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: '直した', notes: fixedBuilderNotes });
         return result(command, args, workspace, 'built');
       }
       if (command === 'verifier' && args.join(' ') === '--version --json') return result(command, args, workspace, verifierVersion());
@@ -406,7 +407,7 @@ if [ "$1" = --version ]; then
   printf 'ok\\n'
 else
   cat >/dev/null
-  printf '%s' '{"status":"fixed","summary":"fixed","notes":""}' > "$KAIZEN_BUILD_RESULT_PATH"
+  printf '%s' '{"status":"fixed","summary":"fixed","notes":"Verification: smoke test passed.\\nResidual risk: none."}' > "$KAIZEN_BUILD_RESULT_PATH"
   printf 'built\\n'
 fi
 `;

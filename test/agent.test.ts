@@ -84,6 +84,9 @@ describe('ClaudeCodeAdapter', () => {
 });
 
 describe('BuilderAgentAdapter', () => {
+  const fixedNotes = 'Verification: npm test passed.\nResidual risk: none.';
+  const partialNotes = 'Completed scope: validation updated.\nIncomplete scope: docs pending.\nVerification: npm test passed.\nResidual risk: docs may drift.';
+
   async function runBuilderPayload(payload: Record<string, unknown>) {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-builder-'));
     const runner: CommandRunner = async (command, args, options) => {
@@ -114,8 +117,14 @@ describe('BuilderAgentAdapter', () => {
         JSON.stringify({
           status: 'fixed',
           summary: '直した',
-          notes: 'なし',
-          discoveredIssues: [{ title: '別バグ', repo: 'kaizen-loop', body: '見つけた' }]
+          notes: fixedNotes,
+          discoveredIssues: [{
+            title: '別バグ',
+            expected: '期待動作',
+            evidence: '再現ログ',
+            repo: 'kaizen-loop',
+            body: '見つけた'
+          }]
         })
       );
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 123 };
@@ -138,7 +147,13 @@ describe('BuilderAgentAdapter', () => {
 
     expect(result.status).toBe('fixed');
     expect(result.summary).toBe('直した');
-    expect(result.discoveredIssues).toEqual([{ title: '別バグ', repo: 'kaizen-loop', body: '見つけた' }]);
+    expect(result.discoveredIssues).toEqual([{
+      title: '別バグ',
+      expected: '期待動作',
+      evidence: '再現ログ',
+      repo: 'kaizen-loop',
+      body: '見つけた'
+    }]);
     await expect(fs.access(path.join(workspace, '.kaizen', 'builder', 'build-result.json'))).rejects.toThrow();
   });
 
@@ -146,7 +161,7 @@ describe('BuilderAgentAdapter', () => {
     const result = await runBuilderPayload({
       status: 'blocked',
       summary: 'approval needed',
-      notes: '',
+      notes: fixedNotes,
       blockedReason: 'credential approval',
       humanRequest: { reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide the credential?' }
     });
@@ -157,7 +172,7 @@ describe('BuilderAgentAdapter', () => {
     const result = await runBuilderPayload({
       status: 'fixed',
       summary: 'done',
-      notes: '',
+      notes: fixedNotes,
       humanRequest: { reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide the credential?' }
     });
     expect(result.status).toBe('error');
@@ -173,7 +188,7 @@ describe('BuilderAgentAdapter', () => {
       if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
       await fs.writeFile(
         options.env.KAIZEN_BUILD_RESULT_PATH,
-        JSON.stringify({ status: 'fixed', summary: 'done', notes: '', discoveredIssues: [] })
+        JSON.stringify({ status: 'fixed', summary: 'done', notes: fixedNotes, discoveredIssues: [] })
       );
       return { command, args, cwd: options?.cwd, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 1 };
     };
@@ -194,10 +209,79 @@ describe('BuilderAgentAdapter', () => {
   });
 
   it.each([
-    ['summary', { status: 'fixed', notes: '' }],
+    ['summary', { status: 'fixed', notes: fixedNotes }],
     ['notes', { status: 'fixed', summary: '直した' }]
   ])('rejects builder payloads missing required %s', async (field, payload) => {
     const result = await runBuilderPayload(payload);
+
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain(field);
+  });
+
+  it.each([
+    ['fixed verification', { status: 'fixed', summary: 'done', notes: 'Residual risk: none.' }, 'notes'],
+    ['fixed residual risk', { status: 'fixed', summary: 'done', notes: 'Verification: npm test passed.' }, 'notes'],
+    ['duplicate fixed section', {
+      status: 'fixed', summary: 'done',
+      notes: 'Verification: npm test passed.\nVerification: npm run build passed.\nResidual risk: none.'
+    }, 'notes'],
+    ['skipped verification reason', {
+      status: 'fixed', summary: 'done', notes: 'Verification: skipped\nResidual risk: none.'
+    }, 'notes'],
+    ['partial incomplete scope', {
+      status: 'partial', summary: 'partial result',
+      notes: 'Completed scope: validation updated.\nVerification: npm test passed.\nResidual risk: docs pending.'
+    }, 'notes'],
+    ['partial meaningful section content', {
+      status: 'partial', summary: 'partial result',
+      notes: 'Completed scope: validation updated.\nIncomplete scope: --\nVerification: npm test passed.\nResidual risk: docs pending.'
+    }, 'notes'],
+    ['blocked reason', { status: 'blocked', summary: 'blocked', notes: '', blockedReason: '   ' }, 'blockedReason'],
+    ['non-blocked reason', { status: 'fixed', summary: 'done', notes: fixedNotes, blockedReason: 'still blocked' }, 'blockedReason'],
+    ['meaningful summary', { status: 'fixed', summary: '   ', notes: fixedNotes }, 'summary']
+  ])('rejects builder payloads without %s', async (_case, payload, field) => {
+    const result = await runBuilderPayload(payload);
+
+    expect(result.status).toBe('error');
+    expect(result.summary).toContain(field);
+  });
+
+  it('accepts canonical fixed and partial notes and normalizes producer strings', async () => {
+    const fixed = await runBuilderPayload({
+      status: 'fixed',
+      summary: '  done  ',
+      notes: 'Verification: skipped - CI owns verification.\nResidual risk: none.',
+      blockedReason: '   ',
+      discoveredIssues: [{
+        title: '  Follow-up  ',
+        expected: '  Expected behavior  ',
+        evidence: '  trace.log  ',
+        body: '   ',
+        labels: [' bug ', 'bug']
+      }]
+    });
+    const partial = await runBuilderPayload({ status: 'partial', summary: 'partial', notes: partialNotes });
+
+    expect(fixed).toMatchObject({
+      status: 'fixed',
+      summary: 'done',
+      blockedReason: undefined,
+      discoveredIssues: [{
+        title: 'Follow-up',
+        expected: 'Expected behavior',
+        evidence: 'trace.log',
+        labels: ['bug']
+      }]
+    });
+    expect(fixed.discoveredIssues[0]).not.toHaveProperty('body');
+    expect(partial.status).toBe('partial');
+  });
+
+  it.each(['expected', 'evidence'])('rejects primary discovered issues missing meaningful %s', async (field) => {
+    const issue = { title: 'Follow-up', expected: 'Expected behavior', evidence: 'trace.log', [field]: '   ' };
+    const result = await runBuilderPayload({
+      status: 'fixed', summary: 'done', notes: fixedNotes, discoveredIssues: [issue]
+    });
 
     expect(result.status).toBe('error');
     expect(result.summary).toContain(field);
@@ -207,7 +291,7 @@ describe('BuilderAgentAdapter', () => {
     const result = await runBuilderPayload({
       status: 'fixed',
       summary: '直した',
-      notes: '',
+      notes: fixedNotes,
       extra: true
     });
 
@@ -219,8 +303,8 @@ describe('BuilderAgentAdapter', () => {
     const result = await runBuilderPayload({
       status: 'fixed',
       summary: '直した',
-      notes: '',
-      discoveredIssues: [{ title: '別バグ', extra: true }]
+      notes: fixedNotes,
+      discoveredIssues: [{ title: '別バグ', expected: '期待動作', evidence: '再現ログ', extra: true }]
     });
 
     expect(result.status).toBe('error');
@@ -234,7 +318,7 @@ describe('BuilderAgentAdapter', () => {
       await fs.writeFile(options.env.KAIZEN_BUILD_RESULT_PATH, JSON.stringify({
         status: 'fixed',
         summary: 'done',
-        notes: '',
+        notes: fixedNotes,
         humanRequest: { reasonCode: 'credentials', requestKey: 'deployment-credential', question: 'Provide it?' }
       }));
       await fs.writeFile(path.join(workspace, '.kaizen', 'builder', 'discovered-issues.json'), JSON.stringify([
@@ -347,6 +431,7 @@ describe('BuilderAgentAdapter', () => {
       await fs.writeFile(fallbackPath, JSON.stringify([{
         title: 'Provider timeout follow-up',
         repo: 'builder-agent',
+        expected: 'The provider should complete within the configured timeout.',
         evidence: 'provider timed out after preserving the fallback artifact'
       }]));
       throw new Error('Command timed out after 1000ms');
@@ -365,6 +450,7 @@ describe('BuilderAgentAdapter', () => {
       discoveredIssues: [{
         title: 'Provider timeout follow-up',
         repo: 'builder-agent',
+        expected: 'The provider should complete within the configured timeout.',
         evidence: 'provider timed out after preserving the fallback artifact'
       }]
     });

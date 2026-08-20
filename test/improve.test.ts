@@ -8,6 +8,8 @@ import { saveRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 
+const fixedBuilderNotes = 'Verification: npm test passed.\nResidual risk: none.';
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -126,7 +128,7 @@ describe('runImprove', () => {
       if (command === 'gh') return githubReadinessResult(command, args, repo);
       if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
       if (command === 'builder-agent') {
-        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'fixed', notes: '' });
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, { status: 'fixed', summary: 'fixed', notes: fixedBuilderNotes });
         return result(command, args, options?.cwd, 'built');
       }
       if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) return result(command, args, repo, 'https://github.com/o/r.git\n');

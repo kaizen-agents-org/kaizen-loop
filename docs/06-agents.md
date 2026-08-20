@@ -94,7 +94,7 @@ cd <workspaceDir> && verifier < prompt
 {
   "status": "fixed" | "partial" | "blocked",
   "summary": "<何をどう直したか。日本語で 3 行以内>",
-  "notes": "<レビュアーへの注意点・残課題。なければ空文字>",
+  "notes": "Verification: <実行結果、または skipped - 理由>\nResidual risk: <残るリスク、なければ none>",
   "blockedReason": "<blocked のときのみ: 何が不足しているか>",
   "discoveredIssues": [
     {
@@ -132,12 +132,20 @@ builder-agent の結果は `.kaizen/builder/build-result.json` から読む。
 {
   "status": "fixed",
   "summary": "何をどう直したか。日本語で 3 行以内",
-  "notes": "",
+  "notes": "Verification: npm test passed.\nResidual risk: none.",
   "discoveredIssues": []
 }
 ```
 
-`status` は `fixed` / `partial` / `blocked`。`discoveredIssues` は任意で、省略時は空配列として扱う。結果ファイルがない、またはパースできない場合は `error` 扱いにする。
+`status` は `fixed` / `partial` / `blocked`。各文字列の必須値は空白だけでは不正とし、次の status 別制約を適用する。
+
+- `fixed`: `notes` にそれぞれ 1 回だけ現れる、内容のある `Verification:` と `Residual risk:` が必要
+- `partial`: `notes` にそれぞれ 1 回だけ現れる、内容のある `Completed scope:`、`Incomplete scope:`、`Verification:`、`Residual risk:` が必要
+- `fixed` / `partial`: `blockedReason` と `humanRequest` は指定しない。空白だけの `blockedReason` は未指定として扱う
+- `blocked`: 空白以外を含む `blockedReason` が必要。`notes` の status 別 section 制約はない
+- `Verification:` を `skipped` とする場合は、`Verification: skipped - <理由>` のように dash に続けて内容のある理由を書く
+
+`summary` は空白以外を含む必要がある。`discoveredIssues` は任意で、省略時は空配列として扱う。各 entry は strict object で、空白以外を含む `title`、`expected`、`evidence` が必須。結果ファイルがない、またはパースできない場合は `error` 扱いにする。
 
 正常な結果ファイルを読めない場合に限り、builder-agent が保存した `.kaizen/builder/discovered-issues.json` の JSON 配列を fallback として読む。各 entry は通常の `discoveredIssues[]` と同じ strict schema で個別に検証し、不正な entry は破棄する。artifact 全体が不正でも元の builder 失敗理由は変更しない。実行前に古い artifact を削除し、回収後は通常と同じ routing・open Issue 検索・fingerprint 重複排除を通す。
 
