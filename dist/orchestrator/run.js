@@ -29,7 +29,7 @@ import { buildIssueIntakeComment, evaluateIssueIntake, hasIssueIntakeDecisionCom
 import { decideReflection } from './reflection.js';
 import { summarizeQueue } from './summary.js';
 import { refreshCanonicalVerifier } from './verifierRefresh.js';
-import { GENERATED_PULL_REQUEST_FETCH_LIMIT, generatedPullRequestWipLimitReason, isSyncPullRequest, summarizeGeneratedPullRequestBacklog } from './wipLimit.js';
+import { GENERATED_PULL_REQUEST_FETCH_LIMIT, generatedPullRequestWipLimitReason, isSyncPullRequest, pullRequestsInRepositories, summarizeGeneratedPullRequestBacklog } from './wipLimit.js';
 import { schedulerJob } from '../scheduler/scheduler.js';
 import { forbiddenCheckpointPublicationReason, isResumableImplementationState, listImplementationStates, loadImplementationState, openCheckpointStates, saveImplementationState } from './implementationState.js';
 const OPEN_PULL_REQUEST_LIMIT_CHECK_FETCH_LIMIT = 1000;
@@ -907,8 +907,10 @@ async function applyGeneratedPullRequestWipLimit(options) {
         return options.selection;
     const owner = options.repo.split('/')[0];
     const pullRequests = await options.github.searchOpenPullRequestsForOwner(owner, GENERATED_PULL_REQUEST_FETCH_LIMIT);
+    const registry = await loadRegistry();
+    const registeredPullRequests = pullRequestsInRepositories(pullRequests, Object.values(registry.projects).map((project) => project.repo));
     const backlog = summarizeGeneratedPullRequestBacklog({
-        pullRequests,
+        pullRequests: registeredPullRequests,
         repo: options.repo,
         wipLimit: options.config.safety.wipLimit
     });

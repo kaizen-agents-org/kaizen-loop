@@ -1592,6 +1592,14 @@ describe('runKaizen PR flow', () => {
           schedule: '02:00',
           enabled: true,
           createdAt: '2026-06-12T00:00:00Z'
+        },
+        'o-other': {
+          repo: 'O/Other',
+          localPath: path.join(home, 'other-repo'),
+          workspacePath: path.join(home, 'other-workspace'),
+          schedule: '02:00',
+          enabled: false,
+          createdAt: '2026-06-12T00:00:00Z'
         }
       }
     });
@@ -1626,6 +1634,13 @@ describe('runKaizen PR flow', () => {
                     author: { login: 'github-actions[bot]', __typename: 'Bot' },
                     repository: { nameWithOwner: 'o/other' },
                     url: 'https://github.com/o/other/pull/11'
+                  },
+                  {
+                    number: 12,
+                    headRefName: 'codex/unrelated-change',
+                    author: { login: 'maintainer', __typename: 'User' },
+                    repository: { nameWithOwner: 'o/unregistered' },
+                    url: 'https://github.com/o/unregistered/pull/12'
                   }
                 ]
               }
@@ -1657,6 +1672,82 @@ describe('runKaizen PR flow', () => {
     const runIds = await fs.readdir(runsDir);
     const persisted = JSON.parse(await fs.readFile(path.join(runsDir, runIds[0], 'summary.json'), 'utf8'));
     expect(persisted.skipped).toEqual(summary.skipped);
+  });
+
+  it('does not count generated pull requests from unregistered repositories toward the WIP limit', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith({ safety: { wipLimit: 2 } }, { agent: 'claude', setup: null, verify: [] })
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args) => {
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') {
+        return result(command, args, repo, JSON.stringify([issue(1)]));
+      }
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return result(command, args, repo, '[]');
+      }
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'graphql') {
+        return result(
+          command,
+          args,
+          repo,
+          JSON.stringify({
+            data: {
+              search: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    number: 10,
+                    headRefName: 'codex/unrelated-change',
+                    repository: { nameWithOwner: 'o/unregistered-one' },
+                    url: 'https://github.com/o/unregistered-one/pull/10'
+                  },
+                  {
+                    number: 11,
+                    headRefName: 'codex/another-change',
+                    repository: { nameWithOwner: 'o/unregistered-two' },
+                    url: 'https://github.com/o/unregistered-two/pull/11'
+                  }
+                ]
+              }
+            }
+          })
+        );
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const selection = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'afternoon',
+      dryRun: true,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('selected' in selection && selection.selected.map(({ number }) => number)).toEqual([1]);
+    expect('skipped' in selection && selection.skipped).toEqual([]);
   });
 
   it('persists scheduled skips caused by latestStartHour', async () => {

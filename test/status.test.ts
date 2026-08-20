@@ -657,6 +657,13 @@ describe('statusProject', () => {
                     author: { login: 'human', __typename: 'User' },
                     repository: { nameWithOwner: 'o/r' },
                     url: 'https://github.com/o/r/pull/9'
+                  },
+                  {
+                    number: 12,
+                    headRefName: 'codex/unrelated-change',
+                    author: { login: 'human', __typename: 'User' },
+                    repository: { nameWithOwner: 'o/unregistered' },
+                    url: 'https://github.com/o/unregistered/pull/12'
                   }
                 ]
               }
@@ -791,6 +798,14 @@ async function setupProject() {
         repo: 'o/r',
         localPath: repo,
         workspacePath: workspace,
+        schedule: '02:00',
+        enabled: false,
+        createdAt: '2026-06-12T00:00:00Z'
+      },
+      'o-other': {
+        repo: 'o/other',
+        localPath: path.join(home, 'other-repo'),
+        workspacePath: path.join(home, 'other-workspace'),
         schedule: '02:00',
         enabled: false,
         createdAt: '2026-06-12T00:00:00Z'
