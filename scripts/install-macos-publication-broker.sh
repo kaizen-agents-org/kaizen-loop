@@ -190,7 +190,24 @@ process.stdin.on("data", (chunk) => { input += chunk; if (input.length > 65536) 
 process.stdin.on("end", () => {
   try {
     const value = JSON.parse(input);
-    if (!value || value.name !== "verifier" || value.status === undefined || !value.runtime || !value.runtime.packageRoot) process.exit(1);
+    const nullableString = (candidate) => candidate === null || typeof candidate === "string";
+    const nullableBoolean = (candidate) => candidate === null || typeof candidate === "boolean";
+    const expectedStale = value?.status === "stale" ? true : value?.status === "current" ? false : null;
+    if (
+      !value || Array.isArray(value) ||
+      value.name !== "verifier" ||
+      typeof value.version !== "string" ||
+      !["current", "stale", "unverifiable"].includes(value.status) ||
+      !nullableBoolean(value.stale) || value.stale !== expectedStale ||
+      !value.build || Array.isArray(value.build) ||
+      !nullableString(value.build.commit) ||
+      !nullableString(value.build.builtAt) ||
+      !nullableBoolean(value.build.dirty) ||
+      !value.runtime || Array.isArray(value.runtime) ||
+      !nullableString(value.runtime.commit) ||
+      !nullableBoolean(value.runtime.dirty) ||
+      typeof value.runtime.packageRoot !== "string" || value.runtime.packageRoot.length === 0
+    ) process.exit(1);
   } catch { process.exit(1); }
 });
 '; then

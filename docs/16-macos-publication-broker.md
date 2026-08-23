@@ -44,6 +44,11 @@ the file must be a non-symlink regular file with mode `0600`.
 ```sh
 npm ci
 npm run build
+# Prerequisite: install or link Verifier before the broker. It must resolve for
+# the runtime user on this exact --tool-path and return structured provenance.
+sudo -u "$USER" /usr/bin/env -i HOME="$HOME" \
+  PATH="/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
+  verifier --version --json
 sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop
 sudo sh -c 'umask 077; /bin/cat > /Library/Application\ Support/KaizenLoop/github-token'
 sudo scripts/install-macos-publication-broker.sh \
@@ -99,7 +104,7 @@ root-owned launcher:
 
 ```sh
 sudo /usr/local/libexec/kaizen-loop/bin/kaizen-scheduled-launcher \
-  canary kaizen-agents-org-verifier maintenance-followup
+  canary kaizen-agents-org-kaizen-loop maintenance
 ```
 
 This is a real, non-dry scheduled run and may create or update a branch and pull request.

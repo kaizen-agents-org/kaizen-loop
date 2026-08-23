@@ -381,6 +381,40 @@ const github = () => request({
 });
 
 describe('publication broker source contract', () => {
+  it('rejects malformed Verifier provenance before installation', async () => {
+    const sourceRoot = path.resolve(import.meta.dirname, '..');
+    const installer = await fs.readFile(path.join(sourceRoot, 'scripts/install-macos-publication-broker.sh'), 'utf8');
+    const startMarker = `| "$node_executable" -e '\n`;
+    const start = installer.indexOf(startMarker);
+    const end = installer.indexOf(`\n'; then`, start + startMarker.length);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const validator = installer.slice(start + startMarker.length, end);
+    const valid = {
+      name: 'verifier',
+      version: '1.2.3',
+      status: 'current',
+      stale: false,
+      build: { commit: 'a'.repeat(40), builtAt: '2026-08-24T00:00:00Z', dirty: false },
+      runtime: { commit: 'a'.repeat(40), dirty: false, packageRoot: '/opt/verifier/packages/core' }
+    };
+    const accepts = (value: unknown) => {
+      try {
+        execFileSync(process.execPath, ['-e', validator], { input: JSON.stringify(value), stdio: ['pipe', 'pipe', 'pipe'] });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    expect(accepts(valid)).toBe(true);
+    expect(accepts({ ...valid, status: 'legacy' })).toBe(false);
+    expect(accepts({ ...valid, stale: null })).toBe(false);
+    expect(accepts({ ...valid, version: 1 })).toBe(false);
+    expect(accepts({ ...valid, build: { ...valid.build, dirty: 'false' } })).toBe(false);
+    expect(accepts({ ...valid, runtime: { ...valid.runtime, packageRoot: {} } })).toBe(false);
+  });
+
   it('keeps credentials root-only and broker responses bounded', async () => {
     const sourceRoot = path.resolve(import.meta.dirname, '..');
     const brokerSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-publication-broker.swift'), 'utf8');
@@ -403,6 +437,12 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('"$resolved_verifier" --version --json');
     expect(installer).toContain('Scheduled tool PATH: $tool_path');
     expect(installer).toContain('Verifier shebang:');
+    expect(installer).toContain('value.name !== "verifier"');
+    expect(installer).toContain('["current", "stale", "unverifiable"].includes(value.status)');
+    expect(installer).toContain('value.stale !== expectedStale');
+    expect(installer).toContain('!nullableString(value.build.commit)');
+    expect(installer).toContain('!nullableBoolean(value.runtime.dirty)');
+    expect(installer).toContain('typeof value.runtime.packageRoot !== "string"');
     expect(installer).toContain('plutil -insert kaizenHome');
     expect(installer).toContain('install -o root -g wheel -m 0600 /dev/null');
     expect(installer).toContain('StandardOutPath');
