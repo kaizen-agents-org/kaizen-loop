@@ -182,7 +182,25 @@ describe('verifier freshness preflight', () => {
       recovery: { attempted: true, status: 'recovered' }
     });
     expect(runner.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'clone')).toHaveLength(1);
+    expect(runner.mock.calls.some(([command, args]) => command === 'npm' && args.join(' ') === 'root -g')).toBe(false);
     expect((await fs.stat(path.join(globalLink, 'dist', 'cli.js'))).mode & 0o111).not.toBe(0);
+  });
+
+  it('updates the package selected by the scheduled PATH instead of the Node installation prefix', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
+    const scheduledGlobalRoot = path.join(home, 'scheduled-prefix', 'lib', 'node_modules');
+    const { failure, runner, globalLink } = await inspect({
+      expectedCommit: currentCommit,
+      buildCommit: oldCommit,
+      runtimeCommit: oldCommit,
+      canonicalMainUpdate: true,
+      home,
+      globalRoot: scheduledGlobalRoot
+    });
+
+    expect(failure).toBeUndefined();
+    expect(globalLink).toBe(path.join(scheduledGlobalRoot, '@verifier', 'core'));
+    expect(runner.mock.calls.some(([command]) => command === 'npm')).toBe(false);
   });
 
   it('keeps pinned runtimes fail-closed without attempting an update', async () => {
@@ -365,8 +383,10 @@ async function inspect(options: {
 }) {
   const runDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-preflight-'));
   const previousHome = process.env.KAIZEN_HOME;
+  const previousPath = process.env.PATH;
   process.env.KAIZEN_HOME = options.home ?? await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-verifier-home-'));
   const globalRoot = options.globalRoot ?? path.join(process.env.KAIZEN_HOME, 'global', 'node_modules');
+  const globalBin = path.join(process.env.KAIZEN_HOME, 'scheduled-bin');
   const previousPackageRoot = path.join(process.env.KAIZEN_HOME, 'previous-verifier', 'packages', 'core');
   const globalLink = path.join(globalRoot, '@verifier', 'core');
   await fs.mkdir(path.join(previousPackageRoot, 'dist'), { recursive: true });
@@ -379,6 +399,11 @@ async function inspect(options: {
   } catch {
     await fs.symlink(previousPackageRoot, globalLink, 'dir');
   }
+  await fs.mkdir(globalBin, { recursive: true });
+  const verifierCommand = path.join(globalBin, 'verifier');
+  await fs.rm(verifierCommand, { force: true });
+  await fs.symlink(path.relative(globalBin, path.join(globalLink, 'dist', 'cli.js')), verifierCommand);
+  process.env.PATH = `${globalBin}${previousPath ? `${path.delimiter}${previousPath}` : ''}`;
   const config = options.config ?? configSchema.parse({
     version: 1,
     ...(options.canonicalMainUpdate ? {
@@ -436,9 +461,6 @@ async function inspect(options: {
         if (options.buildFails) throw new Error('build failed');
       }
       return result(command, args, commandOptions?.cwd, '');
-    }
-    if (command === 'npm' && args.join(' ') === 'root -g') {
-      return result(command, args, commandOptions?.cwd, `${globalRoot}\n`);
     }
     if (args.length === 0) {
       executedVerifierCommands.push(command);
@@ -502,6 +524,8 @@ async function inspect(options: {
   } finally {
     if (previousHome === undefined) delete process.env.KAIZEN_HOME;
     else process.env.KAIZEN_HOME = previousHome;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
   }
 }
 

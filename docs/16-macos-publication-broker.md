@@ -63,6 +63,11 @@ token value, and
 unmarked existing installation and validates the Node, npm, GitHub CLI, and root-only
 token ownership chains. `--github-cli` must identify an immutable, root-owned executable;
 the runtime user's interactive `gh` installation or keychain session is not used.
+Before replacing an existing broker, the installer also resolves `verifier` with the
+exact registered `--tool-path` and runs `verifier --version --json` as the runtime user
+with the configured Kaizen home. A missing command, broken shebang interpreter, or
+unstructured provenance fails before the runtime or LaunchDaemons are changed; the
+diagnostic names the effective PATH, resolved executable, and shebang.
 Add one `--repository owner/name` for every repository the broker may publish; the
 daemon maps these names to canonical `https://github.com/owner/name.git` URLs and never
 treats a client URL as authority. Add each authorized scheduler project/job pair with
@@ -86,6 +91,25 @@ installer fails before replacing the runtime or launchd configuration when it do
 Both root launchd daemons write stdout and stderr to `/var/log/kaizen-loop/` so
 scheduled-dispatch and broker startup failures remain diagnosable with `tail` or
 the Console app.
+
+## Operator canary
+
+Run one registered job immediately after installation or a toolchain repair with the
+root-owned launcher:
+
+```sh
+sudo /usr/local/libexec/kaizen-loop/bin/kaizen-scheduled-launcher \
+  canary kaizen-agents-org-verifier maintenance-followup
+```
+
+This is a real, non-dry scheduled run and may create or update a branch and pull request.
+The caller must be root, the launcher path must match the immutable path in the root-owned
+broker configuration, and the project/job pair must already be registered. The broker
+continues to bind the spawned supervisor to a one-run capability and the registered
+repository. `dispatch` remains reserved for launchd and still refuses off-calendar runs.
+Use the resulting project `last-run.json` and run summary as the canary evidence; require
+`infrastructureFailed: 0` and the expected processed/PR counts before enabling the rest of
+the fleet.
 
 ## Broker validation
 
