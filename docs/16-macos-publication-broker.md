@@ -68,6 +68,12 @@ token value, and
 unmarked existing installation and validates the Node, npm, GitHub CLI, and root-only
 token ownership chains. `--github-cli` must identify an immutable, root-owned executable;
 the runtime user's interactive `gh` installation or keychain session is not used.
+Before installing the broker, the installer creates or repairs the root-owned
+`/var/db/kaizen-loop` parent with mode `0711`. This permits the runtime user to
+traverse the path to the broker's runtime-owned `publication` directory while
+keeping the parent contents private; a symlink or non-directory at that path is
+rejected. The broker continues to own `/var/db/kaizen-loop/publication` for the
+runtime group with mode `0710`.
 Before replacing an existing broker, the installer also resolves `verifier` with the
 exact registered `--tool-path` and runs `verifier --version --json` as the runtime user
 with the configured Kaizen home. A missing command, broken shebang interpreter, or

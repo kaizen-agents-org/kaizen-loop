@@ -219,6 +219,8 @@ fi
 install_root=/usr/local/libexec/kaizen-loop
 config_dir='/Library/Application Support/KaizenLoop'
 log_dir=/var/log/kaizen-loop
+private_root=/var/db/kaizen-loop
+private_directory="$private_root/publication"
 broker_out_log="$log_dir/publication-broker.out.log"
 broker_err_log="$log_dir/publication-broker.err.log"
 scheduled_out_log="$log_dir/scheduled-publication.out.log"
@@ -228,6 +230,20 @@ daemon_path=/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
 schedule_daemon_path=/Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
 install -d -o root -g wheel -m 0755 /usr/local/libexec
 trusted_root_path /usr/local/libexec || { echo "/usr/local/libexec must be root-owned and group/other non-writable." >&2; exit 1; }
+if [ -L "$private_root" ] || { [ -e "$private_root" ] && [ ! -d "$private_root" ]; }; then
+  echo "$private_root must be a real directory." >&2
+  exit 1
+fi
+if [ -d "$private_root" ]; then
+  trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
+  chown root:wheel "$private_root"
+  chmod 0711 "$private_root"
+else
+  install -d -o root -g wheel -m 0711 "$private_root"
+fi
+trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
+[ "$(stat -f %Sg "$private_root")" = wheel ] || { echo "$private_root must be owned by the wheel group." >&2; exit 1; }
+[ "$(stat -f %Lp "$private_root")" -eq 711 ] || { echo "$private_root must have mode 0711." >&2; exit 1; }
 if [ -d "$config_dir" ]; then
   trusted_root_path "$config_dir" || { echo "$config_dir must be root-owned and group/other non-writable." >&2; exit 1; }
   chown root:wheel "$config_dir"
@@ -285,7 +301,7 @@ config_stage="$build_dir/publication-broker.plist"
 /usr/bin/plutil -insert githubCliExecutable -string "$github_cli_executable" "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :cliPath string $install_root/runtime/dist/cli.js" "$config_stage"
 /usr/bin/plutil -insert tokenFile -string "$token_file" "$config_stage"
-/usr/libexec/PlistBuddy -c 'Add :privateDirectory string /var/db/kaizen-loop/publication' "$config_stage"
+/usr/libexec/PlistBuddy -c "Add :privateDirectory string $private_directory" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :allowedRepositories dict' "$config_stage"
 IFS='
 '

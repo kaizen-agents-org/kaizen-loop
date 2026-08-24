@@ -430,6 +430,14 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('install -o root -g wheel -m 0644 "$config_stage" "$config_path"');
     expect(installer).toContain('install -o root -g wheel -m 0644 "$daemon_stage" "$daemon_path"');
     expect(installer).toContain('chmod 0755 "$config_dir"');
+    expect(installer).toContain('private_root=/var/db/kaizen-loop');
+    expect(installer).toContain('private_directory="$private_root/publication"');
+    expect(installer).toContain('install -d -o root -g wheel -m 0711 "$private_root"');
+    expect(installer).toContain('chmod 0711 "$private_root"');
+    expect(installer).toContain('[ -L "$private_root" ]');
+    expect(installer).toContain('stat -f %Sg "$private_root"');
+    expect(installer).toContain('stat -f %Lp "$private_root"');
+    expect(installer).toContain('Add :privateDirectory string $private_directory');
     expect(installer).toContain('--kaizen-home <absolute-kaizen-home>');
     expect(installer).toContain('Scheduled project(s) are not registered');
     expect(installer).toContain('sudo -u "$runtime_user" -- "$node_executable"');
