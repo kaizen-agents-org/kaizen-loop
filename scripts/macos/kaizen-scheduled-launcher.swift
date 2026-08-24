@@ -24,7 +24,7 @@ private struct ScheduledRunRequest: Encodable {
     let capability: String
 }
 
-private let usage = "usage: kaizen-scheduled-launcher dispatch | canary <project> <job>"
+private let usage = "usage: kaizen-scheduled-launcher canary <project> <job> (root operator)\ndispatch is reserved for the launchd scheduler"
 
 private func launcherError(_ message: String, code: Int = 1) -> NSError {
     NSError(
