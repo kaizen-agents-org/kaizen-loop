@@ -1089,6 +1089,7 @@ private func handleGitHubCli(
     let token: String
     do { token = try githubCredentials.token(for: config) }
     catch { return .failure("github-cli-token-unavailable") }
+    guard connected(descriptor) else { return .failure("github-cli-client-disconnected") }
     let process = try spawnProcess(
         executable: config.githubCliExecutable,
         arguments: arguments,

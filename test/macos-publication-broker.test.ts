@@ -603,6 +603,7 @@ describe('publication broker source contract', () => {
     expect(brokerSource).toContain('.rsaSignatureMessagePKCS1v15SHA256');
     expect(brokerSource).toContain('/app/installations/\\(installationId)/access_tokens');
     expect(brokerSource).toContain('cached.expiresAt.timeIntervalSinceNow > 300');
+    expect(brokerSource).toContain('catch { return .failure("github-cli-token-unavailable") }\n    guard connected(descriptor)');
     expect(brokerSource).toContain('token(for: config, forceRefresh: true)\n    guard connected(descriptor)');
     expect(brokerSource).toContain('willPerformHTTPRedirection');
     expect(brokerSource).toContain('data.count <= 65_536 - incoming.count');
