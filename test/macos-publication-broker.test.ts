@@ -585,6 +585,14 @@ describe('publication broker source contract', () => {
     expect(leafValidation).toBeGreaterThanOrEqual(0);
     expect(leafValidation).toBeLessThan(parentNormalization);
     expect(installer).toContain('$private_directory must not have an extended ACL');
+    expect(installer).toContain('stat -f %u "$private_directory"');
+    expect(installer).toContain('stat -f %g "$private_directory"');
+    expect(installer).toContain('chown root:"$runtime_user" "$private_directory"');
+    expect(installer).toContain('chmod 0710 "$private_directory"');
+    expect(installer).toContain('$private_directory must not be group/other-writable');
+    const parentAclValidation = installer.indexOf('acl_listing=$(/bin/ls -lde "$private_root")');
+    expect(parentAclValidation).toBeGreaterThanOrEqual(0);
+    expect(parentAclValidation).toBeLessThan(installer.indexOf('chmod 0711 "$private_root"'));
     expect(installer).toContain('Add :privateDirectory string $private_directory');
     expect(installer).toContain('--kaizen-home <absolute-kaizen-home>');
     expect(installer).toContain('Scheduled project(s) are not registered');

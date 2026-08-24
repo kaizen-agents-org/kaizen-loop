@@ -267,12 +267,32 @@ validate_existing_private_directory() {
       echo "$private_directory must not have an extended ACL." >&2
       exit 1
     fi
+    private_uid=$(stat -f %u "$private_directory")
+    private_gid=$(stat -f %g "$private_directory")
+    private_mode=$(stat -f %Lp "$private_directory")
+    [ "$private_uid" -eq 0 ] || { echo "$private_directory must be root-owned." >&2; exit 1; }
+    [ $((0$private_mode & 022)) -eq 0 ] || { echo "$private_directory must not be group/other-writable." >&2; exit 1; }
+    if [ "$private_gid" -ne "$runtime_gid" ] || [ "$private_mode" -ne 710 ]; then
+      chown root:"$runtime_user" "$private_directory"
+      chmod 0710 "$private_directory"
+    fi
+    [ "$(stat -f %u "$private_directory")" -eq 0 ] || { echo "$private_directory owner normalization failed." >&2; exit 1; }
+    [ "$(stat -f %g "$private_directory")" -eq "$runtime_gid" ] || { echo "$private_directory group normalization failed." >&2; exit 1; }
+    [ "$(stat -f %Lp "$private_directory")" -eq 710 ] || { echo "$private_directory must have mode 0710." >&2; exit 1; }
   fi
 }
 validate_existing_private_directory
 if [ -L "$private_root" ] || { [ -e "$private_root" ] && [ ! -d "$private_root" ]; }; then
   echo "$private_root must be a real directory." >&2
   exit 1
+fi
+if [ -d "$private_root" ]; then
+  trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
+  acl_listing=$(/bin/ls -lde "$private_root") || { echo "Could not inspect ACLs for $private_root." >&2; exit 1; }
+  if printf '%s\n' "$acl_listing" | /usr/bin/tail -n +2 | /usr/bin/grep -Eq '^[[:space:]]*[0-9]+:'; then
+    echo "$private_root must not have an extended ACL." >&2
+    exit 1
+  fi
 fi
 if [ -d "$private_root" ]; then
   trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
