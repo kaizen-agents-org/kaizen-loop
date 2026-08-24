@@ -115,7 +115,8 @@ const fleet = program
     .option('--no-scheduler', 'do not sync launchd or cron jobs')
     .option('--no-lock-repair', 'do not remove stale run locks')
     .option('--verify', 'sync each fleet workspace to its default branch and run setup plus verify commands', false)
-    .option('--prune', 'remove registry entries that were not discovered under --root', false)
+    .option('--prune', 'remove registry entries that were not discovered (requires --replace-all)', false)
+    .option('--replace-all', 'acknowledge that the complete fleet topology may replace undisclosed entries', false)
     .option('--dry-run', 'plan changes without modifying files, registry, GitHub, workspaces, or scheduler jobs', false)
     .option('--json', 'print machine-readable output')
     .action(async (options) => {
@@ -133,6 +134,7 @@ const fleet = program
         repairLocks: options.lockRepair !== false,
         verify: Boolean(options.verify),
         prune: Boolean(options.prune),
+        replaceAll: Boolean(options.replaceAll),
         dryRun: Boolean(options.dryRun),
         runCommand
     });
@@ -1021,6 +1023,17 @@ function print(value, json = false) {
             for (const issue of selection.skipped)
                 console.log(`- #${issue.number}: ${issue.reason}`);
         }
+        return;
+    }
+    if (typeof value === 'object' && value && 'diff' in value && value.diff && typeof value.diff === 'object') {
+        const diff = value.diff;
+        console.log(JSON.stringify(value, null, 2));
+        if (diff.added?.length)
+            console.error(`ADD: ${diff.added.join(', ')}`);
+        if (diff.retained?.length)
+            console.error(`KEEP: ${diff.retained.join(', ')}`);
+        if (diff.removed?.length)
+            console.error(`REMOVE (requires --replace-all): ${diff.removed.join(', ')}`);
         return;
     }
     console.log(JSON.stringify(value, null, 2));

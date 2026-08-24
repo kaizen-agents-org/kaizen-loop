@@ -177,11 +177,40 @@ describe('syncFleet', () => {
       repairLocks: true,
       verify: false,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: trustedRunner(runner)
     })).rejects.toThrow('--prune requires --manifest or an explicit --repo expected set');
 
     await expect(fs.readFile(registryPath, 'utf8')).resolves.toBe(before);
+  });
+
+  it('fails closed unless prune is explicitly acknowledged with replace-all', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    await writeFleetRepo(repoDir);
+    await saveRegistry({ version: 1, projects: { stale: fleetRegistryProject('/tmp/stale') } });
+    const before = await fs.readFile(path.join(home, 'registry.json'), 'utf8');
+    const common = {
+      cwd: repoDir,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: false,
+      repairLocks: false,
+      verify: false,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    };
+
+    await expect(syncFleet({ ...common, prune: true, replaceAll: false })).rejects.toThrow('--prune and --replace-all');
+    await expect(syncFleet({ ...common, prune: false, replaceAll: true })).rejects.toThrow('--prune and --replace-all');
+    await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe(before);
   });
 
   it('refuses prune when any explicitly requested repository is missing', async () => {
@@ -206,6 +235,7 @@ describe('syncFleet', () => {
       repairLocks: false,
       verify: false,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: trustedRunner(runner)
     })).rejects.toThrow('requested repositories were not discovered: kaizen-agents-org/verifier');
@@ -240,6 +270,7 @@ describe('syncFleet', () => {
       repairLocks: true,
       verify: true,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: trustedRunner(runner)
     });
@@ -328,6 +359,7 @@ describe('syncFleet', () => {
       repairLocks: false,
       verify: true,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: trustedRunner(runner)
     });
@@ -378,11 +410,17 @@ describe('syncFleet', () => {
       repairLocks: false,
       verify: false,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: trustedRunner(runner)
     });
 
     expect(output.pruned).toEqual(['stale']);
+    expect(output.diff).toEqual({
+      added: ['kaizen-agents-org-builder-agent'],
+      removed: ['stale'],
+      retained: []
+    });
     const registry = JSON.parse(await fs.readFile(path.join(home, 'registry.json'), 'utf8'));
     expect(registry.projects['kaizen-agents-org-builder-agent'].localPath).toBe(repoDir);
   });
@@ -415,11 +453,17 @@ describe('syncFleet', () => {
       repairLocks: false,
       verify: false,
       prune: true,
+      replaceAll: true,
       dryRun: true,
       runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
     });
 
     expect(planned.projects).toHaveLength(1);
+    expect(planned.diff).toEqual({
+      added: ['kaizen-agents-org-builder-agent'],
+      removed: [],
+      retained: []
+    });
     await expect(fs.readFile(path.join(home, 'registry.json'), 'utf8')).resolves.toBe('{invalid');
 
     await syncFleet({
@@ -432,6 +476,7 @@ describe('syncFleet', () => {
       repairLocks: false,
       verify: false,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
     });
@@ -522,6 +567,7 @@ describe('syncFleet', () => {
       repairLocks: true,
       verify: true,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: trustedRunner(runner)
     });
@@ -690,6 +736,7 @@ describe('syncFleet', () => {
       repairLocks: false,
       verify: true,
       prune: true,
+      replaceAll: true,
       dryRun: false,
       runCommand: trustedRunner(runner)
     });
