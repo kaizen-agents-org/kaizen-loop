@@ -45,7 +45,8 @@ must be a non-symlink regular file with mode `0600`.
 For GitHub App authentication, create and install an App on the selected repositories.
 Grant only the permissions needed by the configured jobs; typical Kaizen publication
 needs repository `Contents: Read and write`, `Issues: Read and write`,
-`Pull requests: Read and write`, and `Actions: Read`. Add permissions such as
+`Pull requests: Read and write`, `Actions: Read`, and `Checks: Read`. The checks
+permission lets PR guardian inspect check runs and annotations. Add permissions such as
 `Workflows: Read and write` only when a job must modify those resources. Webhooks are
 not required. Download an unencrypted private key, place it in the root-owned
 configuration directory, and install with the App and installation IDs:
