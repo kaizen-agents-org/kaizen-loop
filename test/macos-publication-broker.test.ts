@@ -489,7 +489,7 @@ const github = () => request({
     try {
       await Promise.all([waitForPath(redirectSchedulerSocket), waitForPath(redirectPublicationSocket)]);
       await new Promise<void>((resolve, reject) => {
-        execFile(scheduledPath, ['ignored-node', 'o-r', 'maintenance'], {
+        execFile(scheduledPath, ['canary', 'o-r', 'maintenance'], {
           env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: redirectConfig }
         }, (error) => error ? reject(error) : resolve());
       });
