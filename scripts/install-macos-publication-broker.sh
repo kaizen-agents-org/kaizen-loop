@@ -245,6 +245,8 @@ fi
 install_root=/usr/local/libexec/kaizen-loop
 config_dir='/Library/Application Support/KaizenLoop'
 log_dir=/var/log/kaizen-loop
+private_root=/var/db/kaizen-loop
+private_directory="$private_root/publication"
 broker_out_log="$log_dir/publication-broker.out.log"
 broker_err_log="$log_dir/publication-broker.err.log"
 scheduled_out_log="$log_dir/scheduled-publication.out.log"
@@ -254,6 +256,59 @@ daemon_path=/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
 schedule_daemon_path=/Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
 install -d -o root -g wheel -m 0755 /usr/local/libexec
 trusted_root_path /usr/local/libexec || { echo "/usr/local/libexec must be root-owned and group/other non-writable." >&2; exit 1; }
+validate_existing_private_directory() {
+  if [ -L "$private_directory" ] || { [ -e "$private_directory" ] && [ ! -d "$private_directory" ]; }; then
+    echo "$private_directory must be a real directory." >&2
+    exit 1
+  fi
+  if [ -d "$private_directory" ]; then
+    private_acl_listing=$(/bin/ls -lde "$private_directory") || { echo "Could not inspect ACLs for $private_directory." >&2; exit 1; }
+    if printf '%s\n' "$private_acl_listing" | /usr/bin/tail -n +2 | /usr/bin/grep -Eq '^[[:space:]]*[0-9]+:'; then
+      echo "$private_directory must not have an extended ACL." >&2
+      exit 1
+    fi
+    private_uid=$(stat -f %u "$private_directory")
+    private_gid=$(stat -f %g "$private_directory")
+    private_mode=$(stat -f %Lp "$private_directory")
+    [ "$private_uid" -eq 0 ] || { echo "$private_directory must be root-owned." >&2; exit 1; }
+    [ $((0$private_mode & 022)) -eq 0 ] || { echo "$private_directory must not be group/other-writable." >&2; exit 1; }
+    if [ "$private_gid" -ne "$runtime_gid" ] || [ "$private_mode" -ne 710 ]; then
+      chown root:"$runtime_user" "$private_directory"
+      chmod 0710 "$private_directory"
+    fi
+    [ "$(stat -f %u "$private_directory")" -eq 0 ] || { echo "$private_directory owner normalization failed." >&2; exit 1; }
+    [ "$(stat -f %g "$private_directory")" -eq "$runtime_gid" ] || { echo "$private_directory group normalization failed." >&2; exit 1; }
+    [ "$(stat -f %Lp "$private_directory")" -eq 710 ] || { echo "$private_directory must have mode 0710." >&2; exit 1; }
+  fi
+}
+validate_existing_private_directory
+if [ -L "$private_root" ] || { [ -e "$private_root" ] && [ ! -d "$private_root" ]; }; then
+  echo "$private_root must be a real directory." >&2
+  exit 1
+fi
+if [ -d "$private_root" ]; then
+  trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
+  acl_listing=$(/bin/ls -lde "$private_root") || { echo "Could not inspect ACLs for $private_root." >&2; exit 1; }
+  if printf '%s\n' "$acl_listing" | /usr/bin/tail -n +2 | /usr/bin/grep -Eq '^[[:space:]]*[0-9]+:'; then
+    echo "$private_root must not have an extended ACL." >&2
+    exit 1
+  fi
+fi
+if [ -d "$private_root" ]; then
+  trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
+  chown root:wheel "$private_root"
+  chmod 0711 "$private_root"
+else
+  install -d -o root -g wheel -m 0711 "$private_root"
+fi
+trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
+[ "$(stat -f %Sg "$private_root")" = wheel ] || { echo "$private_root must be owned by the wheel group." >&2; exit 1; }
+[ "$(stat -f %Lp "$private_root")" -eq 711 ] || { echo "$private_root must have mode 0711." >&2; exit 1; }
+acl_listing=$(/bin/ls -lde "$private_root") || { echo "Could not inspect ACLs for $private_root." >&2; exit 1; }
+if printf '%s\n' "$acl_listing" | /usr/bin/tail -n +2 | /usr/bin/grep -Eq '^[[:space:]]*[0-9]+:'; then
+  echo "$private_root must not have an extended ACL." >&2
+  exit 1
+fi
 if [ -d "$config_dir" ]; then
   trusted_root_path "$config_dir" || { echo "$config_dir must be root-owned and group/other non-writable." >&2; exit 1; }
   chown root:wheel "$config_dir"
@@ -317,7 +372,7 @@ else
   /usr/bin/plutil -insert githubAppInstallationId -integer "$github_app_installation_id" "$config_stage"
   /usr/bin/plutil -insert githubAppPrivateKeyFile -string "$github_app_private_key_file" "$config_stage"
 fi
-/usr/libexec/PlistBuddy -c 'Add :privateDirectory string /var/db/kaizen-loop/publication' "$config_stage"
+/usr/libexec/PlistBuddy -c "Add :privateDirectory string $private_directory" "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :allowedRepositories dict' "$config_stage"
 IFS='
 '

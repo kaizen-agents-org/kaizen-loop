@@ -108,6 +108,21 @@ token value, and
 unmarked existing installation and validates the Node, npm, GitHub CLI, and root-only
 credential ownership chains. `--github-cli` must identify an immutable, root-owned executable;
 the runtime user's interactive `gh` installation or keychain session is not used.
+Before installing the broker, the installer creates or repairs the root-owned
+`/var/db/kaizen-loop` parent with mode `0711`. This permits the runtime user to
+traverse the path to the broker's runtime-owned `publication` directory while
+keeping the parent contents private; a symlink or non-directory at that path is
+rejected, as is an extended ACL on the parent. If an existing publication leaf is
+present, the installer rejects a symlink, non-directory, or extended ACL on that
+leaf before changing the parent mode. A root-owned, non-writable legacy leaf may
+be normalized to the runtime group and mode `0710`; attacker-owned or writable
+leaves are rejected. The installer also rejects an extended ACL on the existing
+parent before changing its mode. The broker continues to own
+`/var/db/kaizen-loop/publication` for the runtime group with mode `0710`.
+After creating or opening that leaf, the broker reapplies its ownership and mode,
+first verifies with `lstat` that the leaf is a real directory (not a symlink), then
+rejects any extended ACL before creating its sockets or accepting operations.
+This also fails closed for an ACL already present on an upgraded installation.
 Before replacing an existing broker, the installer also resolves `verifier` with the
 exact registered `--tool-path` and runs `verifier --version --json` as the runtime user
 with the configured Kaizen home. A missing command, broken shebang interpreter, or
