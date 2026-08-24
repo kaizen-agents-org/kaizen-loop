@@ -24,6 +24,9 @@ export async function syncFleet(options) {
     if (options.prune && !options.manifestPath && !options.repos?.length) {
         throw new KaizenError('--prune requires --manifest or an explicit --repo expected set.');
     }
+    if (options.prune !== Boolean(options.replaceAll)) {
+        throw new KaizenError('--prune and --replace-all must be passed together; replacement may remove undisclosed fleet entries.');
+    }
     const manifest = options.manifestPath ? await loadFleetManifest(options.manifestPath) : undefined;
     const root = manifest
         ? path.dirname(path.resolve(options.manifestPath))
@@ -40,9 +43,9 @@ export async function syncFleet(options) {
     if (preflightFailures.length > 0) {
         return { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
     }
-    const baselineRegistry = options.prune || options.syncScheduler
-        ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
-        : undefined;
+    const baselineRegistry = options.manifestPath && options.prune
+        ? await loadRegistryForRecovery()
+        : await loadRegistry();
     const staged = { version: 1, projects: {} };
     const projects = [];
     for (const project of discovered) {
@@ -64,7 +67,15 @@ export async function syncFleet(options) {
         }
         projects.push(projectResult);
     }
-    const value = { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects, pruned: [] };
+    const value = {
+        runtime: runtimeIdentity(),
+        root,
+        owner,
+        dryRun: options.dryRun,
+        projects,
+        pruned: [],
+        diff: topologyDiff(baselineRegistry, discovered.map((project) => project.slug))
+    };
     if (fleetHasFailures(value))
         return value;
     const seen = new Set(discovered.map((project) => project.slug));
@@ -124,6 +135,17 @@ export async function syncFleet(options) {
         }
     }
     return result;
+}
+function topologyDiff(baseline, discovered) {
+    if (!baseline)
+        return undefined;
+    const before = new Set(Object.keys(baseline.projects));
+    const after = new Set(discovered);
+    return {
+        added: discovered.filter((slug) => !before.has(slug)).sort(),
+        removed: [...before].filter((slug) => !after.has(slug)).sort(),
+        retained: discovered.filter((slug) => before.has(slug)).sort()
+    };
 }
 export function fleetHasFailures(result) {
     return result.projects.some((project) => Object.hasOwn(project, 'error') || project.verifyPassed === false);

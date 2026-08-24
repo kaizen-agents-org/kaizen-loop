@@ -346,7 +346,9 @@ const github = () => request({
     const output = await new Promise<string>((resolve, reject) => {
       execFile(scheduledPath, ['--help'], (error, stdout) => error ? reject(error) : resolve(stdout));
     });
-    expect(output.trim()).toBe('usage: kaizen-scheduled-launcher dispatch | canary <project> <job>');
+    expect(output).toContain('usage: kaizen-scheduled-launcher canary <project> <job> (root operator)');
+    expect(output).toContain('dispatch is reserved for the launchd scheduler');
+    expect(output).not.toContain('dispatch | canary');
   });
 
   it('authenticates the broker-spawned supervisor and rejects its same-UID Node child', async () => {
@@ -555,6 +557,7 @@ describe('publication broker source contract', () => {
     const supervisorSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-supervisor-launcher.swift'), 'utf8');
     const scheduledSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-scheduled-launcher.swift'), 'utf8');
     const installer = await fs.readFile(path.join(sourceRoot, 'scripts/install-macos-publication-broker.sh'), 'utf8');
+    const brokerSwiftCompiles = installer.match(/^swiftc -module-cache-path .*kaizen-(?:publication-)?(?:broker|scheduled|supervisor)/gm) ?? [];
     expect(brokerSource).toContain('{\\"ok\\":true}');
     expect(brokerSource).toContain('{\\"ok\\":false}');
     expect(brokerSource).toContain('maximumGitHubOutputBytes');
@@ -636,7 +639,19 @@ describe('publication broker source contract', () => {
     expect(supervisorSource).toContain('GH_CONFIG_DIR=/var/empty');
     expect(supervisorSource).toContain('KAIZEN_HOME=\\(config.kaizenHome)');
     expect(supervisorSource).toContain('arguments.count == 7 && arguments[1] == "run"');
-    expect(scheduledSource).toContain('usage: kaizen-scheduled-launcher dispatch | canary <project> <job>');
+    expect(scheduledSource).toContain('usage: kaizen-scheduled-launcher canary <project> <job> (root operator)');
+    expect(scheduledSource).toContain('dispatch is reserved for the launchd scheduler');
+    expect(brokerSwiftCompiles).toHaveLength(3);
+    expect(installer).toContain('build_dir=$(mktemp -d /private/tmp/kaizen-broker-build.XXXXXX)');
+    expect(installer).toContain('swiftc -module-cache-path "$build_dir/module-cache-broker"');
+    expect(installer).toContain('swiftc -module-cache-path "$build_dir/module-cache-scheduled"');
+    expect(installer).toContain('swiftc -module-cache-path "$build_dir/module-cache-supervisor"');
+    expect(installer).toContain('Add :ProgramArguments:1 string dispatch');
+    const brokerDoc = await fs.readFile(path.join(sourceRoot, 'docs/16-macos-publication-broker.md'), 'utf8');
+    expect(brokerDoc).toContain('sudo /usr/local/libexec/kaizen-loop/bin/kaizen-scheduled-launcher');
+    expect(brokerDoc).toContain('fresh temporary build directory under');
+    expect(brokerDoc).toContain('recompiled on every installation or upgrade');
+    expect(brokerDoc).toContain('not work performed by each scheduled run');
     expect(scheduledSource).not.toContain('<node> <project> <job>');
     expect(scheduledSource).toContain('geteuid() == 0 || isTest');
     expect(scheduledSource).toContain('canary target is not a registered scheduled job');
