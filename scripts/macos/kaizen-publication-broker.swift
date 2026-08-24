@@ -1232,6 +1232,7 @@ private func publish(_ descriptor: Int32, config: BrokerConfig, request: [String
     }
 
     let token = try githubCredentials.token(for: config, forceRefresh: true)
+    guard connected(descriptor) else { return false }
     let credentialPath = (operationRoot as NSString).appendingPathComponent("github-credential")
     guard manager.createFile(atPath: credentialPath, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600]) else {
         return false
