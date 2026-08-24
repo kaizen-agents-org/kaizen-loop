@@ -270,6 +270,11 @@ fi
 trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
 [ "$(stat -f %Sg "$private_root")" = wheel ] || { echo "$private_root must be owned by the wheel group." >&2; exit 1; }
 [ "$(stat -f %Lp "$private_root")" -eq 711 ] || { echo "$private_root must have mode 0711." >&2; exit 1; }
+acl_listing=$(/bin/ls -lde "$private_root") || { echo "Could not inspect ACLs for $private_root." >&2; exit 1; }
+if printf '%s\n' "$acl_listing" | /usr/bin/tail -n +2 | /usr/bin/grep -Eq '^[[:space:]]*[0-9]+:'; then
+  echo "$private_root must not have an extended ACL." >&2
+  exit 1
+fi
 if [ -d "$config_dir" ]; then
   trusted_root_path "$config_dir" || { echo "$config_dir must be root-owned and group/other non-writable." >&2; exit 1; }
   chown root:wheel "$config_dir"

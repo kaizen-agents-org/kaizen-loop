@@ -573,6 +573,9 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('[ -L "$private_root" ]');
     expect(installer).toContain('stat -f %Sg "$private_root"');
     expect(installer).toContain('stat -f %Lp "$private_root"');
+    expect(installer).toContain('ls -lde "$private_root"');
+    expect(installer).toContain("grep -Eq '^[[:space:]]*[0-9]+:'");
+    expect(installer).toContain('must not have an extended ACL');
     expect(installer).toContain('Add :privateDirectory string $private_directory');
     expect(installer).toContain('--kaizen-home <absolute-kaizen-home>');
     expect(installer).toContain('Scheduled project(s) are not registered');
