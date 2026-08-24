@@ -381,6 +381,7 @@ const github = () => request({
   });
 
   it('publishes the revalidated commit through the scheduled root-broker path', async () => {
+    const tokensIssuedBeforePublication = githubAppTokensIssued;
     await new Promise<void>((resolve, reject) => {
       execFile(scheduledPath, ['canary', 'o-r', 'publish'], {
         env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: configPath }
@@ -412,7 +413,7 @@ const github = () => request({
     expect(execFileSync('/usr/bin/git', [
       '--git-dir', remoteRepository, 'rev-parse', 'refs/heads/kaizen/test'
     ], { encoding: 'utf8' }).trim()).toBe(expectedSha);
-    expect(githubAppTokensIssued).toBe(1);
+    expect(githubAppTokensIssued - tokensIssuedBeforePublication).toBe(1);
   });
 
   it('rejects a same-UID launcher request absent from the root-owned job registration', async () => {
@@ -602,6 +603,7 @@ describe('publication broker source contract', () => {
     expect(brokerSource).toContain('.rsaSignatureMessagePKCS1v15SHA256');
     expect(brokerSource).toContain('/app/installations/\\(installationId)/access_tokens');
     expect(brokerSource).toContain('cached.expiresAt.timeIntervalSinceNow > 300');
+    expect(brokerSource).toContain('token(for: config, forceRefresh: true)');
     expect(brokerSource).toContain('willPerformHTTPRedirection');
     expect(brokerSource).toContain('data.count <= 65_536 - incoming.count');
     expect(brokerSource).toContain('workingDirectory: "/var/empty"');

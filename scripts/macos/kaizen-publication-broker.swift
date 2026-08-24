@@ -99,7 +99,7 @@ private final class GitHubCredentialProvider: @unchecked Sendable {
     private let lock = NSLock()
     private var cached: GitHubInstallationCredential?
 
-    func token(for config: BrokerConfig) throws -> String {
+    func token(for config: BrokerConfig, forceRefresh: Bool = false) throws -> String {
         if let tokenFile = config.tokenFile {
             guard let token = readTrustedToken(tokenFile) else {
                 throw NSError(domain: "KaizenPublicationBroker", code: 20)
@@ -107,7 +107,7 @@ private final class GitHubCredentialProvider: @unchecked Sendable {
             return token
         }
         lock.lock(); defer { lock.unlock() }
-        if let cached, cached.expiresAt.timeIntervalSinceNow > 300 { return cached.token }
+        if !forceRefresh, let cached, cached.expiresAt.timeIntervalSinceNow > 300 { return cached.token }
         let credential = try mintGitHubInstallationCredential(config)
         cached = credential
         return credential.token
@@ -1231,7 +1231,7 @@ private func publish(_ descriptor: Int32, config: BrokerConfig, request: [String
         ) != nil { return false }
     }
 
-    let token = try githubCredentials.token(for: config)
+    let token = try githubCredentials.token(for: config, forceRefresh: true)
     let credentialPath = (operationRoot as NSString).appendingPathComponent("github-credential")
     guard manager.createFile(atPath: credentialPath, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600]) else {
         return false

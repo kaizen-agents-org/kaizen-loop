@@ -77,7 +77,8 @@ sudo scripts/install-macos-publication-broker.sh \
 The broker creates an RS256 JWT only when it needs a credential, exchanges it through
 GitHub's fixed `https://api.github.com/app/installations/<id>/access_tokens` endpoint,
 and caches the returned installation token only in root process memory. It refreshes
-the token when fewer than five minutes remain. The private key and installation token
+the token when fewer than five minutes remain, and mints a fresh token before every Git
+push so the publication starts with the full installation-token lifetime. The private key and installation token
 never enter the scheduled runtime environment or a command argument.
 GitHub grants an installation token access to the repositories selected for that App
 installation. Keep the App installation itself limited to the intended repositories;
