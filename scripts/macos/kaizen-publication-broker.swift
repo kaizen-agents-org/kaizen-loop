@@ -455,6 +455,28 @@ private func trustedRootPath(_ candidate: String, regularFile: Bool = true, exac
     }
 }
 
+private func hasExtendedAcl(_ path: String) -> Bool {
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/bin/ls")
+    process.arguments = ["-lde", path]
+    process.standardOutput = output
+    process.standardError = Pipe()
+    do {
+        try process.run()
+        process.waitUntilExit()
+    } catch {
+        return true
+    }
+    guard process.terminationStatus == 0,
+          let listing = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else {
+        return true
+    }
+    return listing.split(separator: "\n").dropFirst().contains {
+        $0.range(of: #"^\s*\d+:"#, options: .regularExpression) != nil
+    }
+}
+
 private func readTrustedToken(_ path: String) -> String? {
     let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
     guard descriptor >= 0 else { return nil }
@@ -1349,6 +1371,9 @@ do {
               chmod(config.privateDirectory, 0o710) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
+    }
+    guard !hasExtendedAcl(config.privateDirectory) else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 12)
     }
     let schedulerOwner: uid_t = testingConfigPath() == nil ? 0 : config.runtimeUid
     let schedulerSocket = try makeSocket(config.schedulerSocketPath, uid: schedulerOwner, gid: config.runtimeGid, mode: 0o600)

@@ -596,6 +596,9 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('StandardErrorPath');
     expect(brokerSource).toContain('chown(config.privateDirectory, 0, config.runtimeGid)');
     expect(brokerSource).toContain('chmod(config.privateDirectory, 0o710)');
+    expect(brokerSource).toContain('private func hasExtendedAcl(_ path: String) -> Bool');
+    expect(brokerSource).toContain('process.arguments = ["-lde", path]');
+    expect(brokerSource).toContain('guard !hasExtendedAcl(config.privateDirectory)');
     expect(brokerSource).toContain('processPath(pid) == config.scheduledLauncherExecutable');
     expect(brokerSource).toContain('parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"');
     expect(brokerSource).toContain('operation == "scheduled-run" || operation == "scheduled-canary"');
