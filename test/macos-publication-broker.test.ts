@@ -66,6 +66,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
   let githubAppServer: Server;
   let githubAppApiBaseUrl: string;
   let githubAppTokenRequests = 0;
+  let githubAppTokensIssued = 0;
   let githubAppPrivateKeyPath: string;
   let githubAppPkcs1PrivateKeyPath: string;
   let githubAppResponseMode: 'success' | 'redirect' = 'success';
@@ -149,6 +150,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
         response.end();
         return;
       }
+      githubAppTokensIssued += 1;
       response.writeHead(201, { 'content-type': 'application/json' });
       response.end(JSON.stringify({
         token: 'installation-token',
@@ -410,7 +412,7 @@ const github = () => request({
     expect(execFileSync('/usr/bin/git', [
       '--git-dir', remoteRepository, 'rev-parse', 'refs/heads/kaizen/test'
     ], { encoding: 'utf8' }).trim()).toBe(expectedSha);
-    expect(githubAppTokenRequests).toBe(1);
+    expect(githubAppTokensIssued).toBe(1);
   });
 
   it('rejects a same-UID launcher request absent from the root-owned job registration', async () => {
@@ -458,18 +460,24 @@ const github = () => request({
       const variantSchedulerSocket = path.join(root, `${variant.name}-scheduler.sock`);
       const variantPublicationSocket = path.join(root, `${variant.name}-publication.sock`);
       const appAuth = `<key>githubAppId</key><integer>12345</integer>\n<key>githubAppInstallationId</key><integer>67890</integer>\n<key>githubAppPrivateKeyFile</key><string>${xml(githubAppPrivateKeyPath)}</string>\n<key>githubAppApiBaseUrl</key><string>${xml(githubAppApiBaseUrl)}</string>`;
-      const contents = original
+      const authContents = original.replace(appAuth, variant.auth);
+      expect(authContents).not.toBe(original);
+      expect(authContents).toContain(variant.auth);
+      const contents = authContents
         .replace(`<key>schedulerSocketPath</key><string>${xml(schedulerSocket)}</string>`, `<key>schedulerSocketPath</key><string>${xml(variantSchedulerSocket)}</string>`)
-        .replace(`<key>publicationSocketPath</key><string>${xml(publicationSocket)}</string>`, `<key>publicationSocketPath</key><string>${xml(variantPublicationSocket)}</string>`)
-        .replace(appAuth, variant.auth);
+        .replace(`<key>publicationSocketPath</key><string>${xml(publicationSocket)}</string>`, `<key>publicationSocketPath</key><string>${xml(variantPublicationSocket)}</string>`);
       await fs.writeFile(variantConfig, contents);
       const variantBroker = spawn(brokerPath, [variantConfig], {
         env: { ...process.env, KAIZEN_BROKER_TEST_CONFIG: variantConfig },
         stdio: 'ignore'
       });
-      await Promise.all([waitForPath(variantSchedulerSocket), waitForPath(variantPublicationSocket)]);
-      variantBroker.kill('SIGTERM');
-      await new Promise<void>((resolve) => variantBroker.once('exit', () => resolve()));
+      const variantExited = new Promise<void>((resolve) => variantBroker.once('exit', () => resolve()));
+      try {
+        await Promise.all([waitForPath(variantSchedulerSocket), waitForPath(variantPublicationSocket)]);
+      } finally {
+        if (variantBroker.exitCode === null) variantBroker.kill('SIGTERM');
+        await variantExited;
+      }
     }
   });
 
@@ -488,11 +496,13 @@ const github = () => request({
     });
     try {
       await Promise.all([waitForPath(redirectSchedulerSocket), waitForPath(redirectPublicationSocket)]);
+      const tokenRequestsBeforeRedirect = githubAppTokenRequests;
       await new Promise<void>((resolve, reject) => {
         execFile(scheduledPath, ['canary', 'o-r', 'maintenance'], {
           env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: redirectConfig }
         }, (error) => error ? reject(error) : resolve());
       });
+      expect(githubAppTokenRequests - tokenRequestsBeforeRedirect).toBeGreaterThan(0);
       expect(githubAppRedirectTargetRequests).toBe(0);
     } finally {
       githubAppResponseMode = 'success';
