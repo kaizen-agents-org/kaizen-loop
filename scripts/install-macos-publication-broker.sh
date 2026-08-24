@@ -273,7 +273,7 @@ validate_existing_private_directory() {
     [ "$private_uid" -eq 0 ] || { echo "$private_directory must be root-owned." >&2; exit 1; }
     [ $((0$private_mode & 022)) -eq 0 ] || { echo "$private_directory must not be group/other-writable." >&2; exit 1; }
     if [ "$private_gid" -ne "$runtime_gid" ] || [ "$private_mode" -ne 710 ]; then
-      chown root:"$runtime_user" "$private_directory"
+      chown root:"$runtime_gid" "$private_directory"
       chmod 0710 "$private_directory"
     fi
     [ "$(stat -f %u "$private_directory")" -eq 0 ] || { echo "$private_directory owner normalization failed." >&2; exit 1; }
@@ -281,7 +281,6 @@ validate_existing_private_directory() {
     [ "$(stat -f %Lp "$private_directory")" -eq 710 ] || { echo "$private_directory must have mode 0710." >&2; exit 1; }
   fi
 }
-validate_existing_private_directory
 if [ -L "$private_root" ] || { [ -e "$private_root" ] && [ ! -d "$private_root" ]; }; then
   echo "$private_root must be a real directory." >&2
   exit 1
@@ -294,6 +293,7 @@ if [ -d "$private_root" ]; then
     exit 1
   fi
 fi
+validate_existing_private_directory
 if [ -d "$private_root" ]; then
   trusted_root_path "$private_root" || { echo "$private_root must be root-owned and group/other non-writable." >&2; exit 1; }
   chown root:wheel "$private_root"
