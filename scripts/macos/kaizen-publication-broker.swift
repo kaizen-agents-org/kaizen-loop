@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Security
 
 private struct BrokerConfig: Decodable {
     let runtimeUid: UInt32
@@ -12,7 +13,11 @@ private struct BrokerConfig: Decodable {
     let cliPath: String
     let gitExecutable: String
     let githubCliExecutable: String
-    let tokenFile: String
+    let tokenFile: String?
+    let githubAppId: UInt64?
+    let githubAppInstallationId: UInt64?
+    let githubAppPrivateKeyFile: String?
+    let githubAppApiBaseUrl: String?
     let privateDirectory: String
     let allowedRepositories: [String: String]
     let scheduledJobs: [ScheduledJobConfig]
@@ -84,6 +89,32 @@ private final class RegistrationStore: @unchecked Sendable {
 private let maximumRequestBytes = 1_048_576
 private let maximumGitHubOutputBytes = 16 * 1_024 * 1_024
 private let registrations = RegistrationStore()
+
+private struct GitHubInstallationCredential {
+    let token: String
+    let expiresAt: Date
+}
+
+private final class GitHubCredentialProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cached: GitHubInstallationCredential?
+
+    func token(for config: BrokerConfig, forceRefresh: Bool = false) throws -> String {
+        if let tokenFile = config.tokenFile {
+            guard let token = readTrustedToken(tokenFile) else {
+                throw NSError(domain: "KaizenPublicationBroker", code: 20)
+            }
+            return token
+        }
+        lock.lock(); defer { lock.unlock() }
+        if !forceRefresh, let cached, cached.expiresAt.timeIntervalSinceNow > 300 { return cached.token }
+        let credential = try mintGitHubInstallationCredential(config)
+        cached = credential
+        return credential.token
+    }
+}
+
+private let githubCredentials = GitHubCredentialProvider()
 
 private func testingConfigPath() -> String? {
     guard geteuid() != 0,
@@ -446,11 +477,231 @@ private func readTrustedToken(_ path: String) -> String? {
     return token
 }
 
+private func readTrustedPrivateKey(_ path: String) -> Data? {
+    let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
+    guard descriptor >= 0 else { return nil }
+    defer { close(descriptor) }
+    var status = stat()
+    let expectedOwner: uid_t = testingConfigPath() == nil ? 0 : getuid()
+    guard fstat(descriptor, &status) == 0,
+          (status.st_mode & S_IFMT) == S_IFREG,
+          status.st_nlink == 1,
+          status.st_uid == expectedOwner,
+          status.st_mode & 0o777 == 0o600,
+          status.st_size > 0,
+          status.st_size <= 65_536 else { return nil }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    guard let data = try? handle.readToEnd(), !data.isEmpty, data.count <= 65_536 else { return nil }
+    return data
+}
+
+private func readDERElement(_ data: Data, offset: inout Int, limit: Int) -> (tag: UInt8, content: Range<Int>)? {
+    guard offset + 2 <= limit else { return nil }
+    let tag = data[offset]
+    offset += 1
+    let firstLength = Int(data[offset])
+    offset += 1
+    let length: Int
+    if firstLength & 0x80 == 0 {
+        length = firstLength
+    } else {
+        let byteCount = firstLength & 0x7f
+        guard (1...3).contains(byteCount), offset + byteCount <= limit, data[offset] != 0 else { return nil }
+        var accumulated = 0
+        for _ in 0..<byteCount {
+            accumulated = accumulated << 8 | Int(data[offset])
+            offset += 1
+        }
+        guard accumulated >= 128 else { return nil }
+        length = accumulated
+    }
+    guard length >= 0, offset <= limit - length else { return nil }
+    let content = offset..<(offset + length)
+    offset += length
+    return (tag, content)
+}
+
+private func pkcs1KeyData(fromPKCS8 data: Data) -> Data? {
+    var rootOffset = 0
+    guard let root = readDERElement(data, offset: &rootOffset, limit: data.count),
+          root.tag == 0x30, rootOffset == data.count else { return nil }
+    var childOffset = root.content.lowerBound
+    guard let version = readDERElement(data, offset: &childOffset, limit: root.content.upperBound), version.tag == 0x02,
+          let algorithm = readDERElement(data, offset: &childOffset, limit: root.content.upperBound), algorithm.tag == 0x30,
+          let privateKey = readDERElement(data, offset: &childOffset, limit: root.content.upperBound), privateKey.tag == 0x04,
+          !privateKey.content.isEmpty else { return nil }
+    return Data(data[privateKey.content])
+}
+
+private func importGitHubAppPrivateKey(_ data: Data) -> SecKey? {
+    guard let pem = String(data: data, encoding: .utf8) else { return nil }
+    let lines = pem.components(separatedBy: .newlines).filter { !$0.isEmpty }
+    guard let first = lines.first, let last = lines.last, lines.count >= 3 else { return nil }
+    let isPKCS1 = first == "-----BEGIN RSA PRIVATE KEY-----" && last == "-----END RSA PRIVATE KEY-----"
+    let isPKCS8 = first == "-----BEGIN PRIVATE KEY-----" && last == "-----END PRIVATE KEY-----"
+    guard isPKCS1 || isPKCS8 else { return nil }
+    let body = lines.dropFirst().dropLast().joined()
+    guard body.range(of: #"^[A-Za-z0-9+/]+={0,2}$"#, options: .regularExpression) != nil,
+          let decoded = Data(base64Encoded: body), !decoded.isEmpty else { return nil }
+    let keyData = isPKCS8 ? pkcs1KeyData(fromPKCS8: decoded) : decoded
+    guard let keyData else { return nil }
+    var error: Unmanaged<CFError>?
+    guard let key = SecKeyCreateWithData(keyData as CFData, [
+        kSecAttrKeyType: kSecAttrKeyTypeRSA,
+        kSecAttrKeyClass: kSecAttrKeyClassPrivate
+    ] as CFDictionary, &error),
+          let attributes = SecKeyCopyAttributes(key) as? [CFString: Any],
+          let keySize = attributes[kSecAttrKeySizeInBits] as? Int,
+          keySize >= 2_048 else { return nil }
+    return key
+}
+
+private func base64Url(_ data: Data) -> String {
+    data.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}
+
+private func githubAppJWT(appId: UInt64, privateKey: SecKey, now: Date = Date()) throws -> String {
+    let header = try JSONSerialization.data(withJSONObject: ["alg": "RS256", "typ": "JWT"], options: [.sortedKeys])
+    let timestamp = Int(now.timeIntervalSince1970)
+    let payload = try JSONSerialization.data(withJSONObject: [
+        "iat": timestamp - 60,
+        "exp": timestamp + 540,
+        "iss": appId
+    ], options: [.sortedKeys])
+    let signingInput = "\(base64Url(header)).\(base64Url(payload))"
+    var signingError: Unmanaged<CFError>?
+    guard let signature = SecKeyCreateSignature(
+        privateKey,
+        .rsaSignatureMessagePKCS1v15SHA256,
+        Data(signingInput.utf8) as CFData,
+        &signingError
+    ) as Data? else {
+        throw signingError?.takeRetainedValue() ?? NSError(domain: "KaizenPublicationBroker", code: 21)
+    }
+    return "\(signingInput).\(base64Url(signature))"
+}
+
+private final class GitHubTokenRequestDelegate: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+    let semaphore = DispatchSemaphore(value: 0)
+    private(set) var data = Data()
+    private(set) var response: HTTPURLResponse?
+    private(set) var error: Error?
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        self.response = response as? HTTPURLResponse
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive incoming: Data) {
+        guard data.count <= 65_536 - incoming.count else {
+            error = NSError(domain: "KaizenPublicationBroker", code: 26)
+            dataTask.cancel()
+            return
+        }
+        data.append(incoming)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if self.error == nil { self.error = error }
+        semaphore.signal()
+    }
+}
+
+private func parseGitHubTimestamp(_ value: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    if let date = formatter.date(from: value) { return date }
+    formatter.formatOptions.insert(.withFractionalSeconds)
+    return formatter.date(from: value)
+}
+
+private func mintGitHubInstallationCredential(_ config: BrokerConfig) throws -> GitHubInstallationCredential {
+    guard let appId = config.githubAppId,
+          let installationId = config.githubAppInstallationId,
+          let privateKeyFile = config.githubAppPrivateKeyFile,
+          let privateKeyData = readTrustedPrivateKey(privateKeyFile),
+          let privateKey = importGitHubAppPrivateKey(privateKeyData) else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 22)
+    }
+    let jwt = try githubAppJWT(appId: appId, privateKey: privateKey)
+    let baseUrl = config.githubAppApiBaseUrl ?? "https://api.github.com"
+    guard let url = URL(string: "\(baseUrl)/app/installations/\(installationId)/access_tokens") else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 23)
+    }
+    var request = URLRequest(url: url, timeoutInterval: 30)
+    request.httpMethod = "POST"
+    request.httpBody = Data("{}".utf8)
+    request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+    request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+    request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+    request.setValue("kaizen-publication-broker", forHTTPHeaderField: "User-Agent")
+    let delegate = GitHubTokenRequestDelegate()
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.timeoutIntervalForRequest = 30
+    sessionConfiguration.timeoutIntervalForResource = 35
+    sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    sessionConfiguration.urlCache = nil
+    sessionConfiguration.httpCookieStorage = nil
+    sessionConfiguration.httpShouldSetCookies = false
+    let delegateQueue = OperationQueue()
+    delegateQueue.maxConcurrentOperationCount = 1
+    let session = URLSession(configuration: sessionConfiguration, delegate: delegate, delegateQueue: delegateQueue)
+    session.dataTask(with: request).resume()
+    guard delegate.semaphore.wait(timeout: .now() + 40) == .success else {
+        session.invalidateAndCancel()
+        throw NSError(domain: "KaizenPublicationBroker", code: 24)
+    }
+    session.finishTasksAndInvalidate()
+    if let error = delegate.error { throw error }
+    guard let response = delegate.response,
+          response.statusCode == 201,
+          delegate.data.count <= 65_536,
+          let object = try JSONSerialization.jsonObject(with: delegate.data) as? [String: Any],
+          let token = object["token"] as? String,
+          !token.isEmpty, token.utf8.count <= 4_096,
+          !token.contains("\0"), !token.contains("\r"), !token.contains("\n"),
+          let expiresAtValue = object["expires_at"] as? String,
+          let expiresAt = parseGitHubTimestamp(expiresAtValue),
+          expiresAt.timeIntervalSinceNow > 60,
+          expiresAt.timeIntervalSinceNow <= 7_200 else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 25)
+    }
+    return GitHubInstallationCredential(token: token, expiresAt: expiresAt)
+}
+
 private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> Bool {
     let testRoot = testingConfigPath().map { ($0 as NSString).deletingLastPathComponent }
     let scheduledKeys = config.scheduledJobs.map { "\($0.project)/\($0.job)" }
+    let hasStaticToken = config.tokenFile != nil && config.githubAppId == nil &&
+        config.githubAppInstallationId == nil && config.githubAppPrivateKeyFile == nil && config.githubAppApiBaseUrl == nil
+    let hasGitHubApp = config.tokenFile == nil && (config.githubAppId ?? 0) > 0 &&
+        (config.githubAppInstallationId ?? 0) > 0 && config.githubAppPrivateKeyFile != nil
+    let tokenValid = config.tokenFile.map { trustedRootPath($0, exactMode: 0o600) && readTrustedToken($0) != nil } ?? false
+    let appKeyValid = config.githubAppPrivateKeyFile.map {
+        trustedRootPath($0, exactMode: 0o600) && readTrustedPrivateKey($0).flatMap(importGitHubAppPrivateKey) != nil
+    } ?? false
+    let apiBaseValid = config.githubAppApiBaseUrl == nil || config.githubAppApiBaseUrl == "https://api.github.com" ||
+        (testRoot != nil && config.githubAppApiBaseUrl?.range(of: #"^http://127\.0\.0\.1:[1-9][0-9]{0,4}$"#, options: .regularExpression) != nil)
     guard trustedRootPath(path, exactMode: 0o644),
-          trustedRootPath(config.tokenFile, exactMode: 0o600),
+          ((hasStaticToken && tokenValid) || (hasGitHubApp && appKeyValid)),
+          apiBaseValid,
           trustedRootPath(config.scheduledLauncherExecutable),
           trustedRootPath(config.supervisorLauncherExecutable),
           trustedRootPath(config.nodeExecutable),
@@ -469,8 +720,7 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
           config.allowedRepositories.allSatisfy({ repository, url in
               repository.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil &&
               (url == "https://github.com/\(repository).git" || (testRoot.map { url.hasPrefix("file://\($0)/") } ?? false))
-          }),
-          readTrustedToken(config.tokenFile) != nil else { return false }
+          }) else { return false }
     return true
 }
 
@@ -836,7 +1086,10 @@ private func handleGitHubCli(
         stdoutHandle.closeFile()
         stderrHandle.closeFile()
     }
-    guard let token = readTrustedToken(config.tokenFile) else { return .failure("github-cli-token-invalid") }
+    let token: String
+    do { token = try githubCredentials.token(for: config) }
+    catch { return .failure("github-cli-token-unavailable") }
+    guard connected(descriptor) else { return .failure("github-cli-client-disconnected") }
     let process = try spawnProcess(
         executable: config.githubCliExecutable,
         arguments: arguments,
@@ -979,7 +1232,13 @@ private func publish(_ descriptor: Int32, config: BrokerConfig, request: [String
         ) != nil { return false }
     }
 
-    let helper = "!f() { test \"$1\" = get || exit 0; printf '%s\\n' username=x-access-token; printf '%s\\n' password=\"$(/bin/cat \(shellQuote(config.tokenFile)))\"; }; f"
+    let token = try githubCredentials.token(for: config, forceRefresh: true)
+    guard connected(descriptor) else { return false }
+    let credentialPath = (operationRoot as NSString).appendingPathComponent("github-credential")
+    guard manager.createFile(atPath: credentialPath, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600]) else {
+        return false
+    }
+    let helper = "!f() { test \"$1\" = get || exit 0; printf '%s\\n' username=x-access-token; printf '%s\\n' password=\"$(/bin/cat \(shellQuote(credentialPath)))\"; }; f"
     let environment = [
         "GIT_ALLOW_PROTOCOL": testingConfigPath() == nil ? "https" : "file",
         "GIT_CONFIG_COUNT": "4",

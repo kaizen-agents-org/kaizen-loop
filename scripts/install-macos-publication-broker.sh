@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> --token-file <root-only-file> --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--kaizen-home <absolute-kaizen-home>] [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> (--token-file <root-only-file> | --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-file <root-only-pem>) --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--kaizen-home <absolute-kaizen-home>] [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -11,6 +11,9 @@ usage() {
 
 runtime_user=
 token_file=
+github_app_id=
+github_app_installation_id=
+github_app_private_key_file=
 node_executable=
 github_cli_executable=
 source_root=
@@ -23,6 +26,9 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --runtime-user) [ "$#" -ge 2 ] || usage; runtime_user=$2; shift 2 ;;
     --token-file) [ "$#" -ge 2 ] || usage; token_file=$2; shift 2 ;;
+    --github-app-id) [ "$#" -ge 2 ] || usage; github_app_id=$2; shift 2 ;;
+    --github-app-installation-id) [ "$#" -ge 2 ] || usage; github_app_installation_id=$2; shift 2 ;;
+    --github-app-private-key-file) [ "$#" -ge 2 ] || usage; github_app_private_key_file=$2; shift 2 ;;
     --repository) [ "$#" -ge 2 ] || usage; repositories="${repositories}${repositories:+
 }$2"; shift 2 ;;
     --scheduled-job) [ "$#" -ge 2 ] || usage; scheduled_jobs="${scheduled_jobs}${scheduled_jobs:+
@@ -36,9 +42,17 @@ while [ "$#" -gt 0 ]; do
     *) usage ;;
   esac
 done
-[ -n "$runtime_user" ] && [ -n "$token_file" ] && [ -n "$repositories" ] && [ -n "$scheduled_jobs" ] && [ -n "$tool_path" ] || usage
+[ -n "$runtime_user" ] && [ -n "$repositories" ] && [ -n "$scheduled_jobs" ] && [ -n "$tool_path" ] || usage
 
-case "$token_file" in /*) ;; *) echo "--token-file must be absolute." >&2; exit 2 ;; esac
+if [ -n "$token_file" ]; then
+  [ -z "$github_app_id" ] && [ -z "$github_app_installation_id" ] && [ -z "$github_app_private_key_file" ] || usage
+  case "$token_file" in /*) ;; *) echo "--token-file must be absolute." >&2; exit 2 ;; esac
+else
+  [ -n "$github_app_id" ] && [ -n "$github_app_installation_id" ] && [ -n "$github_app_private_key_file" ] || usage
+  echo "$github_app_id" | grep -Eq '^[1-9][0-9]{0,17}$' || usage
+  echo "$github_app_installation_id" | grep -Eq '^[1-9][0-9]{0,17}$' || usage
+  case "$github_app_private_key_file" in /*) ;; *) echo "--github-app-private-key-file must be absolute." >&2; exit 2 ;; esac
+fi
 case "$runtime_user" in *[!A-Za-z0-9._-]*|'') echo "Invalid runtime user." >&2; exit 2 ;; esac
 case "$publication_timeout_ms" in *[!0-9]*|'') usage ;; esac
 [ "$publication_timeout_ms" -ge 10000 ] && [ "$publication_timeout_ms" -le 3600000 ] || usage
@@ -99,12 +113,24 @@ trusted_root_path "$npm_executable" || {
   echo "npm and every ancestor must be root-owned and group/other non-writable." >&2
   exit 1
 }
-[ -f "$token_file" ] && [ ! -L "$token_file" ] && trusted_root_path "$token_file" || {
-  echo "The token file must be a root-owned, non-symlink file in root-owned non-writable directories." >&2
+credential_file=$token_file
+credential_label="token file"
+if [ -z "$credential_file" ]; then
+  credential_file=$github_app_private_key_file
+  credential_label="GitHub App private key file"
+fi
+[ -f "$credential_file" ] && [ ! -L "$credential_file" ] && trusted_root_path "$credential_file" || {
+  echo "The $credential_label must be a root-owned, non-symlink file in root-owned non-writable directories." >&2
   exit 1
 }
-[ "$(stat -f %Lp "$token_file")" -eq 600 ] || { echo "The token file mode must be 0600." >&2; exit 1; }
-[ -s "$token_file" ] || { echo "The token file is empty." >&2; exit 1; }
+[ "$(stat -f %Lp "$credential_file")" -eq 600 ] || { echo "The $credential_label mode must be 0600." >&2; exit 1; }
+[ -s "$credential_file" ] || { echo "The $credential_label is empty." >&2; exit 1; }
+credential_size=$(stat -f %z "$credential_file")
+if [ -n "$token_file" ]; then
+  [ "$credential_size" -le 1025 ] || { echo "The token file is too large." >&2; exit 1; }
+else
+  [ "$credential_size" -le 65536 ] || { echo "The GitHub App private key file is too large." >&2; exit 1; }
+fi
 
 old_ifs=$IFS
 IFS='
@@ -284,7 +310,13 @@ config_stage="$build_dir/publication-broker.plist"
 /usr/libexec/PlistBuddy -c 'Add :gitExecutable string /usr/bin/git' "$config_stage"
 /usr/bin/plutil -insert githubCliExecutable -string "$github_cli_executable" "$config_stage"
 /usr/libexec/PlistBuddy -c "Add :cliPath string $install_root/runtime/dist/cli.js" "$config_stage"
-/usr/bin/plutil -insert tokenFile -string "$token_file" "$config_stage"
+if [ -n "$token_file" ]; then
+  /usr/bin/plutil -insert tokenFile -string "$token_file" "$config_stage"
+else
+  /usr/bin/plutil -insert githubAppId -integer "$github_app_id" "$config_stage"
+  /usr/bin/plutil -insert githubAppInstallationId -integer "$github_app_installation_id" "$config_stage"
+  /usr/bin/plutil -insert githubAppPrivateKeyFile -string "$github_app_private_key_file" "$config_stage"
+fi
 /usr/libexec/PlistBuddy -c 'Add :privateDirectory string /var/db/kaizen-loop/publication' "$config_stage"
 /usr/libexec/PlistBuddy -c 'Add :allowedRepositories dict' "$config_stage"
 IFS='
