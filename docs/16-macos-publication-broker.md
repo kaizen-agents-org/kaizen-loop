@@ -1,10 +1,11 @@
 # macOS publication broker
 
-Scheduled HTTPS publication uses a root LaunchDaemon so a GitHub token never enters
+Scheduled HTTPS publication uses a root LaunchDaemon so GitHub credentials never enter
 the environment of the Kaizen supervisor, builder, verifier, or another process running
 as the scheduler user. Authenticated GitHub CLI operations are sent over the registered
 broker connection. The broker runs one fixed, root-owned `gh` executable from `/var/empty`,
-with a fixed empty configuration directory and the root-only token. It returns bounded
+with a fixed empty configuration directory and either a root-only token or a short-lived
+GitHub App installation token minted inside the broker. It returns bounded
 stdout, stderr, and exit status; neither the token nor an authenticated `gh` environment
 crosses into the runtime user process.
 The installed scheduler launcher asks the
@@ -37,9 +38,18 @@ A successful non-dry rebuild clears that marker.
 
 ## Install
 
-Build the checkout, create a token file without placing the token in shell history,
-then run the reviewed installer. The token file and its ancestors must be root-owned;
-the file must be a non-symlink regular file with mode `0600`.
+Build the checkout, then choose GitHub App authentication (recommended) or a static
+token. Credential files and all their ancestors must be root-owned; each credential
+must be a non-symlink regular file with mode `0600`.
+
+For GitHub App authentication, create and install an App on the selected repositories.
+Grant only the permissions needed by the configured jobs; typical Kaizen publication
+needs repository `Contents: Read and write`, `Issues: Read and write`,
+`Pull requests: Read and write`, `Actions: Read`, and `Checks: Read`. The checks
+permission lets PR guardian inspect check runs and annotations. Add permissions such as
+`Workflows: Read and write` only when a job must modify those resources. Webhooks are
+not required. Download an unencrypted private key, place it in the root-owned
+configuration directory, and install with the App and installation IDs:
 
 ```sh
 npm ci
@@ -50,6 +60,33 @@ sudo -u "$USER" /usr/bin/env -i HOME="$HOME" \
   PATH="/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   verifier --version --json
 sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop
+sudo install -o root -g wheel -m 0600 /path/to/github-app-private-key.pem \
+  /Library/Application\ Support/KaizenLoop/github-app-private-key.pem
+sudo scripts/install-macos-publication-broker.sh \
+  --runtime-user "$USER" \
+  --github-app-id 12345 \
+  --github-app-installation-id 67890 \
+  --github-app-private-key-file /Library/Application\ Support/KaizenLoop/github-app-private-key.pem \
+  --repository kaizen-agents-org/kaizen-loop \
+  --scheduled-job kaizen-agents-org-kaizen-loop/maintenance@02:00 \
+  --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
+  --github-cli /usr/local/libexec/kaizen-gh/gh \
+  --node "$(command -v node)"
+```
+
+The broker creates an RS256 JWT only when it needs a credential, exchanges it through
+GitHub's fixed `https://api.github.com/app/installations/<id>/access_tokens` endpoint,
+and caches the returned installation token only in root process memory. It refreshes
+the token when fewer than five minutes remain, and mints a fresh token before every Git
+push so the publication starts with the full installation-token lifetime. The private key and installation token
+never enter the scheduled runtime environment or a command argument.
+GitHub grants an installation token access to the repositories selected for that App
+installation. Keep the App installation itself limited to the intended repositories;
+the broker's repository allowlist remains an additional, independent restriction.
+
+For compatibility, a fine-grained PAT can still be provided instead:
+
+```sh
 sudo sh -c 'umask 077; /bin/cat > /Library/Application\ Support/KaizenLoop/github-token'
 sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
@@ -61,12 +98,15 @@ sudo scripts/install-macos-publication-broker.sh \
   --node "$(command -v node)"
 ```
 
+Pass exactly one authentication mode. The installer rejects a partial GitHub App
+configuration and rejects mixing GitHub App credentials with `--token-file`.
+
 The installer compiles and installs three root-owned executables, an immutable copy of
 the built Kaizen runtime, a root-owned mode-`0644` broker configuration containing no
 token value, and
 `/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist`. It refuses an
 unmarked existing installation and validates the Node, npm, GitHub CLI, and root-only
-token ownership chains. `--github-cli` must identify an immutable, root-owned executable;
+credential ownership chains. `--github-cli` must identify an immutable, root-owned executable;
 the runtime user's interactive `gh` installation or keychain session is not used.
 Before installing the broker, the installer creates or repairs the root-owned
 `/var/db/kaizen-loop` parent with mode `0711`. This permits the runtime user to
@@ -135,8 +175,9 @@ Before authenticated push, the broker:
 4. rejects symlinks and hard-linked regular files, takes root ownership, removes hooks
    and alternates, replaces repository config, runs `git fsck --full`, and revalidates
    the expected commit SHA;
-5. runs root Git with system/global config, redirects, and hooks disabled, using a
-   credential helper that reads the token from the root-only file; and
+5. obtains the current credential inside the root broker and runs root Git with
+   system/global config, redirects, and hooks disabled, using an ephemeral root-only
+   credential file removed with the operation directory; and
 6. replies with only `{"ok":true}` or `{"ok":false}`.
 
 For GitHub metadata and pull-request operations, the broker authenticates the same exact
@@ -185,7 +226,9 @@ sudo rm -R /var/db/kaizen-loop/publication
 ## Verification
 
 `test/macos-publication-broker.test.ts` compiles and exercises the native broker on a
-healthy macOS Swift toolchain. It proves that the broker-spawned supervisor passes
+healthy macOS Swift toolchain. Its local mock verifies the App JWT's RS256 signature,
+claims, installation endpoint, installation-token reuse, and refresh threshold. It also
+proves that the broker-spawned supervisor passes
 preflight, its same-UID Node child cannot invoke authenticated GitHub CLI work, the
 runtime environment has no token, brokered `gh` receives the credential only under the
 root identity, publication reaches the configured remote, and launcher disconnect

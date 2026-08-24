@@ -157,13 +157,16 @@ authorized the registered job.
 
 ```sh
 sudo install -d -o root -g wheel -m 0755 /Library/Application\ Support/KaizenLoop
-sudo sh -c 'umask 077; /bin/cat > /Library/Application\ Support/KaizenLoop/github-token'
+sudo install -o root -g wheel -m 0600 /path/to/github-app-private-key.pem \
+  /Library/Application\ Support/KaizenLoop/github-app-private-key.pem
 # Install a standalone administrator-owned gh outside the broker-managed runtime root.
 sudo install -d -o root -g wheel -m 0755 /usr/local/libexec/kaizen-gh
 sudo install -o root -g wheel -m 0755 /path/to/standalone/gh /usr/local/libexec/kaizen-gh/gh
 sudo scripts/install-macos-publication-broker.sh \
   --runtime-user "$USER" \
-  --token-file /Library/Application\ Support/KaizenLoop/github-token \
+  --github-app-id 12345 \
+  --github-app-installation-id 67890 \
+  --github-app-private-key-file /Library/Application\ Support/KaizenLoop/github-app-private-key.pem \
   --repository owner/repo \
   --scheduled-job owner-repo/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
