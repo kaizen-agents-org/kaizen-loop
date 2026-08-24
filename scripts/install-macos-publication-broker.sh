@@ -256,6 +256,20 @@ daemon_path=/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
 schedule_daemon_path=/Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
 install -d -o root -g wheel -m 0755 /usr/local/libexec
 trusted_root_path /usr/local/libexec || { echo "/usr/local/libexec must be root-owned and group/other non-writable." >&2; exit 1; }
+validate_existing_private_directory() {
+  if [ -L "$private_directory" ] || { [ -e "$private_directory" ] && [ ! -d "$private_directory" ]; }; then
+    echo "$private_directory must be a real directory." >&2
+    exit 1
+  fi
+  if [ -d "$private_directory" ]; then
+    private_acl_listing=$(/bin/ls -lde "$private_directory") || { echo "Could not inspect ACLs for $private_directory." >&2; exit 1; }
+    if printf '%s\n' "$private_acl_listing" | /usr/bin/tail -n +2 | /usr/bin/grep -Eq '^[[:space:]]*[0-9]+:'; then
+      echo "$private_directory must not have an extended ACL." >&2
+      exit 1
+    fi
+  fi
+}
+validate_existing_private_directory
 if [ -L "$private_root" ] || { [ -e "$private_root" ] && [ ! -d "$private_root" ]; }; then
   echo "$private_root must be a real directory." >&2
   exit 1

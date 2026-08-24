@@ -112,7 +112,9 @@ Before installing the broker, the installer creates or repairs the root-owned
 `/var/db/kaizen-loop` parent with mode `0711`. This permits the runtime user to
 traverse the path to the broker's runtime-owned `publication` directory while
 keeping the parent contents private; a symlink or non-directory at that path is
-rejected, as is an extended ACL on the parent. The broker continues to own
+rejected, as is an extended ACL on the parent. If an existing publication leaf is
+present, the installer rejects a symlink, non-directory, or extended ACL on that
+leaf before changing the parent mode. The broker continues to own
 `/var/db/kaizen-loop/publication` for the runtime group with mode `0710`.
 After creating or opening that leaf, the broker reapplies its ownership and mode,
 first verifies with `lstat` that the leaf is a real directory (not a symlink), then
