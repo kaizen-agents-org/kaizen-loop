@@ -340,9 +340,16 @@ const github = () => request({
     await fs.rm(root, { recursive: true, force: true });
   }, 30_000);
 
+  it('advertises the root-only production dispatch and canary commands', async () => {
+    const output = await new Promise<string>((resolve, reject) => {
+      execFile(scheduledPath, ['--help'], (error, stdout) => error ? reject(error) : resolve(stdout));
+    });
+    expect(output.trim()).toBe('usage: kaizen-scheduled-launcher dispatch | canary <project> <job>');
+  });
+
   it('authenticates the broker-spawned supervisor and rejects its same-UID Node child', async () => {
     await new Promise<void>((resolve, reject) => {
-      execFile(scheduledPath, ['ignored-node', 'o-r', 'maintenance'], {
+      execFile(scheduledPath, ['canary', 'o-r', 'maintenance'], {
         env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: configPath }
       }, (error) => error ? reject(new Error(`${error.message}\n${brokerStderr}`)) : resolve());
     });
@@ -373,7 +380,7 @@ const github = () => request({
 
   it('publishes the revalidated commit through the scheduled root-broker path', async () => {
     await new Promise<void>((resolve, reject) => {
-      execFile(scheduledPath, ['ignored-node', 'o-r', 'publish'], {
+      execFile(scheduledPath, ['canary', 'o-r', 'publish'], {
         env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: configPath }
       }, (error) => error ? reject(new Error(`${error.message}\n${brokerStderr}`)) : resolve());
     });
@@ -408,7 +415,7 @@ const github = () => request({
 
   it('rejects a same-UID launcher request absent from the root-owned job registration', async () => {
     const error = await new Promise<Error | null>((resolve) => {
-      execFile(scheduledPath, ['ignored-node', 'o-r', 'unconfigured'], {
+      execFile(scheduledPath, ['canary', 'o-r', 'unconfigured'], {
         env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: configPath }
       }, (failure) => resolve(failure));
     });
@@ -417,7 +424,7 @@ const github = () => request({
 
   it('treats scheduled-launcher disconnect as cancellation of the supervisor process group', async () => {
     await fs.rm(pidPath, { force: true });
-    const launcher = spawn(scheduledPath, ['ignored-node', 'o-r', 'sleep'], {
+    const launcher = spawn(scheduledPath, ['canary', 'o-r', 'sleep'], {
       env: {
         ...process.env,
         PATH: scheduledToolPath,
@@ -497,10 +504,45 @@ const github = () => request({
 });
 
 describe('publication broker source contract', () => {
+  it('rejects malformed Verifier provenance before installation', async () => {
+    const sourceRoot = path.resolve(import.meta.dirname, '..');
+    const installer = await fs.readFile(path.join(sourceRoot, 'scripts/install-macos-publication-broker.sh'), 'utf8');
+    const startMarker = `| "$node_executable" -e '\n`;
+    const start = installer.indexOf(startMarker);
+    const end = installer.indexOf(`\n'; then`, start + startMarker.length);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const validator = installer.slice(start + startMarker.length, end);
+    const valid = {
+      name: 'verifier',
+      version: '1.2.3',
+      status: 'current',
+      stale: false,
+      build: { commit: 'a'.repeat(40), builtAt: '2026-08-24T00:00:00Z', dirty: false },
+      runtime: { commit: 'a'.repeat(40), dirty: false, packageRoot: '/opt/verifier/packages/core' }
+    };
+    const accepts = (value: unknown) => {
+      try {
+        execFileSync(process.execPath, ['-e', validator], { input: JSON.stringify(value), stdio: ['pipe', 'pipe', 'pipe'] });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    expect(accepts(valid)).toBe(true);
+    expect(accepts({ ...valid, status: 'legacy' })).toBe(false);
+    expect(accepts({ ...valid, stale: null })).toBe(false);
+    expect(accepts({ ...valid, version: 1 })).toBe(false);
+    expect(accepts({ ...valid, build: { ...valid.build, dirty: 'false' } })).toBe(false);
+    expect(accepts({ ...valid, runtime: { ...valid.runtime, packageRoot: {} } })).toBe(false);
+  });
+
   it('keeps credentials root-only and broker responses bounded', async () => {
     const sourceRoot = path.resolve(import.meta.dirname, '..');
     const brokerSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-publication-broker.swift'), 'utf8');
     const supervisorSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-supervisor-launcher.swift'), 'utf8');
+    const scheduledSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-scheduled-launcher.swift'), 'utf8');
     const installer = await fs.readFile(path.join(sourceRoot, 'scripts/install-macos-publication-broker.sh'), 'utf8');
     expect(brokerSource).toContain('{\\"ok\\":true}');
     expect(brokerSource).toContain('{\\"ok\\":false}');
@@ -516,6 +558,16 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('--kaizen-home <absolute-kaizen-home>');
     expect(installer).toContain('Scheduled project(s) are not registered');
     expect(installer).toContain('sudo -u "$runtime_user" -- "$node_executable"');
+    expect(installer).toContain("/bin/sh -c 'command -v verifier'");
+    expect(installer).toContain('"$resolved_verifier" --version --json');
+    expect(installer).toContain('Scheduled tool PATH: $tool_path');
+    expect(installer).toContain('Verifier shebang:');
+    expect(installer).toContain('value.name !== "verifier"');
+    expect(installer).toContain('["current", "stale", "unverifiable"].includes(value.status)');
+    expect(installer).toContain('value.stale !== expectedStale');
+    expect(installer).toContain('!nullableString(value.build.commit)');
+    expect(installer).toContain('!nullableBoolean(value.runtime.dirty)');
+    expect(installer).toContain('typeof value.runtime.packageRoot !== "string"');
     expect(installer).toContain('plutil -insert kaizenHome');
     expect(installer).toContain('install -o root -g wheel -m 0600 /dev/null');
     expect(installer).toContain('StandardOutPath');
@@ -524,6 +576,8 @@ describe('publication broker source contract', () => {
     expect(brokerSource).toContain('chmod(config.privateDirectory, 0o710)');
     expect(brokerSource).toContain('processPath(pid) == config.scheduledLauncherExecutable');
     expect(brokerSource).toContain('parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"');
+    expect(brokerSource).toContain('operation == "scheduled-run" || operation == "scheduled-canary"');
+    expect(brokerSource).toContain('authenticateOperatorCanary');
     expect(brokerSource).toContain('mode: 0o620');
     expect(brokerSource).toContain('config.scheduledJobs.first');
     expect(brokerSource).toContain('POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT');
@@ -546,5 +600,9 @@ describe('publication broker source contract', () => {
     expect(supervisorSource).toContain('GH_CONFIG_DIR=/var/empty');
     expect(supervisorSource).toContain('KAIZEN_HOME=\\(config.kaizenHome)');
     expect(supervisorSource).toContain('arguments.count == 7 && arguments[1] == "run"');
+    expect(scheduledSource).toContain('usage: kaizen-scheduled-launcher dispatch | canary <project> <job>');
+    expect(scheduledSource).not.toContain('<node> <project> <job>');
+    expect(scheduledSource).toContain('geteuid() == 0 || isTest');
+    expect(scheduledSource).toContain('canary target is not a registered scheduled job');
   });
 });

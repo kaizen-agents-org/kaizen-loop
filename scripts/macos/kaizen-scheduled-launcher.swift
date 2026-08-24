@@ -18,13 +18,13 @@ private struct ScheduledJobConfig: Decodable {
 
 private struct ScheduledRunRequest: Encodable {
     let version = 1
-    let operation = "scheduled-run"
+    let operation: String
     let project: String
     let job: String
     let capability: String
 }
 
-private let usage = "usage: kaizen-scheduled-launcher <node> <project> <job> | dispatch"
+private let usage = "usage: kaizen-scheduled-launcher dispatch | canary <project> <job>"
 
 private func launcherError(_ message: String, code: Int = 1) -> NSError {
     NSError(
@@ -94,7 +94,12 @@ private func exchange(_ descriptor: Int32, request: Data) throws -> Bool {
     throw launcherError(reason)
 }
 
-private func sendScheduledRun(_ config: LauncherConfig, project: String, job: String) throws -> Bool {
+private func sendScheduledRun(
+    _ config: LauncherConfig,
+    operation: String,
+    project: String,
+    job: String
+) throws -> Bool {
     var random = [UInt8](repeating: 0, count: 32)
     let randomCount = random.count
     let randomStatus = random.withUnsafeMutableBytes {
@@ -105,6 +110,7 @@ private func sendScheduledRun(_ config: LauncherConfig, project: String, job: St
     let descriptor = try connectUnixSocket(config.schedulerSocketPath)
     defer { close(descriptor) }
     return try exchange(descriptor, request: JSONEncoder().encode(ScheduledRunRequest(
+        operation: operation,
         project: project,
         job: job,
         capability: capability
@@ -118,8 +124,9 @@ do {
     }
     let isTest = ProcessInfo.processInfo.environment["KAIZEN_BROKER_TEST_CONFIG"] != nil
     let isDispatch = CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "dispatch" && geteuid() == 0
-    guard isDispatch || (isTest && CommandLine.arguments.count == 4) else {
-        throw launcherError("expected a project and job, or the root-only dispatch command; \(usage)", code: 5)
+    let isCanary = CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "canary" && (geteuid() == 0 || isTest)
+    guard isDispatch || isCanary else {
+        throw launcherError("dispatch requires root and a due calendar entry; canary requires root and a registered project/job; \(usage)", code: 5)
     }
     let path = configPath()
     let config: LauncherConfig
@@ -133,13 +140,18 @@ do {
         let due = config.scheduledJobs.filter { $0.hour == now.hour && $0.minute == now.minute }
         guard !due.isEmpty else { throw launcherError("no scheduled jobs are due at the current time", code: 3) }
         for entry in due {
-            guard try sendScheduledRun(config, project: entry.project, job: entry.job) else {
+            guard try sendScheduledRun(config, operation: "scheduled-run", project: entry.project, job: entry.job) else {
                 throw NSError(domain: "KaizenScheduledLauncher", code: 4)
             }
         }
         exit(0)
     }
-    exit(try sendScheduledRun(config, project: CommandLine.arguments[2], job: CommandLine.arguments[3]) ? 0 : 1)
+    let project = CommandLine.arguments[2]
+    let job = CommandLine.arguments[3]
+    guard config.scheduledJobs.contains(where: { $0.project == project && $0.job == job }) else {
+        throw launcherError("canary target is not a registered scheduled job: \(project)/\(job)", code: 6)
+    }
+    exit(try sendScheduledRun(config, operation: "scheduled-canary", project: project, job: job) ? 0 : 1)
 } catch {
     FileHandle.standardError.write(Data("Kaizen scheduled publication launcher failed: \(error.localizedDescription)\n".utf8))
     exit(1)

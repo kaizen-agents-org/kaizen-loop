@@ -6,6 +6,7 @@ export declare function refreshCanonicalVerifier(options: {
     expectedCommit: string;
     previousPackageRoot: string;
     runCommand: CommandRunner;
+    executableSearchPath?: string;
 }): Promise<CanonicalVerifierRefresh>;
 export declare class CanonicalVerifierRefresh {
     readonly packageRoot: string;
