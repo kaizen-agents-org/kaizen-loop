@@ -115,7 +115,8 @@ keeping the parent contents private; a symlink or non-directory at that path is
 rejected, as is an extended ACL on the parent. The broker continues to own
 `/var/db/kaizen-loop/publication` for the runtime group with mode `0710`.
 After creating or opening that leaf, the broker reapplies its ownership and mode,
-then rejects any extended ACL before creating its sockets or accepting operations.
+first verifies with `lstat` that the leaf is a real directory (not a symlink), then
+rejects any extended ACL before creating its sockets or accepting operations.
 This also fails closed for an ACL already present on an upgraded installation.
 Before replacing an existing broker, the installer also resolves `verifier` with the
 exact registered `--tool-path` and runs `verifier --version --json` as the runtime user

@@ -477,6 +477,19 @@ private func hasExtendedAcl(_ path: String) -> Bool {
     }
 }
 
+private func assertRealDirectory(_ path: String) throws {
+    var status = stat()
+    guard lstat(path, &status) == 0 else {
+        guard errno == ENOENT else {
+            throw NSError(domain: "KaizenPublicationBroker", code: 13)
+        }
+        return
+    }
+    guard status.st_mode & S_IFMT == S_IFDIR else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 13)
+    }
+}
+
 private func readTrustedToken(_ path: String) -> String? {
     let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
     guard descriptor >= 0 else { return nil }
@@ -1365,13 +1378,16 @@ do {
     let path = configuredPath()
     let config = try PropertyListDecoder().decode(BrokerConfig.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     guard validateRootConfiguration(config, path: path) else { throw NSError(domain: "KaizenPublicationBroker", code: 8) }
+    try assertRealDirectory(config.privateDirectory)
     try FileManager.default.createDirectory(atPath: config.privateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try assertRealDirectory(config.privateDirectory)
     if testingConfigPath() == nil {
         guard chown(config.privateDirectory, 0, config.runtimeGid) == 0,
               chmod(config.privateDirectory, 0o710) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
     }
+    try assertRealDirectory(config.privateDirectory)
     guard !hasExtendedAcl(config.privateDirectory) else {
         throw NSError(domain: "KaizenPublicationBroker", code: 12)
     }
