@@ -14,6 +14,8 @@ export interface FleetSyncOptions {
     repairLocks: boolean;
     verify: boolean;
     prune: boolean;
+    /** Explicitly acknowledge replacing the complete registered fleet topology. */
+    replaceAll?: boolean;
     dryRun: boolean;
     runCommand: CommandRunner;
     schedulerLauncherTrust?: (launcher: string) => boolean;
@@ -49,6 +51,12 @@ export interface FleetSyncResult {
     dryRun: boolean;
     projects: FleetProjectResult[];
     pruned: string[];
+    diff?: FleetTopologyDiff;
+}
+export interface FleetTopologyDiff {
+    added: string[];
+    removed: string[];
+    retained: string[];
 }
 export interface FleetRefreshStep {
     name: string;

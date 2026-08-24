@@ -32,6 +32,8 @@ export interface FleetSyncOptions {
   repairLocks: boolean;
   verify: boolean;
   prune: boolean;
+  /** Explicitly acknowledge replacing the complete registered fleet topology. */
+  replaceAll?: boolean;
   dryRun: boolean;
   runCommand: CommandRunner;
   schedulerLauncherTrust?: (launcher: string) => boolean;
@@ -61,6 +63,13 @@ export interface FleetSyncResult {
   dryRun: boolean;
   projects: FleetProjectResult[];
   pruned: string[];
+  diff?: FleetTopologyDiff;
+}
+
+export interface FleetTopologyDiff {
+  added: string[];
+  removed: string[];
+  retained: string[];
 }
 
 export interface FleetRefreshStep {
@@ -95,6 +104,9 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   if (options.prune && !options.manifestPath && !options.repos?.length) {
     throw new KaizenError('--prune requires --manifest or an explicit --repo expected set.');
   }
+  if (options.prune !== Boolean(options.replaceAll)) {
+    throw new KaizenError('--prune and --replace-all must be passed together; replacement may remove undisclosed fleet entries.');
+  }
   const manifest = options.manifestPath ? await loadFleetManifest(options.manifestPath) : undefined;
   const root = manifest
     ? path.dirname(path.resolve(options.manifestPath!))
@@ -111,9 +123,9 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   if (preflightFailures.length > 0) {
     return { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
   }
-  const baselineRegistry = options.prune || options.syncScheduler
-    ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
-    : undefined;
+  const baselineRegistry = options.manifestPath && options.prune
+    ? await loadRegistryForRecovery()
+    : await loadRegistry();
   const staged: Registry = { version: 1, projects: {} };
   const projects: FleetProjectResult[] = [];
   for (const project of discovered) {
@@ -135,7 +147,15 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     projects.push(projectResult);
   }
 
-  const value = { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects, pruned: [] as string[] };
+  const value = {
+    runtime: runtimeIdentity(),
+    root,
+    owner,
+    dryRun: options.dryRun,
+    projects,
+    pruned: [] as string[],
+    diff: topologyDiff(baselineRegistry, discovered.map((project) => project.slug))
+  };
   if (fleetHasFailures(value)) return value;
   const seen = new Set(discovered.map((project) => project.slug));
   const applyTopology = (registry: Registry): { registry: Registry; pruned: string[] } => {
@@ -194,6 +214,17 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
     }
   }
   return result;
+}
+
+function topologyDiff(baseline: Registry | undefined, discovered: string[]): FleetTopologyDiff | undefined {
+  if (!baseline) return undefined;
+  const before = new Set(Object.keys(baseline.projects));
+  const after = new Set(discovered);
+  return {
+    added: discovered.filter((slug) => !before.has(slug)).sort(),
+    removed: [...before].filter((slug) => !after.has(slug)).sort(),
+    retained: discovered.filter((slug) => before.has(slug)).sort()
+  };
 }
 
 export function fleetHasFailures(result: FleetSyncResult): boolean {

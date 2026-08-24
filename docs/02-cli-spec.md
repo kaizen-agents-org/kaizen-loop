@@ -343,7 +343,7 @@ Kaizen Loop 自体を更新したあとに、複数 repo のローカル実行�
 
 ```
 kaizen fleet [--manifest <path> | --root <path> [--owner <owner>] [--repo <name|owner/name>...]]
-             [--verify] [--prune] [--dry-run]
+             [--verify] [--prune --replace-all] [--dry-run]
              [--no-config] [--no-workspace] [--no-labels] [--no-scheduler] [--no-lock-repair]
 ```
 
@@ -351,7 +351,8 @@ kaizen fleet [--manifest <path> | --root <path> [--owner <owner>] [--repo <name|
 - `--manifest`: registry に依存しない authoritative inventory。`--root` / `--owner` / `--repo` とは併用しない
 - `--owner`: 対象 GitHub owner。省略時はカレント repo の origin から推定
 - `--repo`: 対象の完全な期待集合。1件でも発見できなければ変更前に失敗する。省略時は `--root` 直下の `.kaizen/config.yml` を持つ repo を owner で絞って発見する
-- `--prune`: 期待集合にない registry entry を削除する。`--manifest` または明示的な `--repo` 完全集合が必須
+- `--prune --replace-all`: 期待集合にない registry entry を削除する。両方の flag が必須で、`--manifest` または明示的な `--repo` 完全集合も必須。`--prune` 単独や `--replace-all` 単独は fail-closed で拒否する
+- `diff`: fleet の追加 (`added`)、維持 (`retained`)、削除候補 (`removed`) を JSON と通常出力で表示する。`removed` は適用前に確認できるため、manifest は部分更新ではなく完全な authoritative inventory として管理する
 - `--dry-run`: 計画だけ表示し、ファイル・registry・GitHub・scheduler を変更しない
 - `--no-config`: 旧 `scheduler.nightly` / `scheduler.afternoon` / `scheduler.poll` から `scheduler.jobs` への移行をしない
 - `--no-workspace`: `~/.kaizen/workspaces/<slug>` を作成・修復しない
@@ -386,7 +387,7 @@ node dist/cli.js run --project kaizen-agents-org-kaizen-loop --dry-run --json
 
 `fleet` は全対象の checkout・origin・config を preflight してから適用する。設定または verify が1件でも失敗した場合、部分的な registry は commit しない。registry は process lock 内で atomic replace される。通常の scheduled run の `lastRun` telemetry は `~/.kaizen/projects/<slug>/last-run.json` に保存し、topology registry を書き換えない。
 
-破損復旧では registry 内の `localPath` を信用せず、`kaizen fleet --manifest ~/.kaizen/fleet.yml --prune` を使う。Kaizen Loop の config schema や scheduler 生成物を変更した場合も、安定した checkout を指す manifest から `fleet` を実行する。
+破損復旧では registry 内の `localPath` を信用せず、`kaizen fleet --manifest ~/.kaizen/fleet.yml --prune --replace-all` を使う。Kaizen Loop の config schema や scheduler 生成物を変更した場合も、安定した checkout を指す manifest から `fleet` を実行する。
 
 ---
 
