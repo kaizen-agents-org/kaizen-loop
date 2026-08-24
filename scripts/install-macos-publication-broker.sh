@@ -156,6 +156,66 @@ if (missing.length > 0) {
 }
 ' "$registry_path" $scheduled_projects
 
+verifier_diagnostic() {
+  echo "Scheduled tool PATH: $tool_path" >&2
+  echo "Resolved verifier: ${resolved_verifier:-<not found>}" >&2
+  if [ -n "${resolved_verifier:-}" ] && [ -f "$resolved_verifier" ]; then
+    verifier_shebang=$(sudo -u "$runtime_user" -- /usr/bin/head -n 1 "$resolved_verifier" 2>/dev/null || true)
+    echo "Verifier shebang: ${verifier_shebang:-<unavailable>}" >&2
+  fi
+}
+
+resolved_verifier=$(sudo -u "$runtime_user" -- /usr/bin/env -i \
+  HOME="$runtime_home" PATH="$tool_path" KAIZEN_HOME="$kaizen_home" \
+  /bin/sh -c 'command -v verifier' 2>/dev/null || true)
+case "$resolved_verifier" in
+  /*) ;;
+  *)
+    echo "Verifier preflight failed before broker installation: verifier is not available on the scheduled PATH." >&2
+    verifier_diagnostic
+    exit 1
+    ;;
+esac
+if ! verifier_output=$(sudo -u "$runtime_user" -- /usr/bin/env -i \
+  HOME="$runtime_home" PATH="$tool_path" KAIZEN_HOME="$kaizen_home" \
+  "$resolved_verifier" --version --json 2>&1); then
+  echo "Verifier preflight failed before broker installation: verifier --version --json did not run successfully." >&2
+  verifier_diagnostic
+  exit 1
+fi
+if ! printf '%s' "$verifier_output" | "$node_executable" -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; if (input.length > 65536) process.exit(1); });
+process.stdin.on("end", () => {
+  try {
+    const value = JSON.parse(input);
+    const nullableString = (candidate) => candidate === null || typeof candidate === "string";
+    const nullableBoolean = (candidate) => candidate === null || typeof candidate === "boolean";
+    const expectedStale = value?.status === "stale" ? true : value?.status === "current" ? false : null;
+    if (
+      !value || Array.isArray(value) ||
+      value.name !== "verifier" ||
+      typeof value.version !== "string" ||
+      !["current", "stale", "unverifiable"].includes(value.status) ||
+      !nullableBoolean(value.stale) || value.stale !== expectedStale ||
+      !value.build || Array.isArray(value.build) ||
+      !nullableString(value.build.commit) ||
+      !nullableString(value.build.builtAt) ||
+      !nullableBoolean(value.build.dirty) ||
+      !value.runtime || Array.isArray(value.runtime) ||
+      !nullableString(value.runtime.commit) ||
+      !nullableBoolean(value.runtime.dirty) ||
+      typeof value.runtime.packageRoot !== "string" || value.runtime.packageRoot.length === 0
+    ) process.exit(1);
+  } catch { process.exit(1); }
+});
+'; then
+  echo "Verifier preflight failed before broker installation: verifier --version --json did not return structured provenance." >&2
+  verifier_diagnostic
+  exit 1
+fi
+
 install_root=/usr/local/libexec/kaizen-loop
 config_dir='/Library/Application Support/KaizenLoop'
 log_dir=/var/log/kaizen-loop

@@ -156,6 +156,12 @@ private func authenticateScheduledTrigger(_ descriptor: Int32, config: BrokerCon
     return parentPid(pid) == 1 && processPath(1) == "/sbin/launchd"
 }
 
+private func authenticateOperatorCanary(_ descriptor: Int32, config: BrokerConfig) throws -> Bool {
+    let (uid, _, pid) = try peerCredentials(descriptor)
+    let expectedUid: uid_t = testingConfigPath() == nil ? 0 : config.runtimeUid
+    return uid == expectedUid && processPath(pid) == config.scheduledLauncherExecutable
+}
+
 private func readRequest(_ descriptor: Int32) throws -> [String: Any] {
     let deadline = Date().addingTimeInterval(10)
     var data = Data()
@@ -471,7 +477,8 @@ private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> 
 private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, request: [String: Any]) throws -> String? {
     guard exactKeys(request, ["version", "operation", "project", "job", "capability"]),
           request["version"] as? Int == 1,
-          request["operation"] as? String == "scheduled-run",
+          let operation = request["operation"] as? String,
+          operation == "scheduled-run" || operation == "scheduled-canary",
           let project = request["project"] as? String,
           let job = request["job"] as? String,
           let capability = request["capability"] as? String,
@@ -481,7 +488,10 @@ private func handleScheduledRun(_ descriptor: Int32, config: BrokerConfig, reque
     guard let registeredJob = config.scheduledJobs.first(where: { $0.project == project && $0.job == job }) else {
         return "scheduled job is not configured: \(project)/\(job)"
     }
-    guard try authenticateScheduledTrigger(descriptor, config: config) else { return "scheduled launcher authentication failed" }
+    let authenticated = operation == "scheduled-run"
+        ? try authenticateScheduledTrigger(descriptor, config: config)
+        : try authenticateOperatorCanary(descriptor, config: config)
+    guard authenticated else { return "scheduled launcher authentication failed" }
 
     let process = try spawnProcess(
         executable: config.supervisorLauncherExecutable,

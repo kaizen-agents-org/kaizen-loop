@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { getKaizenHome } from '../utils/paths.js';
 import { RunLock } from './lock.js';
@@ -11,7 +12,7 @@ export async function refreshCanonicalVerifier(options) {
     if (!COMMIT_PATTERN.test(options.expectedCommit)) {
         throw new Error(`refusing to build an invalid Verifier commit: ${options.expectedCommit}`);
     }
-    const globalLink = await resolveGlobalVerifierLink(options.runCommand);
+    const globalLink = await resolveGlobalVerifierLink(options.previousPackageRoot, options.executableSearchPath ?? process.env.PATH ?? '');
     const lock = await RunLock.acquire(path.join(path.dirname(globalLink), '.kaizen-update-lock'));
     try {
         const buildsRoot = path.join(getKaizenHome(), 'toolchain', 'verifier-builds');
@@ -93,18 +94,41 @@ export class CanonicalVerifierRefresh {
         await this.lock.release();
     }
 }
-async function resolveGlobalVerifierLink(runCommand) {
-    const result = await runCommand('npm', ['root', '-g'], { timeoutMs: 30_000 });
-    const globalRoot = result.stdout.trim();
-    if (!path.isAbsolute(globalRoot)) {
-        throw new Error(`npm root -g returned a non-absolute path: ${globalRoot || '<empty>'}`);
+async function resolveGlobalVerifierLink(previousPackageRoot, searchPath) {
+    const expectedPackageRoot = await fs.realpath(previousPackageRoot);
+    for (const directory of searchPath.split(path.delimiter)) {
+        if (!path.isAbsolute(directory))
+            continue;
+        const command = path.join(directory, 'verifier');
+        let commandStat;
+        try {
+            commandStat = await fs.lstat(command);
+        }
+        catch (error) {
+            if (error.code === 'ENOENT')
+                continue;
+            throw error;
+        }
+        if (!commandStat.isSymbolicLink()) {
+            throw new Error(`refusing to update a non-symlink Verifier command selected from PATH: ${command}`);
+        }
+        const commandTarget = path.resolve(path.dirname(command), await fs.readlink(command));
+        if (path.basename(commandTarget) !== 'cli.js' || path.basename(path.dirname(commandTarget)) !== 'dist') {
+            throw new Error(`Verifier command does not target a package dist/cli.js: ${command}`);
+        }
+        const globalLink = path.dirname(path.dirname(commandTarget));
+        const linkStat = await fs.lstat(globalLink);
+        if (!linkStat.isSymbolicLink()) {
+            throw new Error(`refusing to replace non-symlink global Verifier package: ${globalLink}`);
+        }
+        const observedPackageRoot = await fs.realpath(globalLink);
+        if (observedPackageRoot !== expectedPackageRoot) {
+            throw new Error(`Verifier command selected from PATH resolves to ${observedPackageRoot}, expected ${expectedPackageRoot}`);
+        }
+        await fs.access(command, constants.X_OK);
+        return globalLink;
     }
-    const globalLink = path.join(globalRoot, '@verifier', 'core');
-    const stat = await fs.lstat(globalLink);
-    if (!stat.isSymbolicLink()) {
-        throw new Error(`refusing to replace non-symlink global Verifier package: ${globalLink}`);
-    }
-    return globalLink;
+    throw new Error(`Verifier command was not found on the scheduled PATH: ${searchPath || '<empty>'}`);
 }
 async function replaceGlobalVerifierLink(options) {
     const linkStat = await fs.lstat(options.globalLink);

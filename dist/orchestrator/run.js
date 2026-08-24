@@ -551,7 +551,8 @@ export async function preflightVerifier(options) {
                 config: options.config,
                 expectedCommit,
                 previousPackageRoot,
-                runCommand: options.runCommand
+                runCommand: options.runCommand,
+                executableSearchPath: process.env.PATH
             });
         }
         catch (error) {
