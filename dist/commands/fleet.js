@@ -43,9 +43,9 @@ export async function syncFleet(options) {
     if (preflightFailures.length > 0) {
         return { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
     }
-    const baselineRegistry = options.prune || options.syncScheduler
-        ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
-        : undefined;
+    const baselineRegistry = options.manifestPath && options.prune
+        ? await loadRegistryForRecovery()
+        : await loadRegistry();
     const staged = { version: 1, projects: {} };
     const projects = [];
     for (const project of discovered) {

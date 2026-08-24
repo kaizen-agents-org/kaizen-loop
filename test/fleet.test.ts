@@ -141,6 +141,11 @@ describe('syncFleet', () => {
     ]);
     expect(output.projects[0].error).toBeUndefined();
     expect(fleetHasFailures(output)).toBe(false);
+    expect(output.diff).toEqual({
+      added: ['kaizen-agents-org-kaizen-loop'],
+      removed: [],
+      retained: []
+    });
   });
 
   it('requires an authoritative expected set before pruning', async () => {

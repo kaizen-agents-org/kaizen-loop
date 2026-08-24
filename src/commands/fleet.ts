@@ -123,9 +123,9 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   if (preflightFailures.length > 0) {
     return { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
   }
-  const baselineRegistry = options.prune || options.syncScheduler
-    ? (options.manifestPath && options.prune ? await loadRegistryForRecovery() : await loadRegistry())
-    : undefined;
+  const baselineRegistry = options.manifestPath && options.prune
+    ? await loadRegistryForRecovery()
+    : await loadRegistry();
   const staged: Registry = { version: 1, projects: {} };
   const projects: FleetProjectResult[] = [];
   for (const project of discovered) {
