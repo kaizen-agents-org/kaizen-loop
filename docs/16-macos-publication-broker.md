@@ -120,6 +120,13 @@ treats a client URL as authority. Add each authorized scheduler project/job pair
 The root-owned registration prevents another LaunchAgent under the runtime UID from
 choosing a different job or toolchain.
 
+Each installer execution creates a fresh temporary build directory under
+`/private/tmp/kaizen-broker-build.*` and invokes `swiftc` once for each of the three
+broker/launcher sources, using separate temporary module-cache directories. The three
+Swift binaries are therefore recompiled on every installation or upgrade; neither the
+compiled binaries nor Swift module caches are reused between installer executions. This
+is an installation-time round-trip cost, not work performed by each scheduled run.
+
 The installer creates `org.kaizen-agents.scheduled-publication` as a system
 LaunchDaemon with the registered calendar times. Do not install duplicate user
 LaunchAgents for these jobs. The root dispatcher starts the fixed root-owned runtime
@@ -152,6 +159,8 @@ The caller must be root, the launcher path must match the immutable path in the 
 broker configuration, and the project/job pair must already be registered. The broker
 continues to bind the spawned supervisor to a one-run capability and the registered
 repository. `dispatch` remains reserved for launchd and still refuses off-calendar runs.
+Do not invoke `dispatch` interactively; the installed LaunchDaemon supplies that argument
+through its `ProgramArguments` entry at the configured calendar times.
 Use the resulting project `last-run.json` and run summary as the canary evidence; require
 `infrastructureFailed: 0` and the expected processed/PR counts before enabling the rest of
 the fleet.
