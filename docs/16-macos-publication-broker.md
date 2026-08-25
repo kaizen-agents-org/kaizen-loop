@@ -113,8 +113,9 @@ Before installing the broker, the installer creates or repairs the root-owned
 traverse the path to the broker's runtime-owned `publication` directory while
 keeping the parent contents private; a symlink or non-directory at that path is
 rejected, as is an extended ACL on the parent. If an existing publication leaf is
-present, the installer rejects a symlink, non-directory, or extended ACL on that
-leaf before changing the parent mode. A root-owned, non-writable legacy leaf may
+present, the installer first validates the existing parent trust and ACL state
+without changing its mode, then rejects a symlink, non-directory, or extended ACL
+on that leaf before changing the parent mode. A root-owned, non-writable legacy leaf may
 be normalized to the runtime group and mode `0710`; attacker-owned or writable
 leaves are rejected. The installer also rejects an extended ACL on the existing
 parent before changing its mode. The broker continues to own
