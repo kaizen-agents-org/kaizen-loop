@@ -257,6 +257,87 @@ describe('syncFleet', () => {
       .toBe('github-actions');
   });
 
+  it('preflights every runner before mutating any fleet project', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const localDir = path.join(root, 'alpha');
+    const externalDir = path.join(root, 'omega');
+    const legacyLocal = {
+      version: 1,
+      agent: { default: 'codex', fallback: false },
+      scheduler: { provider: 'cron', jobs: {} }
+    };
+    const external = parse(defaultConfigYaml({ agent: 'codex', setup: null, verify: [] }));
+    external.execution.runner.provider = 'github-actions';
+    const localBefore = stringify(legacyLocal);
+    await writeFleetRepo(localDir, localBefore);
+    await writeFleetRepo(externalDir, stringify(external));
+    await saveRegistry({ version: 1, projects: {} });
+
+    const output = await syncFleet({
+      cwd: root,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['alpha', 'omega'],
+      migrateConfig: true,
+      ensureWorkspace: true,
+      ensureLabels: true,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      replaceAll: false,
+      dryRun: false,
+      runCommand: remoteRunner({
+        [localDir]: 'kaizen-agents-org/alpha',
+        [externalDir]: 'kaizen-agents-org/omega'
+      })
+    });
+
+    expect(output.projects).toHaveLength(1);
+    expect(output.projects[0]?.slug).toBe('kaizen-agents-org-omega');
+    expect(output.projects[0]?.error).toContain('execution.runner.provider=github-actions');
+    expect(await fs.readFile(path.join(localDir, '.kaizen', 'config.yml'), 'utf8')).toBe(localBefore);
+    expect((await loadRegistry()).projects).toEqual({});
+  });
+
+  it('rejects a malformed canonical runner before scheduler sync can migrate it', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    const raw = stringify({
+      version: 1,
+      execution: { runner: 'bad' },
+      agent: { default: 'codex' },
+      scheduler: { jobs: {} }
+    });
+    await writeFleetRepo(repoDir, raw);
+    await saveRegistry({ version: 1, projects: {} });
+
+    const output = await syncFleet({
+      cwd: root,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      replaceAll: false,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(output.projects[0]?.error).toContain('execution.runner must be an object');
+    expect(await fs.readFile(path.join(repoDir, '.kaizen', 'config.yml'), 'utf8')).toBe(raw);
+    expect((await loadRegistry()).projects).toEqual({});
+  });
+
   it('requires an authoritative expected set before pruning', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));

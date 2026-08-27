@@ -38,9 +38,26 @@ export async function syncFleet(options) {
         : await discoverFleetProjects({ root, owner, repos: options.repos, runCommand: options.runCommand });
     assertExactRequestedSet(discovered, owner, options.repos);
     const prepared = await prepareFleetProjects(discovered);
-    const preflightFailures = prepared
-        .filter((item) => item.error)
-        .map((item) => fleetProjectError(item.project, item.error));
+    const preflightFailures = prepared.flatMap((item) => {
+        if (item.error)
+            return [fleetProjectError(item.project, item.error)];
+        if (!options.syncScheduler)
+            return [];
+        try {
+            assertRunnerSupportedForLocalSync(item.config);
+            return [];
+        }
+        catch (error) {
+            const result = fleetProjectError(item.project, error instanceof Error ? error.message : String(error));
+            const execution = executionConfig(item.config);
+            result.execution = {
+                runner: execution.runner.provider,
+                supported: false,
+                legacy: item.executionLegacy
+            };
+            return [result];
+        }
+    });
     if (preflightFailures.length > 0) {
         return { runtime: runtimeIdentity(), root, owner, dryRun: options.dryRun, projects: preflightFailures, pruned: [] };
     }

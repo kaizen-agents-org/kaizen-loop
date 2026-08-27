@@ -58,6 +58,34 @@ describe('execution config', () => {
     })).toThrow('Unsupported legacy scheduler.provider: typo');
   });
 
+  it('rejects malformed canonical axes instead of replacing them during migration', () => {
+    const malformedBuilder: Record<string, unknown> = {
+      version: 1,
+      execution: { builder: 'bad' },
+      agent: { default: 'codex' }
+    };
+    expect(() => migrateLegacyExecutionConfig(malformedBuilder)).toThrow(
+      'execution.builder must be an object'
+    );
+    expect(malformedBuilder).toMatchObject({
+      execution: { builder: 'bad' },
+      agent: { default: 'codex' }
+    });
+
+    const malformedRunner: Record<string, unknown> = {
+      version: 1,
+      execution: { runner: 'bad' },
+      scheduler: { provider: 'cron', jobs: {} }
+    };
+    expect(() => migrateLegacyExecutionConfig(malformedRunner)).toThrow(
+      'execution.runner must be an object'
+    );
+    expect(malformedRunner).toMatchObject({
+      execution: { runner: 'bad' },
+      scheduler: { provider: 'cron' }
+    });
+  });
+
   it('migrates idempotently without keeping legacy keys', () => {
     const raw: Record<string, unknown> = {
       version: 1,

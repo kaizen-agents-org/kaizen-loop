@@ -34,14 +34,25 @@ export function executionConfig(config) {
     };
 }
 export function migrateLegacyExecutionConfig(config) {
+    if (Object.hasOwn(config, 'execution') && !record(config.execution)) {
+        throw new Error('execution must be an object');
+    }
     const execution = record(config.execution);
     const agent = record(config.agent);
     const scheduler = record(config.scheduler) ?? {};
     const legacyProvider = typeof scheduler.provider === 'string' ? scheduler.provider : undefined;
-    if (record(execution?.builder) && agent) {
+    const hasBuilder = Boolean(execution && Object.hasOwn(execution, 'builder'));
+    const hasRunner = Boolean(execution && Object.hasOwn(execution, 'runner'));
+    if (hasBuilder && !record(execution?.builder)) {
+        throw new Error('execution.builder must be an object');
+    }
+    if (hasRunner && !record(execution?.runner)) {
+        throw new Error('execution.runner must be an object');
+    }
+    if (hasBuilder && agent) {
         throw new Error('execution.builder cannot be combined with legacy agent settings');
     }
-    if (record(execution?.runner) && legacyProvider) {
+    if (hasRunner && legacyProvider) {
         throw new Error('execution.runner cannot be combined with legacy scheduler.provider settings');
     }
     const primary = agent?.default === 'codex' ? 'codex' : 'claude';
@@ -49,11 +60,11 @@ export function migrateLegacyExecutionConfig(config) {
     const models = record(agent?.model);
     const migratedExecution = execution ?? {};
     let migrated = false;
-    if (!record(migratedExecution.runner)) {
+    if (!hasRunner) {
         migratedExecution.runner = { provider: legacyRunner(legacyProvider) };
         migrated = true;
     }
-    if (!record(migratedExecution.builder)) {
+    if (!hasBuilder) {
         migratedExecution.builder = {
             primary: { provider: primary, model: nullableModel(models?.[primary]) },
             fallback: agent?.fallback === false
