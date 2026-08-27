@@ -55,7 +55,8 @@ export interface ExecutionAuthorization {
 export class GitHubClient {
   constructor(
     private readonly run: CommandRunner,
-    private readonly cwd: string
+    private readonly cwd: string,
+    private readonly repo?: string
   ) {}
 
   async authStatus(): Promise<void> {
@@ -289,19 +290,34 @@ export class GitHubClient {
     return { ...pullRequest, commits };
   }
 
-  async getPullRequest(number: number): Promise<GitHubPullRequestDetails> {
-    const result = await this.gh([
+  async getPullRequest(selector: number | string, repo = this.repo): Promise<GitHubPullRequestDetails> {
+    const result = await this.gh(withRepositoryScope([
       'pr',
       'view',
-      String(number),
+      String(selector),
       '--json',
       'number,headRefName,headRepositoryOwner,url,baseRefName,headRefOid,isDraft,state'
-    ]);
+    ], repo));
     return JSON.parse(result.stdout) as GitHubPullRequestDetails;
   }
 
-  async getRepositoryDefaultBranch(): Promise<string> {
-    const result = await this.gh(['repo', 'view', '--json', 'defaultBranchRef']);
+  async findPullRequestByHead(head: string, repo = this.repo): Promise<GitHubPullRequestDetails | undefined> {
+    try {
+      const result = await this.gh(withRepositoryScope([
+        'pr',
+        'view',
+        head,
+        '--json',
+        'number,headRefName,headRepositoryOwner,url,baseRefName,headRefOid,isDraft,state'
+      ], repo), { noRetry: true });
+      return JSON.parse(result.stdout) as GitHubPullRequestDetails;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async getRepositoryDefaultBranch(repo = this.repo): Promise<string> {
+    const result = await this.gh(withRepositoryScope(['repo', 'view', '--json', 'defaultBranchRef'], repo));
     const payload = JSON.parse(result.stdout || '{}') as { defaultBranchRef?: { name?: string } };
     return payload.defaultBranchRef?.name ?? '';
   }
@@ -311,25 +327,25 @@ export class GitHubClient {
     return result.stdout.trim();
   }
 
-  async getPullRequestLinkage(number: number): Promise<GitHubPullRequestLinkage> {
-    const result = await this.gh([
+  async getPullRequestLinkage(number: number, repo = this.repo): Promise<GitHubPullRequestLinkage> {
+    const result = await this.gh(withRepositoryScope([
       'pr',
       'view',
       String(number),
       '--json',
       'number,url,baseRefName,isDraft,closingIssuesReferences'
-    ]);
+    ], repo));
     return JSON.parse(result.stdout) as GitHubPullRequestLinkage;
   }
 
-  async getPullRequestResolution(number: number): Promise<GitHubPullRequestResolution> {
-    const result = await this.gh([
+  async getPullRequestResolution(number: number, repo = this.repo): Promise<GitHubPullRequestResolution> {
+    const result = await this.gh(withRepositoryScope([
       'pr',
       'view',
       String(number),
       '--json',
       'number,url,state,mergedAt,baseRefName,closingIssuesReferences'
-    ]);
+    ], repo));
     return JSON.parse(result.stdout) as GitHubPullRequestResolution;
   }
 
@@ -471,7 +487,7 @@ export class GitHubClient {
       options.body
     ];
     if (options.draft) args.push('--draft');
-    const result = await this.gh(args);
+    const result = await this.gh(withRepositoryScope(args, this.repo));
     const url = result.stdout.trim().split(/\s+/).find((part) => part.startsWith('http')) ?? result.stdout.trim();
     const number = url.match(/\/pull\/(\d+)/)?.[1];
     if (!number) throw new Error(`Could not parse created pull request URL: ${result.stdout.trim()}`);
@@ -479,11 +495,16 @@ export class GitHubClient {
     const prNumber = Number(number);
     const created = { url, number: prNumber };
     try {
-      const defaultBranch = await this.getRepositoryDefaultBranch();
+      const repo = repositoryFromPullRequestUrl(url) ?? this.repo;
+      if (!repo) {
+        throw new Error(`Could not determine target repository for created pull request validation: ${url}`);
+      }
+      const defaultBranch = await this.getRepositoryDefaultBranch(repo);
       if (!defaultBranch) throw new Error('Could not verify created pull request: repository default branch is unknown');
 
       const linkage = await this.waitForCreatedPullRequestLinkage({
         number: prNumber,
+        repo,
         defaultBranch,
         expectedClosingIssueNumber: options.expectedClosingIssueNumber,
         allowDraft: Boolean(options.draft)
@@ -496,12 +517,13 @@ export class GitHubClient {
 
   private async waitForCreatedPullRequestLinkage(options: {
     number: number;
+    repo: string;
     defaultBranch: string;
     expectedClosingIssueNumber: number;
     allowDraft: boolean;
   }): Promise<GitHubPullRequestLinkage> {
     const attempts = 5;
-    let linkage = await this.getPullRequestLinkage(options.number);
+    let linkage = await this.getPullRequestLinkage(options.number, options.repo);
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       validateCreatedPullRequestStructure(linkage, options.defaultBranch, options.allowDraft);
       if (linkage.closingIssuesReferences.some((issue) => issue.number === options.expectedClosingIssueNumber)) {
@@ -509,7 +531,7 @@ export class GitHubClient {
       }
       if (attempt < attempts) {
         await sleep(250 * 2 ** (attempt - 1));
-        linkage = await this.getPullRequestLinkage(options.number);
+        linkage = await this.getPullRequestLinkage(options.number, options.repo);
       }
     }
     const observed = linkage.closingIssuesReferences.map((issue) => `#${issue.number}`).join(', ') || 'none';
@@ -520,29 +542,33 @@ export class GitHubClient {
   }
 
   async editPullRequest(number: number, options: { title: string; body: string }): Promise<void> {
-    await this.gh(['pr', 'edit', String(number), '--title', options.title, '--body', options.body]);
+    await this.gh(withRepositoryScope(
+      ['pr', 'edit', String(number), '--title', options.title, '--body', options.body],
+      this.repo
+    ));
   }
 
   async markPullRequestReady(number: number): Promise<void> {
-    await this.gh(['pr', 'ready', String(number)]);
+    await this.gh(withRepositoryScope(['pr', 'ready', String(number)], this.repo));
   }
 
   async markPullRequestDraft(number: number): Promise<void> {
-    await this.gh(['pr', 'ready', String(number), '--undo']);
+    await this.gh(withRepositoryScope(['pr', 'ready', String(number), '--undo'], this.repo));
   }
 
   private async gh(args: string[], options: { ignoreAlreadyExists?: boolean; ignoreMissingLabel?: boolean; noRetry?: boolean } = {}) {
+    const scopedArgs = shouldScopeWithRepository(args) ? withRepositoryScope(args, this.repo) : args;
     let lastError: unknown;
     const attempts = options.noRetry ? 1 : 3;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        return await runTrustedGitHubCli(this.run, args, { cwd: this.cwd });
+        return await runTrustedGitHubCli(this.run, scopedArgs, { cwd: this.cwd });
       } catch (error) {
         const message = String(error);
         if (options.ignoreAlreadyExists && /already exists/i.test(message)) return emptyResult(args, this.cwd);
         if (options.ignoreMissingLabel && /not found|does not exist|missing/i.test(message)) return emptyResult(args, this.cwd);
         lastError = error;
-        if (attempt < 3) await sleep(250 * attempt);
+        if (attempt < attempts) await sleep(250 * attempt);
       }
     }
     throw lastError;
@@ -929,6 +955,45 @@ function labelsAfterMissingLabelError(labels: string[], error: unknown, required
 
 function emptyResult(args: string[], cwd: string) {
   return { command: 'gh', args, cwd, exitCode: 0, stdout: '', stderr: '', durationMs: 0 };
+}
+
+function shouldScopeWithRepository(args: string[]): boolean {
+  return args[0] === 'pr' || (args[0] === 'repo' && args[1] === 'view');
+}
+
+export function withRepositoryScope(args: string[], repo: string | undefined): string[] {
+  if (!repo || hasRepositoryScope(args)) return args;
+  if (args[0] === 'repo' && args[1] === 'view') {
+    // `gh repo view` takes the repository as a positional argument and rejects `--repo`.
+    return ['repo', 'view', repo, ...args.slice(2)];
+  }
+  if (args[0] === 'pr' && args[1] === 'create') {
+    return ['pr', 'create', '--repo', repo, ...args.slice(2)];
+  }
+  if (args[0] === 'pr' && args[2] && !args[2].startsWith('-')) {
+    return [args[0], args[1], args[2], '--repo', repo, ...args.slice(3)];
+  }
+  if (args.length >= 2) {
+    return [args[0], args[1], '--repo', repo, ...args.slice(2)];
+  }
+  return [...args, '--repo', repo];
+}
+
+export function hasRepositoryScope(args: string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === '--repo' || args[index] === '-R') return true;
+  }
+  return args[0] === 'repo' && args[1] === 'view' && Boolean(args[2]) && !args[2].startsWith('-');
+}
+
+export function repositoryFromPullRequestUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/^\/([^/]+\/[^/]+)\/pull\/\d+\/?$/);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizedTitle(title: string): string {

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CreatedPullRequestValidationError, GitHubClient, KAIZEN_LABELS } from '../src/github/client.js';
+import { CreatedPullRequestValidationError, GitHubClient, KAIZEN_LABELS, hasRepositoryScope } from '../src/github/client.js';
 import { buildDiscoveredIssueFingerprint } from '../src/discovered-issue-fingerprint.js';
 import type { CommandRunner } from '../src/utils/command.js';
+import { withTrustedExecutables } from '../src/utils/command.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
 
 describe('GitHubClient', () => {
@@ -342,11 +343,13 @@ describe('GitHubClient', () => {
 
     expect(pr).toEqual({ url: 'https://github.com/o/r/pull/7', number: 7 });
     expect(runner.mock.calls[0][1]).not.toContain('--draft');
-    expect(runner.mock.calls[1][1]).toEqual(['repo', 'view', '--json', 'defaultBranchRef']);
+    expect(runner.mock.calls[1][1]).toEqual(['repo', 'view', 'o/r', '--json', 'defaultBranchRef']);
     expect(runner.mock.calls[2][1]).toEqual([
       'pr',
       'view',
       '7',
+      '--repo',
+      'o/r',
       '--json',
       'number,url,baseRefName,isDraft,closingIssuesReferences'
     ]);
@@ -513,6 +516,105 @@ describe('GitHubClient', () => {
 
     expect(pr.number).toBe(7);
     expect(linkageReads).toBe(2);
+  });
+
+  it('scopes post-create repo and pull request views without ambient git remotes', async () => {
+    const githubCliRunner = vi.fn(async (args: string[]) => {
+      if ((args[0] === 'repo' || args[0] === 'pr') && args[1] === 'view' && !hasRepositoryScope(args)) {
+        throw new Error('failed to run git: fatal: not a git repository (or any of the parent directories): .git');
+      }
+      if (args[0] === 'repo' && args[1] === 'view') {
+        return ghResult('gh', args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return ghResult('gh', args, JSON.stringify({
+          number: 16,
+          url: 'https://github.com/o/r/pull/16',
+          baseRefName: 'main',
+          isDraft: false,
+          closingIssuesReferences: [{ number: 14, url: 'https://github.com/o/r/issues/14' }]
+        }));
+      }
+      return ghResult('gh', args, 'https://github.com/o/r/pull/16\n');
+    });
+    const client = new GitHubClient(
+      withTrustedExecutables(vi.fn(), {
+        githubCli: '/trusted/bin/gh',
+        githubCliRunner
+      }),
+      '/var/empty'
+    );
+
+    const pr = await client.createPullRequest({
+      base: 'main',
+      head: 'kaizen/issue-14-cover-the-agent-filter',
+      title: 'title',
+      body: 'Closes #14',
+      expectedClosingIssueNumber: 14
+    });
+
+    expect(pr).toEqual({ url: 'https://github.com/o/r/pull/16', number: 16 });
+    const viewCalls = githubCliRunner.mock.calls
+      .map(([args]) => args)
+      .filter((args) => args[1] === 'view');
+    expect(viewCalls.length).toBeGreaterThan(0);
+    for (const args of viewCalls) {
+      expect(hasRepositoryScope(args)).toBe(true);
+      if (args[0] === 'repo') {
+        expect(args[2]).toBe('o/r');
+        expect(args).not.toContain('--repo');
+      } else {
+        expect(args).toEqual(expect.arrayContaining(['--repo', 'o/r']));
+      }
+    }
+  });
+
+  it('uses the constructor repository for scheduled broker validation', async () => {
+    const githubCliRunner = vi.fn(async (args: string[]) => {
+      if ((args[0] === 'repo' || args[0] === 'pr') && args[1] === 'view' && !hasRepositoryScope(args)) {
+        throw new Error('failed to run git: fatal: not a git repository (or any of the parent directories): .git');
+      }
+      if (args[0] === 'repo' && args[1] === 'view') {
+        return ghResult('gh', args, JSON.stringify({ defaultBranchRef: { name: 'main' } }));
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return ghResult('gh', args, JSON.stringify({
+          number: 16,
+          url: 'https://github.com/s-hiraoku/topcoat-sandbox/pull/16',
+          baseRefName: 'main',
+          isDraft: false,
+          closingIssuesReferences: [{ number: 14 }]
+        }));
+      }
+      return ghResult('gh', args, 'https://github.com/s-hiraoku/topcoat-sandbox/pull/16\n');
+    });
+    const client = new GitHubClient(
+      withTrustedExecutables(vi.fn(), {
+        githubCli: '/trusted/bin/gh',
+        githubCliRunner
+      }),
+      '/var/empty',
+      's-hiraoku/topcoat-sandbox'
+    );
+
+    await client.createPullRequest({
+      base: 'main',
+      head: 'kaizen/issue-14-cover-the-agent-filter',
+      title: 'title',
+      body: 'Closes #14',
+      expectedClosingIssueNumber: 14
+    });
+
+    expect(githubCliRunner.mock.calls[0][0]).toEqual(expect.arrayContaining(['pr', 'create', '--repo', 's-hiraoku/topcoat-sandbox']));
+    for (const [args] of githubCliRunner.mock.calls.filter(([callArgs]) => callArgs[1] === 'view')) {
+      expect(hasRepositoryScope(args)).toBe(true);
+      if (args[0] === 'repo') {
+        expect(args[2]).toBe('s-hiraoku/topcoat-sandbox');
+        expect(args).not.toContain('--repo');
+      } else {
+        expect(args).toEqual(expect.arrayContaining(['--repo', 's-hiraoku/topcoat-sandbox']));
+      }
+    }
   });
 
   it('lists open pull requests for backlog limiting', async () => {

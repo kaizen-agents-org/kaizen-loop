@@ -275,7 +275,7 @@ async function loadActionsContext(cwd: string, issueNumber: number, command: Com
   );
   const repo = repoResult.stdout.trim();
   if (!/^[^/]+\/[^/]+$/.test(repo)) throw new Error(`Could not resolve GitHub repository: ${repo}`);
-  const github = new GitHubClient(command, cwd);
+  const github = new GitHubClient(command, cwd, repo);
   const issue = await github.getIssue(issueNumber);
   return { config, repo, github, issue };
 }
