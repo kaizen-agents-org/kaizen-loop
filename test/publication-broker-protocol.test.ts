@@ -19,9 +19,8 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) await fs.rm(directory, { recursive: true, force: true });
 });
 
-// Publication requests are processed after the client half-closes. GitHub CLI
-// requests are processed as soon as their newline-delimited frame is complete,
-// because that connection must remain open while the command is running.
+// The Swift broker frames every request at the first newline, matching
+// `readRequest`. A later client half-close is disconnection, not end-of-frame.
 async function startFakeBroker(response: unknown | ((request: unknown) => unknown)): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-broker-protocol-'));
   directories.push(directory);
@@ -42,15 +41,7 @@ async function startFakeBroker(response: unknown | ((request: unknown) => unknow
     socket.setEncoding('utf8');
     socket.on('data', (chunk) => {
       input += chunk;
-      if (input.endsWith('\n')) {
-        try {
-          const parsed = JSON.parse(input.trim()) as { operation?: unknown };
-          if (parsed.operation === 'github-cli') respond();
-        } catch { /* wait for EOF so malformed publication requests keep their existing behavior */ }
-      }
-    });
-    socket.on('end', () => {
-      respond();
+      if (input.includes('\n')) respond();
     });
   });
   sockets.push(server);
@@ -142,27 +133,69 @@ describe('publication broker wire contract', () => {
     }
   );
 
-  // Regression: the client used to write the request without half-closing, so
-  // the broker -- which parses only on end-of-input -- waited for its own read
-  // timeout and answered `request-timeout`. Every HTTPS publication failed that
-  // way, ten seconds at a time, reported as a failed publication.
-  it('half-closes the request so a broker that parses on end-of-input can reply', async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-broker-halfclose-'));
+  // Regression: #372 half-closed the publication request so an EOF-framed fake
+  // broker could reply. The Swift broker frames at newline and treats that FIN
+  // as client disconnect during import (`connected()` + `cancelProcessGroup`).
+  it('keeps the publication write half open until a newline-framed broker responds', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-broker-newline-'));
     directories.push(directory);
     const socketPath = path.join(directory, 'broker.sock');
-    let sawEnd = false;
+    let processedBeforeClientEnd = false;
+    let clientHalfClosedBeforeResponse = false;
     const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-      socket.on('data', () => undefined);
-      socket.on('end', () => {
-        sawEnd = true;
-        socket.end(`${JSON.stringify({ ok: true })}\n`);
+      let input = '';
+      socket.setEncoding('utf8');
+      socket.on('end', () => { clientHalfClosedBeforeResponse = true; });
+      socket.on('data', (chunk) => {
+        input += chunk;
+        if (input.includes('\n')) {
+          processedBeforeClientEnd = !clientHalfClosedBeforeResponse;
+          setTimeout(() => socket.end(`${JSON.stringify({ ok: true })}\n`), 25);
+        }
       });
     });
     sockets.push(server);
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 
     await expect(publisherFor(socketPath)(request)).resolves.toBeUndefined();
-    expect(sawEnd).toBe(true);
+    expect(processedBeforeClientEnd).toBe(true);
+    expect(clientHalfClosedBeforeResponse).toBe(false);
+  });
+
+  it('cancels in-flight broker work when the client destroys the connection', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-broker-cancel-'));
+    directories.push(directory);
+    const socketPath = path.join(directory, 'broker.sock');
+    let startedWork = false;
+    let cancelled = false;
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      let input = '';
+      let finished = false;
+      let work: NodeJS.Timeout | undefined;
+      const finish = (didCancel: boolean) => {
+        if (finished) return;
+        finished = true;
+        if (work) clearTimeout(work);
+        cancelled = didCancel;
+        socket.destroy();
+      };
+      socket.setEncoding('utf8');
+      socket.on('end', () => finish(startedWork));
+      socket.on('close', () => finish(startedWork));
+      socket.on('data', (chunk) => {
+        input += chunk;
+        if (!input.includes('\n') || startedWork) return;
+        startedWork = true;
+        work = setTimeout(() => finish(false), 5_000);
+      });
+    });
+    sockets.push(server);
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+    await expect(requestGithubPublication(socketPath, undefined, request, 250)).rejects.toThrow(/acknowledge publication/);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(startedWork).toBe(true);
+    expect(cancelled).toBe(true);
   });
 
   it('sends the versioned request shape the broker validates', async () => {

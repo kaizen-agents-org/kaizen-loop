@@ -4,7 +4,9 @@ import fs from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { requestGithubPublication } from '../src/utils/command.js';
 
 let nativeSwiftAvailable = false;
 if (process.platform === 'darwin') {
@@ -44,6 +46,16 @@ async function waitForExit(pid: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Process ${pid} did not exit after launcher disconnect`);
+}
+
+function waitForChildExit(child: ChildProcess): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(child.exitCode);
+      return;
+    }
+    child.once('exit', (code) => resolve(code));
+  });
 }
 
 macTest('macOS publication broker', { timeout: 180_000 }, () => {
@@ -266,17 +278,33 @@ const github = () => request({
   });
   const child = spawnSync(process.execPath, [__filename], { env: { ...process.env, KAIZEN_BROKER_CHILD: '1' } });
   let published = false;
+  let publishError;
   if (process.argv.includes('publish')) {
-    published = (await request({
-      operation: 'git-push',
-      cwd: ${JSON.stringify(sourceRepository)},
-      pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
-      refspec: 'kaizen/test:refs/heads/kaizen/test',
-      expectedRepo: 'o/r',
-      expectedSha: ${JSON.stringify(expectedSha)}
-    })).ok === true;
+    // Use the production client so a half-closed request is cancelled during
+    // import by connected()/cancelProcessGroup instead of reaching push.
+    // Unset the socket env before import: command.js resolves
+    // KAIZEN_GITHUB_TOKEN_SOCKET at load and requires a root-owned path,
+    // which this test socket is not. The explicit socketPath argument is
+    // the production request layer used after those checks.
+    const publicationSocket = socketPath;
+    const publicationCapability = capability;
+    delete process.env.KAIZEN_GITHUB_TOKEN_SOCKET;
+    try {
+      const { requestGithubPublication } = await import(${JSON.stringify(pathToFileURL(path.join(sourceRoot, 'dist/utils/command.js')).href)});
+      await requestGithubPublication(publicationSocket, publicationCapability, {
+        cwd: ${JSON.stringify(sourceRepository)},
+        pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
+        refspec: 'kaizen/test:refs/heads/kaizen/test',
+        expectedRepo: 'o/r',
+        expectedSha: ${JSON.stringify(expectedSha)}
+      }, Number(process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS) || 1_800_000);
+      published = true;
+    } catch (error) {
+      published = false;
+      publishError = String(error);
+    }
   }
-  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, kaizenHome: process.env.KAIZEN_HOME, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
+  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, publishError, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, kaizenHome: process.env.KAIZEN_HOME, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
   if (sleeping) return;
   process.exit(supervisor && child.status === 0 && (!process.argv.includes('publish') || published) ? 0 : 1);
 })().catch(() => process.exit(1));
@@ -516,6 +544,86 @@ const github = () => request({
 
 });
 
+macTest('newline-framed publication client', { timeout: 60_000 }, () => {
+  let root: string;
+  let helperPath: string;
+  let sourceRepository: string;
+  const publicationRequest = {
+    cwd: '/tmp/publication',
+    pushUrl: 'https://github.com/owner/repo.git',
+    refspec: 'kaizen/issue-1:refs/heads/kaizen/issue-1',
+    expectedRepo: 'owner/repo',
+    expectedSha: 'a'.repeat(40)
+  };
+
+  beforeAll(async () => {
+    root = await fs.mkdtemp('/private/tmp/kaizen-connected-broker-');
+    helperPath = path.join(root, 'connected-publication-broker');
+    const sourceRoot = path.resolve(import.meta.dirname, '..');
+    try {
+      execFileSync('swiftc', [
+        '-module-cache-path', path.join(root, 'cache'),
+        path.join(sourceRoot, 'test/helpers/connected-publication-broker.swift'),
+        '-o', helperPath
+      ], { stdio: 'pipe' });
+    } catch (error) {
+      const details = (error as { stderr?: Buffer }).stderr?.toString() ?? String(error);
+      throw new Error(`swiftc failed for connected-publication-broker.swift:\n${details}`);
+    }
+
+    const workRepository = path.join(root, 'work');
+    execFileSync('/usr/bin/git', ['init', workRepository], { stdio: 'pipe' });
+    execFileSync('/usr/bin/git', ['-C', workRepository, 'config', 'user.name', 'Kaizen Test'], { stdio: 'pipe' });
+    execFileSync('/usr/bin/git', ['-C', workRepository, 'config', 'user.email', 'kaizen@example.invalid'], { stdio: 'pipe' });
+    await fs.writeFile(path.join(workRepository, 'result.txt'), 'published\n');
+    execFileSync('/usr/bin/git', ['-C', workRepository, 'add', 'result.txt'], { stdio: 'pipe' });
+    execFileSync('/usr/bin/git', ['-C', workRepository, 'commit', '-m', 'test publication'], { stdio: 'pipe' });
+    sourceRepository = path.join(root, 'source.git');
+    execFileSync('/usr/bin/git', ['clone', '--bare', workRepository, sourceRepository], { stdio: 'pipe' });
+  }, 60_000);
+
+  afterAll(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('stays connected through import and reaches the post-clone validation path', async () => {
+    const socketPath = path.join(root, 'import.sock');
+    const destination = path.join(root, 'imported.git');
+    const helper = spawn(helperPath, [socketPath, 'import', sourceRepository, destination], {
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+    let helperStderr = '';
+    helper.stderr?.setEncoding('utf8');
+    helper.stderr?.on('data', (chunk: string) => { helperStderr += chunk; });
+    await waitForPath(socketPath);
+    try {
+      await requestGithubPublication(socketPath, undefined, publicationRequest, 30_000);
+    } catch (error) {
+      throw new Error(`${String(error)}\n${helperStderr}`);
+    }
+    expect(await waitForChildExit(helper)).toBe(0);
+    expect(execFileSync('/usr/bin/git', [
+      '--git-dir', destination, 'rev-parse', '--is-bare-repository'
+    ], { encoding: 'utf8' }).trim()).toBe('true');
+  });
+
+  it('cancels the import process group when the client closes the connection', async () => {
+    const socketPath = path.join(root, 'cancel.sock');
+    const pidPath = path.join(root, 'sleep.pid');
+    const helper = spawn(helperPath, [socketPath, 'sleep', '10', pidPath], {
+      stdio: 'ignore'
+    });
+    await waitForPath(socketPath);
+    const publication = requestGithubPublication(socketPath, undefined, publicationRequest, 500);
+    await waitForPath(pidPath);
+    const childPid = Number((await fs.readFile(pidPath, 'utf8')).trim());
+    expect(Number.isInteger(childPid) && childPid > 1).toBe(true);
+    await expect(publication).rejects.toThrow(/acknowledge publication/);
+    await waitForExit(childPid);
+    await waitForChildExit(helper);
+  });
+});
+
 describe('publication broker source contract', () => {
   it('rejects malformed Verifier provenance before installation', async () => {
     const sourceRoot = path.resolve(import.meta.dirname, '..');
@@ -558,6 +666,20 @@ describe('publication broker source contract', () => {
     const scheduledSource = await fs.readFile(path.join(sourceRoot, 'scripts/macos/kaizen-scheduled-launcher.swift'), 'utf8');
     const installer = await fs.readFile(path.join(sourceRoot, 'scripts/install-macos-publication-broker.sh'), 'utf8');
     const brokerSwiftCompiles = installer.match(/^swiftc -module-cache-path .*kaizen-(?:publication-)?(?:broker|scheduled|supervisor)/gm) ?? [];
+    const commandSource = await fs.readFile(path.join(sourceRoot, 'src/utils/command.ts'), 'utf8');
+    const helperSource = await fs.readFile(path.join(sourceRoot, 'test/helpers/connected-publication-broker.swift'), 'utf8');
+    for (const line of [
+      'let flags = fcntl(descriptor, F_GETFL)',
+      '_ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)',
+      'let count = recv(descriptor, &byte, 1, MSG_PEEK)',
+      'if count == 0 { return false }',
+      'return count > 0 || receiveError == EAGAIN || receiveError == EWOULDBLOCK'
+    ]) {
+      expect(brokerSource).toContain(line);
+      expect(helperSource).toContain(line);
+    }
+    expect(commandSource).toContain("socket.on('connect', () => socket.write(frame))");
+    expect(commandSource).not.toMatch(/socket\.end\(`\$\{JSON\.stringify/);
     expect(brokerSource).toContain('{\\"ok\\":true}');
     expect(brokerSource).toContain('{\\"ok\\":false}');
     expect(brokerSource).toContain('maximumGitHubOutputBytes');
