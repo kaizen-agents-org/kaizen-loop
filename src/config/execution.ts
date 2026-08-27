@@ -108,7 +108,7 @@ function legacyRunner(provider: unknown): RunnerProvider {
     provider === 'claude-routine' ||
     provider === 'external'
   ) return provider;
-  return 'local';
+  throw new Error(`Unsupported legacy scheduler.provider: ${String(provider)}`);
 }
 
 function nullableModel(value: unknown): string | null {

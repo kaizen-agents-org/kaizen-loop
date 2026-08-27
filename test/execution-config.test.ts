@@ -47,6 +47,17 @@ describe('execution config', () => {
     }))).not.toThrow();
   });
 
+  it('rejects unknown legacy runner providers instead of migrating them to local', () => {
+    expect(() => migrateLegacyExecutionConfig({
+      version: 1,
+      scheduler: { provider: 'github-actions', jobs: {} }
+    })).toThrow('Unsupported legacy scheduler.provider: github-actions');
+    expect(() => migrateLegacyExecutionConfig({
+      version: 1,
+      scheduler: { provider: 'typo', jobs: {} }
+    })).toThrow('Unsupported legacy scheduler.provider: typo');
+  });
+
   it('migrates idempotently without keeping legacy keys', () => {
     const raw: Record<string, unknown> = {
       version: 1,

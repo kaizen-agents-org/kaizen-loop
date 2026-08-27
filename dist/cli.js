@@ -281,9 +281,6 @@ scheduler
     const targets = options.all
         ? Object.entries(registry.projects)
         : [[resolved.slug, registry.projects[resolved.slug]]];
-    for (const [, project] of targets) {
-        assertRunnerSupportedForLocalSync(await loadConfig(project.localPath));
-    }
     const results = [];
     for (const [slug, project] of targets) {
         const schedulerResult = await disableScheduler({ slug, runCommand, terminateRunning: true });
@@ -702,6 +699,7 @@ program
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
+    assertRunnerSupportedForLocalSync(config);
     const schedule = parseSchedule(options.schedule ?? project.schedule);
     const scheduler = await enableScheduler({ slug: resolved.slug, project, config, runCommand });
     await updateRegistry((latest) => {
