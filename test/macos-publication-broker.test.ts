@@ -278,12 +278,20 @@ const github = () => request({
   });
   const child = spawnSync(process.execPath, [__filename], { env: { ...process.env, KAIZEN_BROKER_CHILD: '1' } });
   let published = false;
+  let publishError;
   if (process.argv.includes('publish')) {
     // Use the production client so a half-closed request is cancelled during
     // import by connected()/cancelProcessGroup instead of reaching push.
+    // Unset the socket env before import: command.js resolves
+    // KAIZEN_GITHUB_TOKEN_SOCKET at load and requires a root-owned path,
+    // which this test socket is not. The explicit socketPath argument is
+    // the production request layer used after those checks.
+    const publicationSocket = socketPath;
+    const publicationCapability = capability;
+    delete process.env.KAIZEN_GITHUB_TOKEN_SOCKET;
     try {
       const { requestGithubPublication } = await import(${JSON.stringify(pathToFileURL(path.join(sourceRoot, 'dist/utils/command.js')).href)});
-      await requestGithubPublication(socketPath, capability, {
+      await requestGithubPublication(publicationSocket, publicationCapability, {
         cwd: ${JSON.stringify(sourceRepository)},
         pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
         refspec: 'kaizen/test:refs/heads/kaizen/test',
@@ -291,11 +299,12 @@ const github = () => request({
         expectedSha: ${JSON.stringify(expectedSha)}
       }, Number(process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS) || 1_800_000);
       published = true;
-    } catch {
+    } catch (error) {
       published = false;
+      publishError = String(error);
     }
   }
-  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, kaizenHome: process.env.KAIZEN_HOME, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
+  fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, publishError, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, kaizenHome: process.env.KAIZEN_HOME, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
   if (sleeping) return;
   process.exit(supervisor && child.status === 0 && (!process.argv.includes('publish') || published) ? 0 : 1);
 })().catch(() => process.exit(1));
