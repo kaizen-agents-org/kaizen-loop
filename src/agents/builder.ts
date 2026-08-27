@@ -183,7 +183,8 @@ export class BuilderAgentAdapter implements AgentAdapter {
           KAIZEN_BUILD_RESULT_PATH: resultPath,
           KAIZEN_WORKSPACE_DIR: req.workspaceDir,
           ...(req.preferredBackends?.length ? { KAIZEN_PREFERRED_AGENT: req.preferredBackends.join(',') } : {}),
-          ...(req.model ? { KAIZEN_AGENT_MODEL: req.model } : {})
+          ...(req.model ? { KAIZEN_AGENT_MODEL: req.model } : {}),
+          ...(req.models ? { KAIZEN_AGENT_MODELS: JSON.stringify(req.models) } : {})
         }),
         req.workspaceDir
       );

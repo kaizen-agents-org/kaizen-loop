@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { defaultConfigYaml } from '../src/config/config.js';
+import { executionConfig } from '../src/config/execution.js';
 import { loadOperationalConfig } from '../src/config/operational.js';
 import { configSchema } from '../src/config/schema.js';
 
@@ -31,7 +32,9 @@ describe('configSchema', () => {
   it('applies defaults for valid minimal config', () => {
     const config = configSchema.parse({ version: 1 });
 
-    expect(config.agent.default).toBe('claude');
+    expect(executionConfig(config).builder.primary.provider).toBe('claude');
+    expect(executionConfig(config).builder.fallback?.provider).toBe('codex');
+    expect(executionConfig(config).runner.provider).toBe('local');
     expect(config.commands.verify).toEqual([]);
     expect(config.builder.resultPath).toBe('.kaizen/builder/build-result.json');
     expect(config.verifier.enabled).toBe(true);
@@ -221,6 +224,110 @@ describe('configSchema', () => {
     });
   });
 
+  it('normalizes legacy agent and scheduler provider settings', () => {
+    const config = configSchema.parse({
+      version: 1,
+      agent: {
+        default: 'codex',
+        fallback: true,
+        model: { codex: 'gpt-test', claude: 'claude-test' }
+      },
+      scheduler: { provider: 'cron', jobs: {} }
+    });
+
+    expect(executionConfig(config)).toEqual({
+      runner: { provider: 'local' },
+      builder: {
+        primary: { provider: 'codex', model: 'gpt-test' },
+        fallback: { provider: 'claude', model: 'claude-test' }
+      },
+      legacy: true
+    });
+  });
+
+  it('accepts canonical execution settings', () => {
+    const config = configSchema.parse({
+      version: 1,
+      execution: {
+        runner: { provider: 'github-actions' },
+        builder: {
+          primary: { provider: 'codex', model: 'gpt-test' },
+          fallback: { provider: 'claude', model: 'claude-test' }
+        }
+      }
+    });
+
+    expect(executionConfig(config)).toEqual({
+      runner: { provider: 'github-actions' },
+      builder: {
+        primary: { provider: 'codex', model: 'gpt-test' },
+        fallback: { provider: 'claude', model: 'claude-test' }
+      },
+      legacy: false
+    });
+  });
+
+  it('defaults canonical fallback to the provider complementary to primary', () => {
+    expect(executionConfig(configSchema.parse({
+      version: 1,
+      execution: { builder: { primary: { provider: 'codex' } } }
+    })).builder.fallback).toEqual({ provider: 'claude', model: null });
+    expect(executionConfig(configSchema.parse({
+      version: 1,
+      execution: { builder: { primary: { provider: 'claude' } } }
+    })).builder.fallback).toEqual({ provider: 'codex', model: null });
+  });
+
+  it('rejects mixed canonical and legacy execution settings', () => {
+    expect(() => configSchema.parse({
+      version: 1,
+      agent: { default: 'codex' },
+      execution: { builder: { primary: { provider: 'codex' } } }
+    })).toThrow('cannot be configured together');
+
+    expect(() => configSchema.parse({
+      version: 1,
+      execution: { runner: { provider: 'local' } },
+      scheduler: { provider: 'cron', jobs: {} }
+    })).toThrow('cannot be configured together');
+  });
+
+  it('allows staged migration when canonical and legacy settings use different axes', () => {
+    const newRunner = configSchema.parse({
+      version: 1,
+      agent: { default: 'codex', fallback: false },
+      execution: { runner: { provider: 'github-actions' } }
+    });
+    expect(executionConfig(newRunner)).toMatchObject({
+      runner: { provider: 'github-actions' },
+      builder: { primary: { provider: 'codex' }, fallback: null },
+      legacy: true
+    });
+
+    const newBuilder = configSchema.parse({
+      version: 1,
+      execution: { builder: { primary: { provider: 'codex' }, fallback: null } },
+      scheduler: { provider: 'cron', jobs: {} }
+    });
+    expect(executionConfig(newBuilder)).toMatchObject({
+      runner: { provider: 'local' },
+      builder: { primary: { provider: 'codex' }, fallback: null },
+      legacy: true
+    });
+  });
+
+  it('rejects a duplicate canonical fallback provider', () => {
+    expect(() => configSchema.parse({
+      version: 1,
+      execution: {
+        builder: {
+          primary: { provider: 'codex' },
+          fallback: { provider: 'codex' }
+        }
+      }
+    })).toThrow('must not repeat the primary provider');
+  });
+
   it('accepts weekly sandbox smoke scheduler jobs', () => {
     const config = configSchema.parse({
       version: 1,
@@ -258,17 +365,17 @@ commands:
     expect(config.commands.verify).toEqual(['npm test']);
   });
 
-  it('documents that this repository overrides generated agent defaults to codex', () => {
+  it('documents that this repository overrides generated builder defaults to codex', () => {
     const repoConfig = parse(fs.readFileSync('.kaizen/config.yml', 'utf8'));
     const cliSpec = fs.readFileSync('docs/02-cli-spec.md', 'utf8');
     const configSpec = fs.readFileSync('docs/03-config-spec.md', 'utf8');
 
-    expect(repoConfig.agent.default).toBe('codex');
+    expect(repoConfig.execution.builder.primary.provider).toBe('codex');
     expect(repoConfig.safety.operationMode).toBe('dogfood');
     expect(repoConfig.scheduler.jobs).not.toHaveProperty('weekly-sandbox-smoke');
-    expect(cliSpec).toMatch(/agent\.default:\s*codex/);
+    expect(cliSpec).toMatch(/execution\.builder\.primary\.provider:\s*codex/);
     expect(cliSpec).toMatch(/生成時のデフォルト:\s*claude/);
-    expect(configSpec).toMatch(/agent\.default:\s*codex/);
+    expect(configSpec).toMatch(/execution\.builder\.primary\.provider:\s*codex/);
     expect(configSpec).toMatch(/生成時のデフォルト値/);
   });
 

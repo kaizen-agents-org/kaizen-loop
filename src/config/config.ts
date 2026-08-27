@@ -42,12 +42,19 @@ export function defaultConfigObject(options: {
 }): Record<string, unknown> {
   return {
     version: 1,
-    agent: {
-      default: options.agent,
-      fallback: true,
-      model: {
-        claude: null,
-        codex: null
+    execution: {
+      runner: {
+        provider: 'local'
+      },
+      builder: {
+        primary: {
+          provider: options.agent,
+          model: null
+        },
+        fallback: {
+          provider: options.agent === 'claude' ? 'codex' : 'claude',
+          model: null
+        }
       }
     },
     run: {

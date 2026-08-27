@@ -8,6 +8,7 @@ import { initProject } from './init/init.js';
 import { runKaizen } from './orchestrator/run.js';
 import { loadRegistry, resolveProject, updateRegistry } from './config/registry.js';
 import { loadConfig } from './config/config.js';
+import { assertRunnerSupportedForLocalSync, executionConfig } from './config/execution.js';
 import { processCommandRunner, runCommand as defaultRunCommand } from './utils/command.js';
 import { KaizenError } from './utils/errors.js';
 import { reportIssue, reportIssueNow } from './commands/report.js';
@@ -173,9 +174,16 @@ scheduler
     const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
     const config = await loadConfig(resolved.project.localPath);
     const jobs = schedulerJobs(config);
+    const execution = executionConfig(config);
     print({
         slug: resolved.slug,
-        provider: config.scheduler.provider ?? defaultSchedulerProvider(),
+        provider: runnerLabel(config),
+        execution: {
+            runner: execution.runner.provider,
+            supported: execution.runner.provider === 'local',
+            legacy: execution.legacy,
+            migrationCommand: execution.legacy ? 'kaizen fleet --dry-run --json' : undefined
+        },
         kaizenHome: schedulerKaizenHome(),
         enabled: resolved.project.enabled,
         jobs,
@@ -191,9 +199,16 @@ scheduler
     const globals = program.opts();
     const resolved = await resolveProject(options.project ?? globals.project, process.cwd());
     const config = await loadConfig(resolved.project.localPath);
+    const execution = executionConfig(config);
     print({
         slug: resolved.slug,
-        provider: config.scheduler.provider ?? defaultSchedulerProvider(),
+        provider: runnerLabel(config),
+        execution: {
+            runner: execution.runner.provider,
+            supported: execution.runner.provider === 'local',
+            legacy: execution.legacy,
+            migrationCommand: execution.legacy ? 'kaizen fleet --dry-run --json' : undefined
+        },
         kaizenHome: schedulerKaizenHome(),
         actions: schedulerJobs(config).map((job) => ({ action: 'sync', job: job.name, schedule: job.config.schedule, run: job.config.run }))
     }, Boolean(options.json ?? globals.json));
@@ -210,6 +225,7 @@ scheduler
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
+    assertRunnerSupportedForLocalSync(config);
     const schedule = parseSchedule(options.schedule ?? project.schedule);
     const result = await enableScheduler({ slug: resolved.slug, project, config, runCommand });
     await updateRegistry((latest) => {
@@ -683,6 +699,7 @@ program
     const registry = await loadRegistry();
     const project = registry.projects[resolved.slug];
     const config = await loadConfig(project.localPath);
+    assertRunnerSupportedForLocalSync(config);
     const schedule = parseSchedule(options.schedule ?? project.schedule);
     const scheduler = await enableScheduler({ slug: resolved.slug, project, config, runCommand });
     await updateRegistry((latest) => {
@@ -905,6 +922,10 @@ function defaultSchedulerRun(schedule) {
 }
 function defaultSchedulerProvider() {
     return process.platform === 'darwin' ? 'launchd' : 'cron';
+}
+function runnerLabel(config) {
+    const provider = executionConfig(config).runner.provider;
+    return provider === 'local' ? defaultSchedulerProvider() : provider;
 }
 function parseIssueNumbers(value) {
     if (value === undefined)

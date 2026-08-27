@@ -5,6 +5,7 @@ import { VerifierAgentAdapter } from '../agents/verifier.js';
 import { resolveExpectedVerifierCommit } from '../agents/verifierFreshness.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
+import { executionConfig } from '../config/execution.js';
 import { loadOperationalConfig } from '../config/operational.js';
 import { loadRegistry, resolveProject } from '../config/registry.js';
 import { buildDiscoveredIssueFingerprint, parseFailureClass } from '../discovered-issue-fingerprint.js';
@@ -1063,6 +1064,7 @@ async function processIssue(options) {
                     prompt,
                     timeoutMs: boundedTimeoutMs(options.config.run.issueTimeoutMinutes * 60_000, options.runDeadlineAt),
                     model: modelFor(options.config, primaryBackend),
+                    models: modelsFor(options.config, preferredBackends),
                     preferredBackends
                 });
                 await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
@@ -1617,15 +1619,17 @@ function setupPendingAgent() {
 }
 export function selectPreferredBackends(config, issue, requested) {
     const labels = labelNames(issue);
+    const execution = executionConfig(config).builder;
     const primary = labels.includes('kaizen:agent:codex')
         ? 'codex'
         : labels.includes('kaizen:agent:claude')
             ? 'claude'
-            : requested ?? config.agent.default;
-    if (!config.agent.fallback)
+            : requested ?? execution.primary.provider;
+    if (!execution.fallback)
         return [primary];
-    const fallback = primary === 'codex' ? 'claude' : 'codex';
-    return [primary, fallback];
+    const configured = [execution.primary.provider, execution.fallback?.provider]
+        .filter((provider) => Boolean(provider));
+    return [primary, ...configured.filter((provider) => provider !== primary)];
 }
 async function commitLeftovers(workspace, issue, agentResult, config) {
     const git = workspace.git();
@@ -2501,7 +2505,15 @@ function labelsForDiscoveredIssue(issue, requiredLabels) {
     return [...labels];
 }
 function modelFor(config, agent) {
-    return config.agent.model[agent];
+    const builder = executionConfig(config).builder;
+    if (builder.primary.provider === agent)
+        return builder.primary.model;
+    if (builder.fallback?.provider === agent)
+        return builder.fallback.model;
+    return null;
+}
+function modelsFor(config, agents) {
+    return Object.fromEntries(agents.map((agent) => [agent, modelFor(config, agent)]));
 }
 function shortSummary(summary) {
     return (summary || 'fix issue').split('\n')[0].slice(0, 80);

@@ -1,8 +1,8 @@
 # 12. Scheduler Provider 同期仕様
 
-この文書は、Kaizen Loop の定期実行を Codex Automations、Claude Code routines、launchd、cron、その他外部ツールへ広げるための設計仕様である。
+この文書は、Kaizen Loop の定期実行を GitHub Actions、Codex Automations、Claude Code routines、Cursor、launchd、cron、その他外部ツールへ広げるための設計仕様である。
 
-現行実装は `.kaizen/config.yml` の `scheduler.jobs` に定義した任意 job を macOS では launchd、Linux では cron に同期する。`nightly` / `afternoon` / `poll` の旧固定 job 設定は schema で受け付けない。`scheduler.provider` は schema 上は存在するが、現行の `scheduler sync` は OS に応じた launchd / cron 生成だけを行い、Codex Automations / Claude Code routines / external provider adapter は未実装である。
+現行実装は canonicalな `execution.runner` / `execution.builder` と `.kaizen/config.yml` の `scheduler.jobs` を受け付ける。旧 `agent` / `scheduler.provider` は読み取り互換を保ち、fleet migrationでcanonical形式へ変換する。runnerが`local`の場合だけ、macOSではlaunchd、Linuxではcronに同期する。GitHub Actionsには独立したreusable workflowがあるが、同じdesired stateから同期するadapterはなく、Codex Automations / Claude Code routines / Cursor / external provider adapterも未実装である。
 
 以降の provider adapter、drift 判定、registry binding、Codex Automation 同期例は将来設計であり、現行 CLI の実装済み範囲は §10 に明記する。
 
@@ -25,6 +25,8 @@
 - Codex Automations、Claude Code routines、launchd、cron などを provider として差し替え可能にする
 - `plan` / `sync` / `status` で desired state と actual state の差分を見える化する
 - Kaizen が作成した外部ジョブだけを安全に更新・削除する
+- ループを起動するrunnerと、実装を行うbuilderを独立して選択できるようにする
+- 初回設定、更新、canary、次回実行予定の確認を一つの導線から行えるようにする
 
 ## 2. 基本方針
 
@@ -36,6 +38,27 @@
 | 同期単位 | project slug + arbitrary job id |
 | 実行内容 | provider は Kaizen Loop を起動するだけ。Issue 選択、排他制御、PR 作成、結果コメントは `kaizen run` が担当する |
 | 安全性 | Kaizen 管理マーカーがある外部ジョブだけを自動更新・削除する |
+
+### Runner と builder の分離
+
+runnerは「どこが定期的にKaizen Loopを起動するか」、builderは「どのAIがIssueを実装するか」を表す。runnerはIssue選択、検証、verifier、PR作成を再実装せず、常にKaizen Loop本体へ委譲する。
+
+```yaml
+execution:
+  runner:
+    provider: local
+  builder:
+    primary:
+      provider: codex
+      model: null
+    fallback:
+      provider: claude
+      model: null
+```
+
+`execution.runner.provider`は`local`、`github-actions`、`codex-automation`、`claude-routine`、`cursor`、`external`を既知値として保持する。現行の`sync`が適用できるのは`local`だけで、ほかは外部実体を変更する前にunsupportedとしてfail closedする。
+
+Cursorは正式なCLI、Background Agents API、SDKなどの公開された統合面だけを利用する。公開された定期実行契約がない場合はGitHub Actions / launchd / cronをrunnerとし、Cursorは将来のbuilder adapterとして扱う。非公開ソケット、内部ファイル形式、UI自動操作を永続的な制御契約にはしない。
 
 ## 3. Desired State モデル
 
@@ -144,10 +167,11 @@ type SchedulerRunPolicy =
 
 ```ts
 type SchedulerProviderName =
-  | 'launchd'
-  | 'cron'
+  | 'local'
+  | 'github-actions'
   | 'codex-automation'
   | 'claude-routine'
+  | 'cursor'
   | 'external';
 
 interface DesiredSchedulerJob {
@@ -228,6 +252,17 @@ interface SchedulerProvider {
 - `schedule.type: rrule` は cron で表現できる範囲だけ受け付け、表現できない場合は `plan` で unsupported とする
 - Kaizen 管理マーカーが一致する行だけを更新・削除する
 
+### github-actions provider
+
+GitHub Actions reusable workflowを使うprovider。ローカル常駐プロセスが不要なため、第三者リポジトリと初回導入の推奨runnerとする。
+
+- 対象リポジトリには`.kaizen/config.yml`とcaller workflowだけを置く
+- `uses`と`runtime-ref`を、検証済みKaizen Loopの同じfull commit SHAに固定する
+- scheduleを`on.schedule`へ変換し、手動canary用の`workflow_dispatch`を残す
+- provider keyを持つ実装job、credential-freeのverify job、provider keyを持たないpublish jobの境界を維持する
+- `apply`はdefault branchへ直接書き込まず、生成差分またはready-for-review PRを作る
+- 詳細なtrust boundaryは[GitHub Actions deployment](./14-github-actions.md)を正とする
+
 ### codex-automation provider
 
 Codex Automations を使って Kaizen Loop を実行する provider。job ごとに cron automation を作る。
@@ -258,7 +293,11 @@ Report the concise run outcome.
 
 ### claude-routine provider
 
-Claude Code routines を使う将来 provider。Codex Automation provider と同じ desired model を使い、routine 名・schedule・prompt・working directory を同期する。実装時に Claude Code routines の永続化形式に合わせて marker の保存場所を決める。
+Claude Code routinesを使う将来provider。正式にサポートされたAPI / CLI / 永続化契約が利用できる場合だけnative adapterを実装し、それまでは`external` providerを使う。非公開な内部ファイル形式を直接編集しない。
+
+### cursor provider
+
+Cursorの正式なBackground Agents API、CLI、SDK、またはschedule契約を使う将来provider。定期実行契約が利用できない場合はrunnerとしてunsupportedを返し、GitHub Actions / launchd / cronと将来のCursor builder adapterを組み合わせる。Cursor agentの完了だけを成功とせず、mechanical verification、verifier、ready-for-review PRの既存ゲートを維持する。
 
 ### external provider
 
@@ -340,10 +379,12 @@ marker の保存場所:
 
 | provider | 保存場所 |
 |---|---|
+| github-actions | caller workflow path、固定runtime SHA、workflow内marker |
 | launchd | plist label / file path / XML comment または registry binding |
 | cron | marker comment |
 | codex-automation | automation id、name、prompt 内 marker |
 | claude-routine | routine metadata、description、prompt 内 marker |
+| cursor | 正式なmetadata契約がある場合のBackground Agent / schedule metadata |
 | external | 外部 provider の metadata |
 
 ## 9. 差分判定
@@ -401,6 +442,24 @@ kaizen scheduler adopt [--project <slug>] [--provider <provider>] [--json]
 ```
 
 `--force` は drift 上書き、`adopt` は Kaizen marker がある既存外部ジョブの registry binding 取り込みに使う想定で、現行 CLI には未実装である。
+
+### セットアップと更新の統合導線
+
+将来の統合CLIは、providerごとの設定ファイルやcron expressionを利用者へ直接組み立てさせない。
+
+```sh
+kaizen setup
+kaizen setup --runner github-actions --builder codex --fallback claude --schedule safe --non-interactive
+kaizen upgrade plan
+kaizen upgrade apply
+kaizen upgrade verify
+kaizen loop status
+kaizen loop canary --job maintenance
+```
+
+`setup`はrunner / builder、対象リポジトリ、schedule preset、認可ポリシー、setup / verify commandを確認して差分を表示する。secretの値は受け取らず、正式なsecret storeへの登録方法だけを案内する。`upgrade apply`はcompatible toolchain切り替え後に全runnerのplanとcanaryを実行し、旧runtimeを参照するjobが残る場合は完了にしない。
+
+これらは後続フェーズのCLIである。現行実装では`kaizen init`、`kaizen fleet`、`kaizen scheduler plan` / `sync` / `status`、providerごとの設定手順を組み合わせる。
 
 ## 11. Codex Automation 同期例
 
@@ -467,22 +526,25 @@ Codex Automation は job 実行基盤であり、Issue 選択、排他制御、P
 
 ## 12. 移行計画
 
-1. 完了: `scheduler.jobs` の設定仕様を schema に追加する
-2. 完了: `kaizen run --job <job-id>` を追加し、job ごとの run policy を適用する
-3. 完了: `kaizen scheduler status` / `plan` / `sync` / `set-schedule` / `disable` を launchd / cron 向けに実装する
-4. 未実装: `kaizen migrate scheduler-jobs` を実装し、旧 scheduler 設定を `jobs` へ書き換えられるようにする
-5. 未実装: provider-aware `plan` で既存 launchd / cron / Codex Automation の actual state と drift を可視化する
-6. 未実装: `codex-automation` provider の `sync` を実装する
-7. 未実装: `launchd` / `cron` の既存実装を provider adapter へ移す
-8. 未実装: `kaizen enable` / `disable` を互換 alias として残しつつ、ユーザー向け導線を `kaizen scheduler sync` / `disable` に統一する
-9. 未実装: `adopt` で既存 Codex Automation を registry binding に取り込めるようにする
-10. 未実装: Claude Code routines provider を、永続化 API / ファイル形式が確定した時点で追加する
-11. 未実装: `doctor` に provider drift チェックを追加する
+1. 完了: `scheduler.jobs` の設定仕様をschemaへ追加する
+2. 完了: `kaizen run --job <job-id>`とlaunchd / cron向けscheduler CLIを実装する
+3. 完了: canonicalな`execution.runner` / `execution.builder`、旧設定の読み取り互換、fleet migration、unsupported runnerのfail-closed境界を追加する
+4. 未実装: migrationの専用`plan` / `apply` / `verify` UIとdeprecation warningを追加する
+5. 未実装: launchd / cronの既存実装をprovider adapterへ移し、actual stateとdriftを可視化する
+6. 未実装: GitHub Actions caller workflowを同じdesired stateから生成・検査し、更新用ready-for-review PRを作るadapterを追加する
+7. 未実装: `kaizen setup`とschedule presetを追加し、dry-run、設定生成、canary、次回実行予定の確認までを一つの導線にする
+8. 未実装: compatible toolchain更新後に全runnerを再同期する`kaizen upgrade plan` / `apply` / `verify`とrollbackを追加する
+9. 未実装: `doctor`と統合`loop status`にprovider drift、二重登録、旧runtime、認証不足、never-run、直近run failureを追加する
+10. 未実装: `codex-automation` providerの`inspect` / `plan` / `sync` / `disable` / `adopt`を実装する
+11. 未実装: Cursor builder adapterを追加し、正式なschedule契約が利用可能な場合だけrunner adapterを追加する
+12. 未実装: Claude Code routines providerを、正式なAPI / CLIが利用可能になった時点で追加する
+13. 未実装: clean onboarding、canary、upgrade、rollback、scheduled PR作成のrunner別E2Eを追加する
 
 ## 13. 非目標
 
 - `nightly` / `afternoon` / `poll` を scheduler 設定インターフェイスとして残すこと
-- Codex Automation、Claude routine、launchd、cron を同時に正として扱うこと
+- 同じproject / jobについてGitHub Actions、Codex Automation、Claude routine、Cursor、launchd、cronを同時に正として扱うこと
 - marker のない外部ジョブを自動削除すること
 - provider ごとの認証情報を Kaizen Loop が保持すること
+- 公開された統合契約がないClaude / Cursorの内部状態を直接編集すること
 - scheduled run の処理内容を provider に分散すること。provider は起動だけを担当し、処理本体は `kaizen run` が担当する

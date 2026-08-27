@@ -4,6 +4,15 @@ import { isProjectSlug } from '../utils/slug.js';
 const nullableString = z.string().nullable().optional();
 const timeString = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const jobIdString = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+const builderProviderSchema = z.enum(['claude', 'codex']);
+const runnerProviderSchema = z.enum([
+    'local',
+    'github-actions',
+    'codex-automation',
+    'claude-routine',
+    'cursor',
+    'external'
+]);
 export const DEFAULT_PROTECTED_PATHS = [
     '.github/**',
     '.gitlab-ci.yml',
@@ -87,23 +96,57 @@ const schedulerJobSchema = z
     run: schedulerRunSchema
 })
     .strict();
+export const legacyAgentConfigSchema = z
+    .object({
+    default: builderProviderSchema.default('claude'),
+    fallback: z.boolean().default(true),
+    model: z
+        .object({
+        claude: nullableString,
+        codex: nullableString
+    })
+        .strict()
+        .default({ claude: null, codex: null })
+})
+    .strict();
+const executionBuilderSchema = z
+    .object({
+    primary: z.object({ provider: builderProviderSchema.default('claude'), model: nullableString }).strict()
+        .default({ provider: 'claude', model: null }),
+    fallback: z.object({ provider: builderProviderSchema, model: nullableString }).strict().nullable().optional()
+})
+    .strict()
+    .superRefine((builder, context) => {
+    if (builder.fallback?.provider === builder.primary.provider) {
+        context.addIssue({
+            code: 'custom',
+            path: ['fallback'],
+            message: 'execution.builder.fallback must not repeat the primary provider'
+        });
+    }
+})
+    .transform((builder) => ({
+    ...builder,
+    fallback: builder.fallback === undefined
+        ? { provider: builder.primary.provider === 'claude' ? 'codex' : 'claude', model: null }
+        : builder.fallback
+}));
 export const configSchema = z
     .object({
     version: z.literal(1),
-    agent: z
+    agent: legacyAgentConfigSchema.optional(),
+    execution: z
         .object({
-        default: z.enum(['claude', 'codex']).default('claude'),
-        fallback: z.boolean().default(true),
-        model: z
-            .object({
-            claude: nullableString,
-            codex: nullableString
-        })
-            .strict()
-            .default({ claude: null, codex: null })
+        runner: z.object({ provider: runnerProviderSchema.default('local') }).strict().optional(),
+        builder: executionBuilderSchema.optional()
     })
         .strict()
-        .default({ default: 'claude', fallback: true, model: { claude: null, codex: null } }),
+        .superRefine((execution, context) => {
+        if (!execution.runner && !execution.builder) {
+            context.addIssue({ code: 'custom', message: 'execution must configure runner or builder' });
+        }
+    })
+        .optional(),
     run: z
         .object({
         maxIssuesPerNight: z.number().int().positive().default(3),
@@ -338,6 +381,20 @@ export const configSchema = z
 })
     .strict()
     .superRefine((config, context) => {
+    if (config.agent && config.execution?.builder) {
+        context.addIssue({
+            code: 'custom',
+            path: ['execution'],
+            message: 'execution and legacy agent settings cannot be configured together'
+        });
+    }
+    if (config.execution?.runner && config.scheduler.provider) {
+        context.addIssue({
+            code: 'custom',
+            path: ['scheduler', 'provider'],
+            message: 'execution.runner and legacy scheduler.provider cannot be configured together'
+        });
+    }
     if (config.safety.operationMode === 'external' && !config.verifier.enabled) {
         context.addIssue({
             code: 'custom',

@@ -11,21 +11,25 @@
 
 ### フルサンプル(生成時のデフォルト値つき)
 
-以下は `kaizen init` が生成するデフォルト値のサンプル。このリポジトリのコミット済み `.kaizen/config.yml` は運用ポリシーとして `agent.default: codex` を設定しているため、通常の Issue 処理では Codex を希望バックエンドとして builder-agent へ渡す。
+以下は `kaizen init` が生成するデフォルト値のサンプル。このリポジトリのコミット済み `.kaizen/config.yml` は運用ポリシーとして `execution.builder.primary.provider: codex` を設定しているため、通常の Issue 処理では Codex を希望バックエンドとして builder-agent へ渡す。
 
 ```yaml
 # .kaizen/config.yml
 version: 1
 
-agent:
-  # builder-agent へ渡す既定の希望バックエンド。Issue ラベル kaizen:agent:* が最優先で上書きする
-  default: claude            # claude | codex
-  # 互換用の設定。実際のフォールバックは builder-agent 側で扱う
-  fallback: true
-  # 希望バックエンドに対応するモデル指定。builder-agent へ KAIZEN_AGENT_MODEL として渡す
-  model:
-    claude: null             # 例: "claude-opus-4-8"
-    codex: null              # 例: "gpt-5-codex"
+execution:
+  # ループを起動する場所。現行 scheduler sync が適用できるのは local のみ
+  runner:
+    provider: local          # local | github-actions | codex-automation | claude-routine | cursor | external
+  builder:
+    # builder-agent へ渡す既定の希望バックエンド。Issue ラベル kaizen:agent:* が最優先で上書きする
+    primary:
+      provider: claude       # claude | codex
+      model: null            # 例: "claude-opus-4-8"
+    # null ならfallbackしない。providerごとにmodelを独立して指定する
+    fallback:
+      provider: codex
+      model: null            # 例: "gpt-5-codex"
 
 run:
   maxIssuesPerNight: 3       # 自動実行 1 回あたりに処理する Issue の上限
@@ -221,7 +225,9 @@ issues:
 ### フィールド規約
 
 - 未知のキーはエラー(タイポによるサイレント無効化を防ぐ)
-- `scheduler.provider` は省略可能。省略時、`kaizen scheduler status` / `plan` は macOS なら `launchd`、Linux なら `cron` と表示する。schema は `codex-automation` / `claude-routine` / `external` も受け付けるが、現行の `scheduler sync` は OS に応じた launchd / cron 生成だけを行う
+- `execution.runner.provider` はループを起動するrunnerを表す。現行の `scheduler sync` が適用できるのは `local` だけで、macOSではlaunchd、Linuxではcronへ同期する。既知だが未実装のrunnerはschemaで保持できても、同期前にfail closedする
+- `execution.builder.primary` と `fallback` はproviderごとにmodelを保持する。`fallback: null` はfallback無効を表し、primaryと同じproviderは設定できない
+- 旧 `agent` / `scheduler.provider` は読み取り互換のため受理する。同じ軸の `execution.builder` / `execution.runner` との併記は拒否するが、新runner＋旧builderのような段階移行は許可する。`kaizen fleet` のconfig migrationは不足するcanonical軸を補い、旧キーを削除し、再実行時はno-opになる
 - `commands.verify` が自動検出できず未設定の場合、`init` は警告し、`run` は**検証なしの直接コミットを禁止**する(検証なし → 強制 PR モード)
 - `commands.setup` が自動検出できない場合は `null` にする。`null` の場合、setup は実行しない
 - `init` の manifest 検出表は package root から `STACK_DETECTION_TABLE` として公開する。verifier などの command inference はこの共有契約を利用し、manifest と verify command の対応を重複定義しない

@@ -1,0 +1,120 @@
+import { legacyAgentConfigSchema } from './schema.js';
+export function executionConfig(config) {
+    const canonicalRunner = config.execution?.runner;
+    const canonicalBuilder = config.execution?.builder;
+    if (canonicalRunner || canonicalBuilder)
+        return {
+            runner: canonicalRunner ?? { provider: legacyRunner(config.scheduler.provider) },
+            builder: {
+                primary: {
+                    provider: canonicalBuilder?.primary.provider ?? config.agent?.default ?? 'claude',
+                    model: canonicalBuilder?.primary.model ?? modelForLegacyPrimary(config) ?? null
+                },
+                fallback: canonicalBuilder
+                    ? canonicalBuilder.fallback
+                        ? {
+                            provider: canonicalBuilder.fallback.provider,
+                            model: canonicalBuilder.fallback.model ?? null
+                        }
+                        : null
+                    : legacyFallback(config)
+            },
+            legacy: Boolean(config.agent || config.scheduler.provider)
+        };
+    const primary = config.agent?.default ?? 'claude';
+    const fallbackProvider = primary === 'claude' ? 'codex' : 'claude';
+    return {
+        runner: { provider: legacyRunner(config.scheduler.provider) },
+        builder: {
+            primary: { provider: primary, model: config.agent?.model[primary] ?? null },
+            fallback: config.agent?.fallback === false
+                ? null
+                : { provider: fallbackProvider, model: config.agent?.model[fallbackProvider] ?? null }
+        },
+        legacy: Boolean(config.agent || config.scheduler.provider)
+    };
+}
+export function migrateLegacyExecutionConfig(config) {
+    if (Object.hasOwn(config, 'execution') && !record(config.execution)) {
+        throw new Error('execution must be an object');
+    }
+    const execution = record(config.execution);
+    const hasAgent = Object.hasOwn(config, 'agent');
+    const agent = hasAgent ? legacyAgentConfigSchema.parse(config.agent) : undefined;
+    const scheduler = record(config.scheduler) ?? {};
+    const legacyProvider = typeof scheduler.provider === 'string' ? scheduler.provider : undefined;
+    const hasBuilder = Boolean(execution && Object.hasOwn(execution, 'builder'));
+    const hasRunner = Boolean(execution && Object.hasOwn(execution, 'runner'));
+    if (hasBuilder && !record(execution?.builder)) {
+        throw new Error('execution.builder must be an object');
+    }
+    if (hasRunner && !record(execution?.runner)) {
+        throw new Error('execution.runner must be an object');
+    }
+    if (hasBuilder && agent) {
+        throw new Error('execution.builder cannot be combined with legacy agent settings');
+    }
+    if (hasRunner && legacyProvider) {
+        throw new Error('execution.runner cannot be combined with legacy scheduler.provider settings');
+    }
+    const primary = agent?.default === 'codex' ? 'codex' : 'claude';
+    const fallbackProvider = primary === 'claude' ? 'codex' : 'claude';
+    const migratedExecution = execution ?? {};
+    let migrated = false;
+    if (!hasRunner) {
+        migratedExecution.runner = { provider: legacyRunner(legacyProvider) };
+        migrated = true;
+    }
+    if (!hasBuilder) {
+        migratedExecution.builder = {
+            primary: { provider: primary, model: nullableModel(agent?.model[primary]) },
+            fallback: agent?.fallback === false
+                ? null
+                : { provider: fallbackProvider, model: nullableModel(agent?.model[fallbackProvider]) }
+        };
+        migrated = true;
+    }
+    config.execution = migratedExecution;
+    if (hasAgent)
+        delete config.agent;
+    if (legacyProvider) {
+        delete scheduler.provider;
+        config.scheduler = scheduler;
+    }
+    return migrated;
+}
+export function assertRunnerSupportedForLocalSync(config) {
+    const provider = executionConfig(config).runner.provider;
+    if (provider !== 'local') {
+        throw new Error(`scheduler sync does not support execution.runner.provider=${provider} yet`);
+    }
+}
+function legacyRunner(provider) {
+    if (provider === 'launchd' || provider === 'cron' || provider === undefined)
+        return 'local';
+    if (provider === 'codex-automation' ||
+        provider === 'claude-routine' ||
+        provider === 'external')
+        return provider;
+    throw new Error(`Unsupported legacy scheduler.provider: ${String(provider)}`);
+}
+function nullableModel(value) {
+    return typeof value === 'string' ? value : null;
+}
+function modelForLegacyPrimary(config) {
+    const primary = config.agent?.default ?? 'claude';
+    return config.agent?.model[primary] ?? null;
+}
+function legacyFallback(config) {
+    if (config.agent?.fallback === false)
+        return null;
+    const primary = config.agent?.default ?? 'claude';
+    const provider = primary === 'claude' ? 'codex' : 'claude';
+    return { provider, model: config.agent?.model[provider] ?? null };
+}
+function record(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? value
+        : undefined;
+}
+//# sourceMappingURL=execution.js.map

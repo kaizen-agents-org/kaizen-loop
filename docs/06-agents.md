@@ -8,11 +8,13 @@
 
 1. Issue ラベル `kaizen:agent:claude` / `kaizen:agent:codex`
 2. `kaizen run --agent` オプション
-3. 設定 `agent.default`
+3. 設定 `execution.builder.primary.provider`
 
 この選択は `KAIZEN_PREFERRED_AGENT` として builder-agent に渡す。実際のフォールバック可否やモデル選択は builder-agent 側の責務。
 
 `isAvailable()` の判定: `builder.command` に指定されたコマンドが PATH に存在し、軽量疎通(`--version`)できること。
+
+Kaizen Loopは希望provider順を`KAIZEN_PREFERRED_AGENT`、先頭providerとの後方互換modelを`KAIZEN_AGENT_MODEL`、provider別model mapを`KAIZEN_AGENT_MODELS`（JSON object）としてbuilder-agentへ渡す。fallback実行時のprovider別model選択はbuilder-agentが行う。
 
 ## 2. アダプタごとの実行仕様
 

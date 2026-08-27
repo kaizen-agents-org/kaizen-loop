@@ -5,6 +5,7 @@ import { parse, stringify } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fleetHasFailures, migrateLegacySchedulerConfig, refreshFleet, syncFleet as syncFleetImpl, type FleetProjectResult } from '../src/commands/fleet.js';
 import { defaultConfigYaml } from '../src/config/config.js';
+import { migrateLegacyExecutionConfig } from '../src/config/execution.js';
 import { loadRegistry, saveRegistry, updateRegistry } from '../src/config/registry.js';
 import type { CommandRunner } from '../src/utils/command.js';
 import { trustedRunner } from './helpers/trustedRunner.js';
@@ -94,6 +95,74 @@ describe('migrateLegacySchedulerConfig', () => {
   });
 });
 
+describe('migrateLegacyExecutionConfig', () => {
+  it('converts agent and scheduler provider settings into canonical execution settings', () => {
+    const config = {
+      version: 1,
+      agent: {
+        default: 'codex',
+        fallback: true,
+        model: { codex: 'gpt-test', claude: 'claude-test' }
+      },
+      scheduler: { provider: 'launchd', jobs: {} }
+    };
+
+    expect(migrateLegacyExecutionConfig(config)).toBe(true);
+    expect(config).toEqual({
+      version: 1,
+      execution: {
+        runner: { provider: 'local' },
+        builder: {
+          primary: { provider: 'codex', model: 'gpt-test' },
+          fallback: { provider: 'claude', model: 'claude-test' }
+        }
+      },
+      scheduler: { jobs: {} }
+    });
+    expect(migrateLegacyExecutionConfig(config)).toBe(false);
+  });
+
+  it('preserves disabled fallback during migration', () => {
+    const config = { version: 1, agent: { default: 'claude', fallback: false } };
+
+    expect(migrateLegacyExecutionConfig(config)).toBe(true);
+    expect(config.execution).toEqual({
+      runner: { provider: 'local' },
+      builder: {
+        primary: { provider: 'claude', model: null },
+        fallback: null
+      }
+    });
+  });
+
+  it('rejects mixed canonical and legacy settings instead of choosing precedence', () => {
+    expect(() => migrateLegacyExecutionConfig({
+      version: 1,
+      execution: { builder: { primary: { provider: 'codex' }, fallback: null } },
+      agent: { default: 'codex' }
+    })).toThrow('execution.builder cannot be combined');
+  });
+
+  it('completes a partially migrated config without overwriting the canonical axis', () => {
+    const config: Record<string, unknown> = {
+      version: 1,
+      execution: { runner: { provider: 'github-actions' } },
+      agent: { default: 'codex', fallback: false }
+    };
+
+    expect(migrateLegacyExecutionConfig(config)).toBe(true);
+    expect(config.execution).toEqual({
+      runner: { provider: 'github-actions' },
+      builder: {
+        primary: { provider: 'codex', model: null },
+        fallback: null
+      }
+    });
+    expect(config).not.toHaveProperty('agent');
+    expect(migrateLegacyExecutionConfig(config)).toBe(false);
+  });
+});
+
 describe('syncFleet', () => {
   it('parses the committed dogfood safety config through the fleet schema path', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
@@ -146,6 +215,127 @@ describe('syncFleet', () => {
       removed: [],
       retained: []
     });
+  });
+
+  it('blocks unsupported runners before migrating config or registry state', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    const config = parse(defaultConfigYaml({ agent: 'codex', setup: null, verify: [] }));
+    config.execution.runner.provider = 'github-actions';
+    await writeFleetRepo(repoDir, stringify(config));
+    await saveRegistry({ version: 1, projects: {} });
+
+    const output = await syncFleet({
+      cwd: root,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      replaceAll: false,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(output.projects[0]?.error).toContain(
+      'scheduler sync does not support execution.runner.provider=github-actions yet'
+    );
+    expect(output.projects[0]?.execution).toEqual({
+      runner: 'github-actions',
+      supported: false,
+      legacy: false
+    });
+    expect((await loadRegistry()).projects).toEqual({});
+    expect(parse(await fs.readFile(path.join(repoDir, '.kaizen', 'config.yml'), 'utf8')).execution.runner.provider)
+      .toBe('github-actions');
+  });
+
+  it('preflights every runner before mutating any fleet project', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const localDir = path.join(root, 'alpha');
+    const externalDir = path.join(root, 'omega');
+    const legacyLocal = {
+      version: 1,
+      agent: { default: 'codex', fallback: false },
+      scheduler: { provider: 'cron', jobs: {} }
+    };
+    const external = parse(defaultConfigYaml({ agent: 'codex', setup: null, verify: [] }));
+    external.execution.runner.provider = 'github-actions';
+    const localBefore = stringify(legacyLocal);
+    await writeFleetRepo(localDir, localBefore);
+    await writeFleetRepo(externalDir, stringify(external));
+    await saveRegistry({ version: 1, projects: {} });
+
+    const output = await syncFleet({
+      cwd: root,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['alpha', 'omega'],
+      migrateConfig: true,
+      ensureWorkspace: true,
+      ensureLabels: true,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      replaceAll: false,
+      dryRun: false,
+      runCommand: remoteRunner({
+        [localDir]: 'kaizen-agents-org/alpha',
+        [externalDir]: 'kaizen-agents-org/omega'
+      })
+    });
+
+    expect(output.projects).toHaveLength(1);
+    expect(output.projects[0]?.slug).toBe('kaizen-agents-org-omega');
+    expect(output.projects[0]?.error).toContain('execution.runner.provider=github-actions');
+    expect(await fs.readFile(path.join(localDir, '.kaizen', 'config.yml'), 'utf8')).toBe(localBefore);
+    expect((await loadRegistry()).projects).toEqual({});
+  });
+
+  it('rejects a malformed canonical runner before scheduler sync can migrate it', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    const raw = stringify({
+      version: 1,
+      execution: { runner: 'bad' },
+      agent: { default: 'codex' },
+      scheduler: { jobs: {} }
+    });
+    await writeFleetRepo(repoDir, raw);
+    await saveRegistry({ version: 1, projects: {} });
+
+    const output = await syncFleet({
+      cwd: root,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      replaceAll: false,
+      dryRun: false,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(output.projects[0]?.error).toContain('execution.runner must be an object');
+    expect(await fs.readFile(path.join(repoDir, '.kaizen', 'config.yml'), 'utf8')).toBe(raw);
+    expect((await loadRegistry()).projects).toEqual({});
   });
 
   it('requires an authoritative expected set before pruning', async () => {

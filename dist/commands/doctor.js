@@ -5,6 +5,7 @@ import { ClaudeCodeAdapter } from '../agents/claude.js';
 import { CodexAdapter } from '../agents/codex.js';
 import { assertVerifierRuntimeFresh } from '../agents/verifierFreshness.js';
 import { loadConfig } from '../config/config.js';
+import { executionConfig } from '../config/execution.js';
 import { configDrift } from '../config/operational.js';
 import { resolveProject } from '../config/registry.js';
 import { DISPOSITION_LABELS } from '../orchestrator/disposition.js';
@@ -105,11 +106,12 @@ export async function doctorProject(options) {
                 throw new Error('skipped because workspace privacy validation failed');
             if (!workspaceContentsTrusted)
                 throw new Error('skipped because repaired workspace contents require review or rebuild');
-            const preferredBackend = loaded.agent.default;
-            const fallbackBackend = preferredBackend === 'codex' ? 'claude' : 'codex';
-            const preferredBackends = loaded.agent.fallback
-                ? [preferredBackend, fallbackBackend]
-                : [preferredBackend];
+            const builder = executionConfig(loaded).builder;
+            const preferredBackend = builder.primary.provider;
+            const preferredBackends = [
+                preferredBackend,
+                ...(builder.fallback ? [builder.fallback.provider] : [])
+            ];
             const result = await new BuilderAgentAdapter(options.runCommand, builderOptions(loaded)).run({
                 workspaceDir: resolved.project.workspacePath,
                 prompt: [
@@ -120,7 +122,11 @@ export async function doctorProject(options) {
                 ].join('\n'),
                 timeoutMs: 60_000,
                 preferredBackends,
-                model: loaded.agent.model[preferredBackend]
+                model: builder.primary.model,
+                models: Object.fromEntries(preferredBackends.map((provider) => [
+                    provider,
+                    provider === builder.primary.provider ? builder.primary.model : builder.fallback?.model ?? null
+                ]))
             });
             if (result.status !== 'fixed') {
                 const reason = result.blockedReason || result.summary || 'builder agent did not complete smoke test';
@@ -212,11 +218,8 @@ async function childDirectories(parent) {
 function configuredAgents(config) {
     if (!config)
         return [];
-    const agents = [config.agent.default];
-    const fallback = config.agent.default === 'codex' ? 'claude' : 'codex';
-    if (config.agent.fallback && !agents.includes(fallback))
-        agents.push(fallback);
-    return agents;
+    const builder = executionConfig(config).builder;
+    return [builder.primary.provider, ...(builder.fallback ? [builder.fallback.provider] : [])];
 }
 export function requiredLabels(config) {
     return [...new Set([
