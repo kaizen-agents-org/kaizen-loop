@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { requestGithubPublication } from '../src/utils/command.js';
 
@@ -278,14 +279,21 @@ const github = () => request({
   const child = spawnSync(process.execPath, [__filename], { env: { ...process.env, KAIZEN_BROKER_CHILD: '1' } });
   let published = false;
   if (process.argv.includes('publish')) {
-    published = (await request({
-      operation: 'git-push',
-      cwd: ${JSON.stringify(sourceRepository)},
-      pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
-      refspec: 'kaizen/test:refs/heads/kaizen/test',
-      expectedRepo: 'o/r',
-      expectedSha: ${JSON.stringify(expectedSha)}
-    })).ok === true;
+    // Use the production client so a half-closed request is cancelled during
+    // import by connected()/cancelProcessGroup instead of reaching push.
+    try {
+      const { requestGithubPublication } = await import(${JSON.stringify(pathToFileURL(path.join(sourceRoot, 'dist/utils/command.js')).href)});
+      await requestGithubPublication(socketPath, capability, {
+        cwd: ${JSON.stringify(sourceRepository)},
+        pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
+        refspec: 'kaizen/test:refs/heads/kaizen/test',
+        expectedRepo: 'o/r',
+        expectedSha: ${JSON.stringify(expectedSha)}
+      }, Number(process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS) || 1_800_000);
+      published = true;
+    } catch {
+      published = false;
+    }
   }
   fs.writeFileSync(${JSON.stringify(evidencePath)}, JSON.stringify({ supervisor, childRejected: child.status === 0, published, runtimeTokenAbsent: process.env.GH_TOKEN === undefined, tokenCommandRefused, mismatchedRepoRefused, hostileHostnameRefused, crossRepoApiRefused, crossRepoGraphqlRefused, unsupportedCommandRefused, registeredGraphqlAllowed, ownerSearchAllowed, extraGraphqlRootRefused, localBodyFileRefused, signaledExitCode: signaledResult.exitCode, githubEvidence, ghConfigDir: process.env.GH_CONFIG_DIR, kaizenHome: process.env.KAIZEN_HOME, toolPath: process.env.PATH, publicationTimeout: process.env.KAIZEN_GITHUB_PUBLICATION_TIMEOUT_MS }));
   if (sleeping) return;
