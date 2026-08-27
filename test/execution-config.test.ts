@@ -86,6 +86,20 @@ describe('execution config', () => {
     });
   });
 
+  it('validates legacy agent values before deleting them during migration', () => {
+    for (const agent of [
+      { default: 'typo' },
+      { default: 'claude', fallback: 'yes' },
+      { default: 'claude', unknown: true },
+      { default: 'claude', model: { claude: null, typo: 'model' } }
+    ]) {
+      const raw: Record<string, unknown> = { version: 1, agent };
+      expect(() => migrateLegacyExecutionConfig(raw)).toThrow();
+      expect(raw.agent).toEqual(agent);
+      expect(raw).not.toHaveProperty('execution');
+    }
+  });
+
   it('migrates idempotently without keeping legacy keys', () => {
     const raw: Record<string, unknown> = {
       version: 1,

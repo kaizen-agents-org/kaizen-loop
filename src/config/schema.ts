@@ -103,23 +103,24 @@ const schedulerJobSchema = z
   })
   .strict();
 
+export const legacyAgentConfigSchema = z
+  .object({
+    default: builderProviderSchema.default('claude'),
+    fallback: z.boolean().default(true),
+    model: z
+      .object({
+        claude: nullableString,
+        codex: nullableString
+      })
+      .strict()
+      .default({ claude: null, codex: null })
+  })
+  .strict();
+
 export const configSchema = z
   .object({
     version: z.literal(1),
-    agent: z
-      .object({
-        default: builderProviderSchema.default('claude'),
-        fallback: z.boolean().default(true),
-        model: z
-          .object({
-            claude: nullableString,
-            codex: nullableString
-          })
-          .strict()
-          .default({ claude: null, codex: null })
-      })
-      .strict()
-      .optional(),
+    agent: legacyAgentConfigSchema.optional(),
     execution: z
       .object({
         runner: z.object({ provider: runnerProviderSchema.default('local') }).strict().optional(),

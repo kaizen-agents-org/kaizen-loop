@@ -1,4 +1,4 @@
-import type { KaizenConfig } from './schema.js';
+import { legacyAgentConfigSchema, type KaizenConfig } from './schema.js';
 
 export type BuilderProvider = 'claude' | 'codex';
 export type RunnerProvider =
@@ -59,7 +59,8 @@ export function migrateLegacyExecutionConfig(config: Record<string, unknown>): b
     throw new Error('execution must be an object');
   }
   const execution = record(config.execution);
-  const agent = record(config.agent);
+  const hasAgent = Object.hasOwn(config, 'agent');
+  const agent = hasAgent ? legacyAgentConfigSchema.parse(config.agent) : undefined;
   const scheduler = record(config.scheduler) ?? {};
   const legacyProvider = typeof scheduler.provider === 'string' ? scheduler.provider : undefined;
   const hasBuilder = Boolean(execution && Object.hasOwn(execution, 'builder'));
@@ -81,7 +82,6 @@ export function migrateLegacyExecutionConfig(config: Record<string, unknown>): b
 
   const primary = agent?.default === 'codex' ? 'codex' : 'claude';
   const fallbackProvider = primary === 'claude' ? 'codex' : 'claude';
-  const models = record(agent?.model);
   const migratedExecution: Record<string, unknown> = execution ?? {};
   let migrated = false;
   if (!hasRunner) {
@@ -90,15 +90,15 @@ export function migrateLegacyExecutionConfig(config: Record<string, unknown>): b
   }
   if (!hasBuilder) {
     migratedExecution.builder = {
-      primary: { provider: primary, model: nullableModel(models?.[primary]) },
+      primary: { provider: primary, model: nullableModel(agent?.model[primary]) },
       fallback: agent?.fallback === false
         ? null
-        : { provider: fallbackProvider, model: nullableModel(models?.[fallbackProvider]) }
+        : { provider: fallbackProvider, model: nullableModel(agent?.model[fallbackProvider]) }
     };
     migrated = true;
   }
   config.execution = migratedExecution;
-  if (agent) delete config.agent;
+  if (hasAgent) delete config.agent;
   if (legacyProvider) {
     delete scheduler.provider;
     config.scheduler = scheduler;

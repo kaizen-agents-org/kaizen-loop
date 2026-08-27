@@ -80,6 +80,17 @@ declare const schedulerJobSchema: z.ZodObject<{
         mode: z.ZodLiteral<"smoke">;
     }, z.core.$strict>], "mode">;
 }, z.core.$strict>;
+export declare const legacyAgentConfigSchema: z.ZodObject<{
+    default: z.ZodDefault<z.ZodEnum<{
+        claude: "claude";
+        codex: "codex";
+    }>>;
+    fallback: z.ZodDefault<z.ZodBoolean>;
+    model: z.ZodDefault<z.ZodObject<{
+        claude: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+        codex: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    }, z.core.$strict>>;
+}, z.core.$strict>;
 export declare const configSchema: z.ZodObject<{
     version: z.ZodLiteral<1>;
     agent: z.ZodOptional<z.ZodObject<{

@@ -1,4 +1,4 @@
-import type { KaizenConfig } from './schema.js';
+import { type KaizenConfig } from './schema.js';
 export type BuilderProvider = 'claude' | 'codex';
 export type RunnerProvider = 'local' | 'github-actions' | 'codex-automation' | 'claude-routine' | 'cursor' | 'external';
 export interface NormalizedExecutionConfig {
