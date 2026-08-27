@@ -12,6 +12,7 @@ import { RunLock } from '../../src/orchestrator/lock.js';
 import type { CommandRunner } from '../../src/utils/command.js';
 import { projectStateDir } from '../../src/utils/paths.js';
 import { trustedRunner } from '../helpers/trustedRunner.js';
+import { hasRepositoryScope } from '../../src/github/client.js';
 
 const testVerifierCommit = 'b'.repeat(40);
 const fixedBuilderNotes = 'Verification: npm test passed.\nResidual risk: none.';
@@ -3000,11 +3001,114 @@ describe('runKaizen PR flow', () => {
     expect(String(comments[0][1].at(-1))).toContain('"outcome":"pr-monitoring"');
     expect(String(comments[1][1].at(-1))).toContain('closing issue reference #1 was not recognized by GitHub');
     expect(runner.mock.calls.some(([command]) => command === 'codex')).toBe(false);
+    const prCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
+    expect(prCreates).toHaveLength(1);
+    expect(prCreates[0][1]).not.toContain('--draft');
     await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
       phase: 'failed',
       pr: 4,
       prUrl: 'https://github.com/o/r/pull/4'
     });
+  });
+
+  it('counts a scheduled broker-published PR as created without ambient git remotes', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-repo-'));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-workspace-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    await fs.mkdir(path.join(repo, '.kaizen'), { recursive: true });
+    await fs.mkdir(path.join(workspace, '.git'), { recursive: true });
+    if (process.platform !== 'win32') await fs.chmod(workspace, 0o700);
+    await fs.writeFile(
+      path.join(repo, '.kaizen', 'config.yml'),
+      defaultConfigWith(
+        { guardian: { enabled: false } },
+        { agent: 'claude', setup: null, verify: ['npm test'] }
+      )
+    );
+    await saveRegistry({
+      version: 1,
+      projects: {
+        'o-r': {
+          repo: 'o/r',
+          localPath: repo,
+          workspacePath: workspace,
+          schedule: '02:00',
+          enabled: true,
+          createdAt: '2026-06-12T00:00:00Z'
+        }
+      }
+    });
+
+    const runner = vi.fn<CommandRunner>(async (command, args, options) => {
+      if (command === 'gh' && ((args[0] === 'repo' && args[1] === 'view') || (args[0] === 'pr' && args[1] === 'view'))) {
+        if (!hasRepositoryScope(args)) {
+          throw new Error(
+            'Command failed (1): gh repo view --json defaultBranchRef\nstderr:\nfailed to run git: fatal: not a git repository (or any of the parent directories): .git'
+          );
+        }
+      }
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'view') return result(command, args, repo, JSON.stringify(issue()));
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'list') return result(command, args, repo, JSON.stringify([issue()]));
+      if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') return result(command, args, '/var/empty', 'https://github.com/o/r/pull/16\n');
+      if (command === 'gh') return githubReadinessResult(command, args, '/var/empty');
+      if (command === 'builder-agent' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'builder-agent') {
+        await writeJsonResult(options?.env?.KAIZEN_BUILD_RESULT_PATH, {
+          status: 'fixed',
+          summary: '直した',
+          notes: fixedBuilderNotes
+        });
+        return result(command, args, workspace, 'built');
+      }
+      if (command === 'verifier' && args[0] === '--version') return result(command, args, workspace, 'ok');
+      if (command === 'verifier') {
+        await writeJsonResult(options?.env?.KAIZEN_VERIFIER_RESULT_PATH, { status: 'open_pr', summary: '確認した', notes: '' });
+        return result(command, args, workspace, 'verified');
+      }
+      if (command === 'git' && ['remote get-url origin', 'remote get-url --push --all origin'].includes(args.join(' '))) {
+        return result(command, args, repo, 'https://github.com/o/r.git\n');
+      }
+      if (command === 'git' && args.join(' ') === 'status --porcelain') return result(command, args, workspace, '');
+      if (command === 'git' && args.join(' ') === 'diff --name-only origin/main...HEAD') return result(command, args, workspace, 'src/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'diff --numstat origin/main...HEAD') return result(command, args, workspace, '1\t0\tsrc/file.ts\n');
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') return result(command, args, workspace, 'abc123\n');
+      if (command === 'git') return result(command, args, workspace, '');
+      if (command === 'sh' && args.join(' ') === '-lc npm test') return result(command, args, workspace, 'ok');
+      return result(command, args, options?.cwd, '');
+    });
+
+    const summary = await runKaizen({
+      cwd: repo,
+      project: 'o-r',
+      scheduled: true,
+      trigger: 'afternoon',
+      issue: 1,
+      dryRun: false,
+      json: true,
+      runCommand: runner
+    });
+
+    expect('issues' in summary && summary.result).toBe('success');
+    expect('issues' in summary && summary.issues[0].outcome).toBe('pr-created');
+    const lastRun = JSON.parse(await fs.readFile(path.join(home, 'projects', 'o-r', 'last-run.json'), 'utf8')) as { prCreated?: number };
+    expect(lastRun.prCreated).toBe(1);
+    const prCreates = runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create');
+    expect(prCreates).toHaveLength(1);
+    expect(prCreates[0][1]).not.toContain('--draft');
+    const viewCalls = runner.mock.calls
+      .filter(([command, args]) => command === 'gh' && args[1] === 'view' && (args[0] === 'repo' || args[0] === 'pr'))
+      .map(([, args]) => args);
+    expect(viewCalls.length).toBeGreaterThan(0);
+    for (const args of viewCalls) {
+      expect(hasRepositoryScope(args)).toBe(true);
+      expect(args).toEqual(expect.arrayContaining(['--repo', 'o/r']));
+    }
+    const addedLabels = runner.mock.calls
+      .filter(([command, args]) => command === 'gh' && args[0] === 'issue' && args.includes('--add-label'))
+      .flatMap(([, args]) => args)
+      .join(',');
+    expect(addedLabels).not.toContain('attempts-exhausted');
   });
 
   it('enqueues PR Guardian instead of blocking when async mode is enabled', async () => {
@@ -3903,7 +4007,7 @@ describe('runKaizen PR flow', () => {
     expect('issues' in resumed && resumed.issues[0].outcome).toBe('pr-created');
     expect(runner.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'pr' && args[1] === 'create')).toHaveLength(1);
     expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr edit 7'))).toBe(true);
-    expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args.join(' ') === 'pr ready 7')).toBe(true);
+    expect(runner.mock.calls.some(([command, args]) => command === 'gh' && args.join(' ').startsWith('pr ready 7'))).toBe(true);
     await expect(loadImplementationState(path.join(home, 'projects', 'o-r'), 1)).resolves.toMatchObject({
       phase: 'complete',
       pr: 7,

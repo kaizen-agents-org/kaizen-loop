@@ -92,7 +92,7 @@ export async function runSandboxSmoke(options: SandboxSmokeOptions): Promise<San
   const startedAt = new Date().toISOString();
   const title = options.title ?? defaultSmokeTitle(startedAt);
   const body = options.body ?? defaultSmokeBody(startedAt);
-  const github = new GitHubClient(options.runCommand, resolved.project.localPath);
+  const github = new GitHubClient(options.runCommand, resolved.project.localPath, resolved.project.repo);
   await github.createLabels([config.issues.label, config.issues.selection.includeLabel, 'kaizen:pr-only']);
   const result = await reportIssueNow({
     cwd: options.cwd,

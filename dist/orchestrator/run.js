@@ -99,7 +99,7 @@ async function runKaizenWithPreparedWorkspace(options, resolved, releaseLock) {
         const runId = toRunId(startedAt);
         let runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
         let runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
-        let github = new GitHubClient(runCommand, initialConfig.path);
+        let github = new GitHubClient(runCommand, initialConfig.path, resolved.project.repo);
         const stateDir = projectStateDir(resolved.slug);
         const observesFullBacklog = options.issueNumbers === undefined && options.issue === undefined;
         const configuredMaxIssues = (requestedIssueNumbers) => options.maxIssues ?? schedulerMaxIssues(scheduledJob) ?? (requestedIssueNumbers ? requestedIssueNumbers.length : config.run.maxIssuesPerNight);
@@ -200,7 +200,7 @@ async function runKaizenWithPreparedWorkspace(options, resolved, releaseLock) {
             config = latestWorkspaceConfig;
             runDeadlineAt = startedAt.getTime() + config.run.runTimeoutMinutes * 60_000;
             runCommand = withRunDeadline(options.runCommand, runDeadlineAt);
-            github = new GitHubClient(runCommand, resolved.project.workspacePath);
+            github = new GitHubClient(runCommand, resolved.project.workspacePath, resolved.project.repo);
         }
         if (options.scheduled) {
             assertJobEnabled(config, options.job);
@@ -1388,7 +1388,7 @@ async function processIssue(options) {
         return withDiscoveredFollowups(await finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started), discoveredFollowups);
     }
     catch (error) {
-        return withDiscoveredFollowups(await finishFailed(options, agent, attempts, String(error), started), discoveredFollowups);
+        return withDiscoveredFollowups(await finishFailed(options, agent, attempts, String(error), started, undefined, error), discoveredFollowups);
     }
 }
 async function finishPr(options, agent, attempts, agentResult, verifyResults, finalDiff, pr, started) {
@@ -1719,16 +1719,19 @@ async function finishBlocked(options, agent, attempt, agentResult, started) {
         durationMs: Date.now() - started
     };
 }
-async function finishFailed(options, agent, attempt, reason, started, verifyResults) {
+async function finishFailed(options, agent, attempt, reason, started, verifyResults, cause) {
     const previousState = await loadImplementationState(options.stateDir, options.issue.number);
     const checkpoint = await checkpointPartialChanges(options, options.issue);
     const checkpointErrorReason = checkpoint.error ? `${reason}\n\nCheckpoint commit failed: ${checkpoint.error}` : reason;
     const checkpointReason = checkpoint.forbiddenFiles?.length
         ? `${checkpointErrorReason}\n\nForbidden changes discarded: ${checkpoint.forbiddenFiles.join(', ')}`
         : checkpointErrorReason;
-    const draft = checkpoint.forbiddenFiles?.length
-        ? { skipped: 'forbidden changes were discarded before checkpoint publication' }
-        : await publishDraftCheckpoint(options, attempt, checkpointReason, verifyResults);
+    const createdPr = cause instanceof CreatedPullRequestValidationError ? cause.pr : undefined;
+    const draft = createdPr
+        ? { pr: createdPr }
+        : checkpoint.forbiddenFiles?.length
+            ? { skipped: 'forbidden changes were discarded before checkpoint publication' }
+            : await publishDraftCheckpoint(options, attempt, checkpointReason, verifyResults);
     const publicationReason = draft.skipped ? `${checkpointReason}\n\nDraft PR publication skipped: ${draft.skipped}` : checkpointReason;
     const recordedReason = draft.error ? `${publicationReason}\n\nDraft PR publication failed: ${draft.error}` : publicationReason;
     await saveImplementationState(options.stateDir, {
@@ -1822,7 +1825,10 @@ async function publishDraftCheckpoint(options, attempt, reason, verifyResults = 
     try {
         const workspace = new WorkspaceManager(options.runCommand, options.project.workspacePath);
         const current = await loadImplementationState(options.stateDir, options.issue.number);
-        const existing = current?.pr ? await options.github.getPullRequest(current.pr) : undefined;
+        const existing = current?.pr
+            ? await options.github.getPullRequest(current.pr, options.project.repo).catch(() => undefined)
+                ?? await options.github.findPullRequestByHead(options.branch, options.project.repo)
+            : undefined;
         if (existing && (existing.state === 'OPEN' || existing.state === undefined)) {
             const updateError = checkpointPullRequestUpdateError(existing, options.branch);
             if (updateError)
@@ -1838,8 +1844,8 @@ async function publishDraftCheckpoint(options, attempt, reason, verifyResults = 
         const title = `[WIP] kaizen: ${shortSummary(options.issue.title)} (#${options.issue.number})`;
         const body = buildDraftCheckpointBody(options.issue, options.branch, attempt, reason, verifyResults, diff);
         if (current?.pr && existing && (existing.state === 'OPEN' || existing.state === undefined)) {
-            await options.github.editPullRequest(current.pr, { title, body });
-            return { pr: { number: current.pr, url: current.prUrl ?? existing.url } };
+            await options.github.editPullRequest(existing.number, { title, body });
+            return { pr: { number: existing.number, url: current.prUrl ?? existing.url } };
         }
         const pr = await options.github.createPullRequest({
             base: options.config.git.defaultBranch,
@@ -2142,6 +2148,14 @@ async function reflectPullRequest(options) {
     }
     catch (error) {
         if (error instanceof CreatedPullRequestValidationError) {
+            await saveImplementationState(options.stateDir, {
+                issue: options.issue.number,
+                branch: options.branch,
+                phase: 'publishing',
+                attempt: options.attempt,
+                pr: error.pr.number,
+                prUrl: error.pr.url
+            });
             await options.github.comment(options.issue.number, buildPrProgressComment({
                 runId: options.runId,
                 issue: options.issue.number,

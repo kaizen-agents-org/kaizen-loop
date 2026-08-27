@@ -11,7 +11,8 @@ export interface ExecutionAuthorization {
 export declare class GitHubClient {
     private readonly run;
     private readonly cwd;
-    constructor(run: CommandRunner, cwd: string);
+    private readonly repo?;
+    constructor(run: CommandRunner, cwd: string, repo?: string | undefined);
     authStatus(): Promise<void>;
     createLabels(labels?: string[]): Promise<void>;
     listIssues(labels: string | string[], limit?: number): Promise<GitHubIssue[]>;
@@ -32,11 +33,12 @@ export declare class GitHubClient {
     searchOpenPullRequestsForOwner(owner: string, limit?: number): Promise<GitHubPullRequest[]>;
     searchMergedPullRequestsForOwner(owner: string, mergedSince: string, limit?: number): Promise<GitHubPullRequest[]>;
     private completePullRequestCommits;
-    getPullRequest(number: number): Promise<GitHubPullRequestDetails>;
-    getRepositoryDefaultBranch(): Promise<string>;
+    getPullRequest(selector: number | string, repo?: string | undefined): Promise<GitHubPullRequestDetails>;
+    findPullRequestByHead(head: string, repo?: string | undefined): Promise<GitHubPullRequestDetails | undefined>;
+    getRepositoryDefaultBranch(repo?: string | undefined): Promise<string>;
     getBranchHeadSha(repo: string, branch: string): Promise<string>;
-    getPullRequestLinkage(number: number): Promise<GitHubPullRequestLinkage>;
-    getPullRequestResolution(number: number): Promise<GitHubPullRequestResolution>;
+    getPullRequestLinkage(number: number, repo?: string | undefined): Promise<GitHubPullRequestLinkage>;
+    getPullRequestResolution(number: number, repo?: string | undefined): Promise<GitHubPullRequestResolution>;
     addLabels(issue: number, labels: string[]): Promise<void>;
     removeLabels(issue: number, labels: string[]): Promise<void>;
     updateIssueBody(options: {
@@ -84,3 +86,6 @@ export declare class CreatedPullRequestValidationError extends Error {
     readonly originalError: unknown;
     constructor(pr: PullRequestResult, originalError: unknown);
 }
+export declare function withRepositoryScope(args: string[], repo: string | undefined): string[];
+export declare function hasRepositoryScope(args: string[]): boolean;
+export declare function repositoryFromPullRequestUrl(url: string): string | undefined;
