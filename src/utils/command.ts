@@ -621,10 +621,14 @@ function requestBroker(
 ): Promise<void> {
   installShutdownHooks();
   throwIfShutdownRequested();
+  const frame = `${JSON.stringify({
+    version: 1,
+    ...request
+  })}\n`;
   return new Promise((resolve, reject) => {
-    // allowHalfOpen keeps the read side open after we half-close the write
-    // side, which is required because the broker only starts processing on our
-    // FIN and answers afterwards.
+    // Keep the write half open after sending the newline-delimited frame. The
+    // Swift broker finishes `readRequest` at newline and then treats EOF from
+    // a client half-close as disconnection, which cancels in-flight import.
     const socket = net.createConnection({ path: socketPath, allowHalfOpen: true });
     activePublicationSockets.add(socket);
     let output = '';
@@ -649,14 +653,7 @@ function requestBroker(
     absoluteTimeout = setTimeout(fail, timeoutMs);
     absoluteTimeout.unref();
     socket.setEncoding('utf8');
-    // The broker reads until end-of-input and only then validates and answers,
-    // so the request must be terminated with a half-close. Writing without it
-    // left every publication waiting for the broker's 10s read timeout, which
-    // answered `request-timeout` and surfaced as a failed publication.
-    socket.on('connect', () => socket.end(`${JSON.stringify({
-      version: 1,
-      ...request
-    })}\n`));
+    socket.on('connect', () => socket.write(frame));
     socket.on('data', (chunk) => {
       output += chunk;
       if (output.length > 4_096) fail();
@@ -711,6 +708,7 @@ function requestBroker(
       settled = true;
       if (absoluteTimeout) clearTimeout(absoluteTimeout);
       activePublicationSockets.delete(socket);
+      socket.destroy();
       resolve();
     });
   });
