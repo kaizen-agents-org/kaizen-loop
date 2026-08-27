@@ -185,6 +185,7 @@ describe('BuilderAgentAdapter', () => {
       expect(command).toBe('builder-agent');
       expect(args).toEqual([]);
       expect(options?.env?.KAIZEN_PREFERRED_AGENT).toBe('codex,claude');
+      expect(options?.env?.KAIZEN_AGENT_MODELS).toBe('{"codex":"gpt-test","claude":"claude-test"}');
       if (typeof options?.env?.KAIZEN_BUILD_RESULT_PATH !== 'string') throw new Error('missing result path');
       await fs.writeFile(
         options.env.KAIZEN_BUILD_RESULT_PATH,
@@ -202,7 +203,9 @@ describe('BuilderAgentAdapter', () => {
       workspaceDir: workspace,
       prompt: 'fix it',
       timeoutMs: 1000,
-      preferredBackends: ['codex', 'claude']
+      preferredBackends: ['codex', 'claude'],
+      model: 'gpt-test',
+      models: { codex: 'gpt-test', claude: 'claude-test' }
     });
 
     expect(result.status).toBe('fixed');

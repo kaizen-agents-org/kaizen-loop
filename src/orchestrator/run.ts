@@ -1325,6 +1325,7 @@ async function processIssue(options: {
           prompt,
           timeoutMs: boundedTimeoutMs(options.config.run.issueTimeoutMinutes * 60_000, options.runDeadlineAt),
           model: modelFor(options.config, primaryBackend),
+          models: modelsFor(options.config, preferredBackends),
           preferredBackends
         });
         await fs.appendFile(path.join(issueDir, 'agent.log'), `\n# Agent attempt ${retry + 1}\n${agentResult.raw}\n`);
@@ -3132,6 +3133,13 @@ function modelFor(config: KaizenConfig, agent: 'claude' | 'codex'): string | nul
   if (builder.primary.provider === agent) return builder.primary.model;
   if (builder.fallback?.provider === agent) return builder.fallback.model;
   return null;
+}
+
+function modelsFor(
+  config: KaizenConfig,
+  agents: Array<'claude' | 'codex'>
+): Partial<Record<'claude' | 'codex', string | null>> {
+  return Object.fromEntries(agents.map((agent) => [agent, modelFor(config, agent)]));
 }
 
 function shortSummary(summary: string): string {

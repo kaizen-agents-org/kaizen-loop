@@ -3,6 +3,7 @@ export interface AgentRequest {
   prompt: string;
   timeoutMs: number;
   model?: string | null;
+  models?: Partial<Record<'claude' | 'codex', string | null>>;
   preferredBackends?: Array<'claude' | 'codex'>;
 }
 

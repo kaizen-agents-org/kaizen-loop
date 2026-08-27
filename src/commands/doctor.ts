@@ -121,7 +121,11 @@ export async function doctorProject(options: { cwd: string; project?: string; re
       ].join('\n'),
       timeoutMs: 60_000,
       preferredBackends,
-      model: builder.primary.model
+      model: builder.primary.model,
+      models: Object.fromEntries(preferredBackends.map((provider) => [
+        provider,
+        provider === builder.primary.provider ? builder.primary.model : builder.fallback?.model ?? null
+      ]))
     });
     if (result.status !== 'fixed') {
       const reason = result.blockedReason || result.summary || 'builder agent did not complete smoke test';

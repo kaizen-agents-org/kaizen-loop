@@ -115,7 +115,7 @@ export declare const configSchema: z.ZodObject<{
                 external: "external";
             }>>;
         }, z.core.$strict>>;
-        builder: z.ZodOptional<z.ZodObject<{
+        builder: z.ZodOptional<z.ZodPipe<z.ZodObject<{
             primary: z.ZodDefault<z.ZodObject<{
                 provider: z.ZodDefault<z.ZodEnum<{
                     claude: "claude";
@@ -123,14 +123,32 @@ export declare const configSchema: z.ZodObject<{
                 }>>;
                 model: z.ZodOptional<z.ZodNullable<z.ZodString>>;
             }, z.core.$strict>>;
-            fallback: z.ZodDefault<z.ZodNullable<z.ZodObject<{
+            fallback: z.ZodOptional<z.ZodNullable<z.ZodObject<{
                 provider: z.ZodEnum<{
                     claude: "claude";
                     codex: "codex";
                 }>;
                 model: z.ZodOptional<z.ZodNullable<z.ZodString>>;
             }, z.core.$strict>>>;
-        }, z.core.$strict>>;
+        }, z.core.$strict>, z.ZodTransform<{
+            fallback: {
+                provider: "claude" | "codex";
+                model?: string | null | undefined;
+            } | null;
+            primary: {
+                provider: "claude" | "codex";
+                model?: string | null | undefined;
+            };
+        }, {
+            primary: {
+                provider: "claude" | "codex";
+                model?: string | null | undefined;
+            };
+            fallback?: {
+                provider: "claude" | "codex";
+                model?: string | null | undefined;
+            } | null | undefined;
+        }>>>;
     }, z.core.$strict>>;
     run: z.ZodDefault<z.ZodObject<{
         maxIssuesPerNight: z.ZodDefault<z.ZodNumber>;

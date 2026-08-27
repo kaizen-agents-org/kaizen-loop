@@ -117,6 +117,29 @@ export const legacyAgentConfigSchema = z
   })
   .strict();
 
+const executionBuilderSchema = z
+  .object({
+    primary: z.object({ provider: builderProviderSchema.default('claude'), model: nullableString }).strict()
+      .default({ provider: 'claude', model: null }),
+    fallback: z.object({ provider: builderProviderSchema, model: nullableString }).strict().nullable().optional()
+  })
+  .strict()
+  .superRefine((builder, context) => {
+    if (builder.fallback?.provider === builder.primary.provider) {
+      context.addIssue({
+        code: 'custom',
+        path: ['fallback'],
+        message: 'execution.builder.fallback must not repeat the primary provider'
+      });
+    }
+  })
+  .transform((builder) => ({
+    ...builder,
+    fallback: builder.fallback === undefined
+      ? { provider: builder.primary.provider === 'claude' ? 'codex' as const : 'claude' as const, model: null }
+      : builder.fallback
+  }));
+
 export const configSchema = z
   .object({
     version: z.literal(1),
@@ -124,24 +147,7 @@ export const configSchema = z
     execution: z
       .object({
         runner: z.object({ provider: runnerProviderSchema.default('local') }).strict().optional(),
-        builder: z
-          .object({
-            primary: z.object({ provider: builderProviderSchema.default('claude'), model: nullableString }).strict()
-              .default({ provider: 'claude', model: null }),
-            fallback: z.object({ provider: builderProviderSchema, model: nullableString }).strict().nullable()
-              .default({ provider: 'codex', model: null })
-          })
-          .strict()
-          .superRefine((builder, context) => {
-            if (builder.fallback?.provider === builder.primary.provider) {
-              context.addIssue({
-                code: 'custom',
-                path: ['fallback'],
-                message: 'execution.builder.fallback must not repeat the primary provider'
-              });
-            }
-          })
-          .optional()
+        builder: executionBuilderSchema.optional()
       })
       .strict()
       .superRefine((execution, context) => {

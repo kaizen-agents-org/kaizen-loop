@@ -14,6 +14,8 @@
 
 `isAvailable()` の判定: `builder.command` に指定されたコマンドが PATH に存在し、軽量疎通(`--version`)できること。
 
+Kaizen Loopは希望provider順を`KAIZEN_PREFERRED_AGENT`、先頭providerとの後方互換modelを`KAIZEN_AGENT_MODEL`、provider別model mapを`KAIZEN_AGENT_MODELS`（JSON object）としてbuilder-agentへ渡す。fallback実行時のprovider別model選択はbuilder-agentが行う。
+
 ## 2. アダプタごとの実行仕様
 
 > **注意**: 各 CLI のフラグは変化が速い。以下は設計時点の想定であり、実装時には最新ドキュメントに追従する。フラグの組み立てはアダプタ内の 1 関数に集約し、変更に強くする。

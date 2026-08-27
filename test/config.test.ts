@@ -267,6 +267,17 @@ describe('configSchema', () => {
     });
   });
 
+  it('defaults canonical fallback to the provider complementary to primary', () => {
+    expect(executionConfig(configSchema.parse({
+      version: 1,
+      execution: { builder: { primary: { provider: 'codex' } } }
+    })).builder.fallback).toEqual({ provider: 'claude', model: null });
+    expect(executionConfig(configSchema.parse({
+      version: 1,
+      execution: { builder: { primary: { provider: 'claude' } } }
+    })).builder.fallback).toEqual({ provider: 'codex', model: null });
+  });
+
   it('rejects mixed canonical and legacy execution settings', () => {
     expect(() => configSchema.parse({
       version: 1,
