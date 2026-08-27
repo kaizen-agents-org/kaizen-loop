@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> (--token-file <root-only-file> | --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-file <root-only-pem> | --github-app-installation <owner>:<app-id>:<installation-id>:<root-only-pem> [...]) --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--replace-all] [--kaizen-home <absolute-kaizen-home>] [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> (--token-file <root-only-file> | --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-file <root-only-pem> | --github-app-installation <owner>:<app-id>:<installation-id>:<root-only-pem> [...]) --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--replace-all] [--kaizen-home <absolute-kaizen-home>] [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--npm <absolute-npm>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -16,6 +16,7 @@ github_app_installation_id=
 github_app_private_key_file=
 github_app_installations=
 node_executable=
+npm_executable=
 github_cli_executable=
 source_root=
 kaizen_home=
@@ -41,6 +42,7 @@ while [ "$#" -gt 0 ]; do
     --publication-timeout-ms) [ "$#" -ge 2 ] || usage; publication_timeout_ms=$2; shift 2 ;;
     --replace-all) replace_all=true; shift ;;
     --node) [ "$#" -ge 2 ] || usage; node_executable=$2; shift 2 ;;
+    --npm) [ "$#" -ge 2 ] || usage; npm_executable=$2; shift 2 ;;
     --github-cli) [ "$#" -ge 2 ] || usage; github_cli_executable=$2; shift 2 ;;
     --kaizen-home) [ "$#" -ge 2 ] || usage; kaizen_home=$2; shift 2 ;;
     --source) [ "$#" -ge 2 ] || usage; source_root=$2; shift 2 ;;
@@ -75,7 +77,8 @@ if [ -z "$source_root" ]; then
 else
   source_root=$(CDPATH= cd -- "$source_root" && pwd -P)
 fi
-[ -f "$source_root/dist/cli.js" ] && [ -f "$source_root/package-lock.json" ] || {
+[ -f "$source_root/dist/cli.js" ] && [ -f "$source_root/package-lock.json" ] &&
+  [ -f "$source_root/scripts/macos/wait-for-unix-socket.mjs" ] || {
   echo "Build kaizen-loop before installing the broker (npm run build)." >&2
   exit 1
 }
@@ -94,9 +97,20 @@ github_cli_executable=$(realpath "$github_cli_executable" 2>/dev/null) || {
   exit 1
 }
 [ -x "$github_cli_executable" ] || { echo "The configured GitHub CLI executable is not executable." >&2; exit 1; }
-npm_executable=$(command -v npm || true)
+if [ -z "$npm_executable" ]; then
+  node_sibling_npm=$(dirname "$node_executable")/npm
+  if [ -x "$node_sibling_npm" ]; then
+    npm_executable=$node_sibling_npm
+  else
+    npm_executable=$(command -v npm || true)
+  fi
+fi
 case "$npm_executable" in /*) ;; *) echo "A trusted absolute npm executable is required." >&2; exit 1 ;; esac
-npm_executable=$(realpath "$npm_executable")
+npm_executable=$(realpath "$npm_executable" 2>/dev/null) || {
+  echo "The configured --npm path does not exist or cannot be resolved." >&2
+  exit 1
+}
+[ -x "$npm_executable" ] || { echo "The configured npm executable is not executable." >&2; exit 1; }
 
 trusted_root_path() {
   candidate=$1
@@ -120,6 +134,9 @@ trusted_root_path "$npm_executable" || {
   echo "npm and every ancestor must be root-owned and group/other non-writable." >&2
   exit 1
 }
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+umask 022
 validate_credential_file() {
   credential_file=$1
   credential_label=$2
@@ -560,7 +577,7 @@ mv "$stage" "$install_root"
 install -o root -g wheel -m 0644 "$config_stage" "$config_path"
 install -o root -g wheel -m 0644 "$daemon_stage" "$daemon_path"
 install -o root -g wheel -m 0644 "$schedule_daemon_stage" "$schedule_daemon_path"
-if ! launchctl bootstrap system "$daemon_path" || ! launchctl bootstrap system "$schedule_daemon_path"; then
+restore_previous_installation() {
   launchctl bootout system/org.kaizen-agents.scheduled-publication 2>/dev/null || true
   launchctl bootout system/org.kaizen-agents.publication-broker 2>/dev/null || true
   rm -rf "$install_root"
@@ -578,7 +595,15 @@ if ! launchctl bootstrap system "$daemon_path" || ! launchctl bootstrap system "
   else
     rm -f "$schedule_daemon_path"
   fi
+}
+if ! launchctl bootstrap system "$daemon_path" || ! launchctl bootstrap system "$schedule_daemon_path"; then
+  restore_previous_installation
   echo "LaunchDaemon bootstrap failed; the prior runtime and configuration were restored." >&2
+  exit 1
+fi
+if ! "$node_executable" "$source_root/scripts/macos/wait-for-unix-socket.mjs" /opt/kaizen/run/scheduler.sock 10000; then
+  restore_previous_installation
+  echo "Publication broker readiness failed; the prior runtime and configuration were restored." >&2
   exit 1
 fi
 if [ -d "$backup" ]; then rm -rf "$backup"; fi

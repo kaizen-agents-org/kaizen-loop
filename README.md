@@ -171,7 +171,8 @@ sudo scripts/install-macos-publication-broker.sh \
   --scheduled-job owner-repo/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --github-cli /usr/local/libexec/kaizen-gh/gh \
-  --node "$(command -v node)"
+  --node "$(command -v node)" \
+  --npm "$(command -v npm)"
 export PATH=/usr/local/libexec/kaizen-gh:$PATH
 kaizen init --agent codex --schedule 02:00
 export PATH="${KAIZEN_HOME:-$HOME/.kaizen}/bin:$PATH"
