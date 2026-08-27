@@ -41,7 +41,7 @@ export async function syncFleet(options) {
     const preflightFailures = prepared.flatMap((item) => {
         if (item.error)
             return [fleetProjectError(item.project, item.error)];
-        if (!options.syncScheduler)
+        if (!options.syncScheduler || options.dryRun)
             return [];
         try {
             assertRunnerSupportedForLocalSync(item.config);
@@ -199,11 +199,11 @@ async function syncFleetProject(options) {
         schedulerSynced: false,
         lockRepaired: false,
         verified: false,
-        enabled: options.syncScheduler && options.dryRun
+        enabled: options.syncScheduler && options.dryRun && execution.runner.provider === 'local'
     };
     try {
         const config = options.config;
-        if (options.syncScheduler)
+        if (options.syncScheduler && !options.dryRun)
             assertRunnerSupportedForLocalSync(config);
         result.configMigrated = options.migrated;
         if (options.migrated && options.migrateConfig && !options.dryRun) {
@@ -247,8 +247,9 @@ async function syncFleetProject(options) {
                 result.verifyPassed = verifyResults.every((item) => item.ok);
             }
         }
-        if (options.syncScheduler && options.dryRun)
+        if (options.syncScheduler && options.dryRun && execution.runner.provider === 'local') {
             result.schedulerSynced = true;
+        }
     }
     catch (error) {
         result.error = error instanceof Error ? error.message : String(error);
