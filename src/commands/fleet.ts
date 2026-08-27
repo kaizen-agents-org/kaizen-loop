@@ -125,7 +125,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
   const prepared = await prepareFleetProjects(discovered);
   const preflightFailures = prepared.flatMap((item) => {
     if (item.error) return [fleetProjectError(item.project, item.error)];
-    if (!options.syncScheduler) return [];
+    if (!options.syncScheduler || options.dryRun) return [];
     try {
       assertRunnerSupportedForLocalSync(item.config!);
       return [];
@@ -295,12 +295,12 @@ async function syncFleetProject(options: FleetSyncOptions & {
     schedulerSynced: false,
     lockRepaired: false,
     verified: false,
-    enabled: options.syncScheduler && options.dryRun
+    enabled: options.syncScheduler && options.dryRun && execution.runner.provider === 'local'
   };
 
   try {
     const config = options.config;
-    if (options.syncScheduler) assertRunnerSupportedForLocalSync(config);
+    if (options.syncScheduler && !options.dryRun) assertRunnerSupportedForLocalSync(config);
     result.configMigrated = options.migrated;
     if (options.migrated && options.migrateConfig && !options.dryRun) {
       await fs.writeFile(path.join(options.project.localPath, '.kaizen', 'config.yml'), options.migratedContent!);
@@ -348,7 +348,9 @@ async function syncFleetProject(options: FleetSyncOptions & {
       }
     }
 
-    if (options.syncScheduler && options.dryRun) result.schedulerSynced = true;
+    if (options.syncScheduler && options.dryRun && execution.runner.provider === 'local') {
+      result.schedulerSynced = true;
+    }
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
   }

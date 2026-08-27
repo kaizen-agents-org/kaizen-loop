@@ -257,6 +257,44 @@ describe('syncFleet', () => {
       .toBe('github-actions');
   });
 
+  it('allows a dry-run migration plan for an unsupported runner without enabling it', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const repoDir = path.join(root, 'builder-agent');
+    const config = parse(defaultConfigYaml({ agent: 'codex', setup: null, verify: [] }));
+    config.execution.runner.provider = 'github-actions';
+    const before = stringify(config);
+    await writeFleetRepo(repoDir, before);
+    await saveRegistry({ version: 1, projects: {} });
+
+    const output = await syncFleet({
+      cwd: root,
+      root,
+      owner: 'kaizen-agents-org',
+      repos: ['builder-agent'],
+      migrateConfig: true,
+      ensureWorkspace: false,
+      ensureLabels: false,
+      syncScheduler: true,
+      repairLocks: false,
+      verify: false,
+      prune: false,
+      replaceAll: false,
+      dryRun: true,
+      runCommand: remoteRunner({ [repoDir]: 'kaizen-agents-org/builder-agent' })
+    });
+
+    expect(output.projects[0]).toMatchObject({
+      execution: { runner: 'github-actions', supported: false },
+      enabled: false,
+      schedulerSynced: false
+    });
+    expect(output.projects[0]?.error).toBeUndefined();
+    expect(await fs.readFile(path.join(repoDir, '.kaizen', 'config.yml'), 'utf8')).toBe(before);
+    expect((await loadRegistry()).projects).toEqual({});
+  });
+
   it('preflights every runner before mutating any fleet project', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-fleet-'));
