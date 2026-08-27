@@ -1,4 +1,4 @@
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
@@ -144,10 +144,15 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
       const jwt = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
       const parts = jwt.split('.');
       let valid = false;
-      if (request.method === 'POST' && request.url === '/app/installations/67890/access_tokens' && parts.length === 3) {
+      const installation = request.url === '/app/installations/67890/access_tokens'
+        ? { appId: 12345, token: 'installation-token' }
+        : request.url === '/app/installations/67891/access_tokens'
+          ? { appId: 12346, token: 'installation-token-two' }
+          : undefined;
+      if (request.method === 'POST' && installation && parts.length === 3) {
         const claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8')) as { iss?: number; iat?: number; exp?: number };
         const now = Math.floor(Date.now() / 1000);
-        valid = claims.iss === 12345 && typeof claims.iat === 'number' && claims.iat <= now &&
+        valid = claims.iss === installation.appId && typeof claims.iat === 'number' && claims.iat <= now &&
           typeof claims.exp === 'number' && claims.exp > now && claims.exp <= now + 600 &&
           verify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), publicKey, Buffer.from(parts[2]!, 'base64url'));
       }
@@ -165,7 +170,7 @@ macTest('macOS publication broker', { timeout: 180_000 }, () => {
       githubAppTokensIssued += 1;
       response.writeHead(201, { 'content-type': 'application/json' });
       response.end(JSON.stringify({
-        token: 'installation-token',
+        token: installation!.token,
         expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString()
       }));
     });
@@ -184,6 +189,7 @@ const net = require('node:net');
 const { spawn, spawnSync } = require('node:child_process');
 const socketPath = process.env.KAIZEN_GITHUB_TOKEN_SOCKET;
 const capability = process.env.KAIZEN_GITHUB_BROKER_CAPABILITY;
+const expectedRepo = process.argv[4] === 'p-s' ? 'p/s' : 'o/r';
 function request(payload) {
   return new Promise((resolve) => {
     const socket = net.createConnection(socketPath);
@@ -198,7 +204,7 @@ function request(payload) {
 const preflight = async () => (await request({
   operation: 'preflight',
   pushUrl: ${JSON.stringify(`file://${remoteRepository}`)},
-  expectedRepo: 'o/r'
+  expectedRepo
 })).ok === true;
 const github = () => request({
   operation: 'github-cli',
@@ -512,6 +518,51 @@ const github = () => request({
     }
   });
 
+  it('selects an installation token from the registered repository owner', async () => {
+    const ownerConfig = path.join(root, 'owner-installations-publication-broker.plist');
+    const ownerSchedulerSocket = path.join(root, 'owner-installations-scheduler.sock');
+    const ownerPublicationSocket = path.join(root, 'owner-installations-publication.sock');
+    const original = await fs.readFile(configPath, 'utf8');
+    const legacyAuth = `<key>githubAppId</key><integer>12345</integer>\n<key>githubAppInstallationId</key><integer>67890</integer>\n<key>githubAppPrivateKeyFile</key><string>${xml(githubAppPrivateKeyPath)}</string>\n<key>githubAppApiBaseUrl</key><string>${xml(githubAppApiBaseUrl)}</string>`;
+    const ownerAuth = `<key>githubAppInstallations</key><dict>
+<key>o</key><dict><key>appId</key><integer>12345</integer><key>installationId</key><integer>67890</integer><key>privateKeyFile</key><string>${xml(githubAppPrivateKeyPath)}</string><key>apiBaseUrl</key><string>${xml(githubAppApiBaseUrl)}</string></dict>
+<key>p</key><dict><key>appId</key><integer>12346</integer><key>installationId</key><integer>67891</integer><key>privateKeyFile</key><string>${xml(githubAppPrivateKeyPath)}</string><key>apiBaseUrl</key><string>${xml(githubAppApiBaseUrl)}</string></dict>
+</dict>`;
+    const originalRepositories = `<key>allowedRepositories</key><dict><key>o/r</key><string>${xml(`file://${remoteRepository}`)}</string></dict>`;
+    const ownerRepositories = `<key>allowedRepositories</key><dict><key>o/r</key><string>${xml(`file://${remoteRepository}`)}</string><key>p/s</key><string>${xml(`file://${remoteRepository}`)}</string></dict>`;
+    const ownerJob = `<dict><key>project</key><string>p-s</string><key>job</key><string>auth-selection</string><key>toolPath</key><string>${xml(scheduledToolPath)}</string><key>hour</key><integer>2</integer><key>minute</key><integer>0</integer><key>publicationTimeoutMs</key><integer>1800000</integer></dict>`;
+    const contents = original
+      .replace(legacyAuth, ownerAuth)
+      .replace(originalRepositories, ownerRepositories)
+      .replace('</array>\n</dict></plist>', `${ownerJob}\n</array>\n</dict></plist>`)
+      .replace(`<key>schedulerSocketPath</key><string>${xml(schedulerSocket)}</string>`, `<key>schedulerSocketPath</key><string>${xml(ownerSchedulerSocket)}</string>`)
+      .replace(`<key>publicationSocketPath</key><string>${xml(publicationSocket)}</string>`, `<key>publicationSocketPath</key><string>${xml(ownerPublicationSocket)}</string>`);
+    expect(contents).not.toBe(original);
+    expect(contents).toContain(ownerAuth);
+    expect(contents).toContain(ownerRepositories);
+    expect(contents).toContain(ownerJob);
+    await fs.writeFile(ownerConfig, contents);
+    const ownerBroker = spawn(brokerPath, [ownerConfig], {
+      env: { ...process.env, KAIZEN_BROKER_TEST_CONFIG: ownerConfig },
+      stdio: 'ignore'
+    });
+    try {
+      await Promise.all([waitForPath(ownerSchedulerSocket), waitForPath(ownerPublicationSocket)]);
+      await new Promise<void>((resolve, reject) => {
+        execFile(scheduledPath, ['canary', 'p-s', 'auth-selection'], {
+          env: { ...process.env, PATH: scheduledToolPath, KAIZEN_BROKER_TEST_CONFIG: ownerConfig }
+        }, (error) => error ? reject(error) : resolve());
+      });
+      const evidence = JSON.parse(await fs.readFile(evidencePath, 'utf8')) as {
+        githubEvidence: { token: string; repo: string };
+      };
+      expect(evidence.githubEvidence).toEqual({ token: 'installation-token-two', repo: 'p/s', config: '/var/empty', cwd: '/private/var/empty' });
+    } finally {
+      if (ownerBroker.exitCode === null) ownerBroker.kill('SIGTERM');
+      await new Promise<void>((resolve) => ownerBroker.once('exit', () => resolve()));
+    }
+  });
+
   it('does not forward the App JWT across redirects', async () => {
     const redirectConfig = path.join(root, 'redirect-publication-broker.plist');
     const redirectSchedulerSocket = path.join(root, 'redirect-scheduler.sock');
@@ -625,6 +676,42 @@ macTest('newline-framed publication client', { timeout: 60_000 }, () => {
 });
 
 describe('publication broker source contract', () => {
+  it('requires explicit replacement before existing broker jobs are removed', () => {
+    const sourceRoot = path.resolve(import.meta.dirname, '..');
+    const comparison = path.join(sourceRoot, 'scripts/macos/compare-publication-broker-config.mjs');
+    const existing = JSON.stringify({
+      kaizenHome: '/state/one',
+      allowedRepositories: { 'o/r': 'https://github.com/o/r.git', 'p/s': 'https://github.com/p/s.git' },
+      scheduledJobs: [
+        { project: 'o-r', job: 'maintenance' },
+        { project: 'p-s', job: 'maintenance' }
+      ]
+    });
+    const args = ['/state/one', '--repositories', 'o/r', '--scheduled-jobs', 'o-r/maintenance@02:00'];
+    const refused = spawnSync(process.execPath, [comparison, 'false', ...args], { input: existing, encoding: 'utf8' });
+    expect(refused.status).toBe(3);
+    expect(refused.stdout).toContain('removed=p-s/maintenance');
+    expect(refused.stdout).toContain('removed=p/s');
+    expect(refused.stderr).toContain('without --replace-all');
+
+    const acknowledged = spawnSync(process.execPath, [comparison, 'true', ...args], { input: existing, encoding: 'utf8' });
+    expect(acknowledged.status).toBe(0);
+    expect(acknowledged.stdout).toContain('retained=o-r/maintenance');
+
+    const changedHome = spawnSync(process.execPath, [
+      comparison, 'false', '/state/two', '--repositories', 'o/r', 'p/s', '--scheduled-jobs',
+      'o-r/maintenance@02:00', 'p-s/maintenance@03:00'
+    ], { input: existing, encoding: 'utf8' });
+    expect(changedHome.status).toBe(3);
+    expect(changedHome.stdout).toContain('Kaizen home: /state/one -> /state/two');
+
+    const malformed = spawnSync(process.execPath, [comparison, 'true', ...args], {
+      input: JSON.stringify({ kaizenHome: '/state/one', scheduledJobs: [] }),
+      encoding: 'utf8'
+    });
+    expect(malformed.status).toBe(2);
+  });
+
   it('rejects malformed Verifier provenance before installation', async () => {
     const sourceRoot = path.resolve(import.meta.dirname, '..');
     const installer = await fs.readFile(path.join(sourceRoot, 'scripts/install-macos-publication-broker.sh'), 'utf8');
@@ -683,9 +770,12 @@ describe('publication broker source contract', () => {
     expect(brokerSource).toContain('{\\"ok\\":true}');
     expect(brokerSource).toContain('{\\"ok\\":false}');
     expect(brokerSource).toContain('maximumGitHubOutputBytes');
-    expect(installer).toContain('credential_label="token file"');
-    expect(installer).toContain('credential_label="GitHub App private key file"');
+    expect(installer).toContain('validate_credential_file "$token_file" "token file" 1025');
+    expect(installer).toContain('validate_credential_file "$github_app_private_key_file" "GitHub App private key file" 65536');
     expect(installer).toContain('--github-app-installation-id <id>');
+    expect(installer).toContain('--github-app-installation <owner>:<app-id>:<installation-id>:<root-only-pem>');
+    expect(installer).toContain('--replace-all');
+    expect(installer).toContain('compare-publication-broker-config.mjs');
     expect(installer).not.toMatch(/cat .*token_file|echo .*token_file/);
     expect(installer).toContain('Refusing to replace an installation without the Kaizen publication broker marker');
     expect(installer).toContain('install -o root -g wheel -m 0644 "$config_stage" "$config_path"');
@@ -758,10 +848,10 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('launchctl bootstrap system "$daemon_path"');
     expect(brokerSource).toContain('"GH_TOKEN": token');
     expect(brokerSource).toContain('.rsaSignatureMessagePKCS1v15SHA256');
-    expect(brokerSource).toContain('/app/installations/\\(installationId)/access_tokens');
+    expect(brokerSource).toContain('/app/installations/\\(installation.installationId)/access_tokens');
     expect(brokerSource).toContain('cached.expiresAt.timeIntervalSinceNow > 300');
     expect(brokerSource).toContain('catch { return .failure("github-cli-token-unavailable") }\n    guard connected(descriptor)');
-    expect(brokerSource).toContain('token(for: config, forceRefresh: true)\n    guard connected(descriptor)');
+    expect(brokerSource).toContain('token(for: config, repository: expectedRepo, forceRefresh: true)\n    guard connected(descriptor)');
     expect(brokerSource).toContain('willPerformHTTPRedirection');
     expect(brokerSource).toContain('data.count <= 65_536 - incoming.count');
     expect(brokerSource).toContain('workingDirectory: "/var/empty"');

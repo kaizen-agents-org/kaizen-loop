@@ -84,6 +84,29 @@ GitHub grants an installation token access to the repositories selected for that
 installation. Keep the App installation itself limited to the intended repositories;
 the broker's repository allowlist remains an additional, independent restriction.
 
+When one broker serves repositories owned by more than one GitHub account, pass one
+owner-scoped installation for every owner. The broker selects the credential from the
+registered repository, and configuration validation requires exact owner coverage:
+
+```sh
+sudo scripts/install-macos-publication-broker.sh \
+  --runtime-user "$USER" \
+  --github-app-installation kaizen-agents-org:12345:67890:/Library/Application\ Support/KaizenLoop/kaizen-agents-org.pem \
+  --github-app-installation s-hiraoku:12345:67891:/Library/Application\ Support/KaizenLoop/s-hiraoku.pem \
+  --repository kaizen-agents-org/kaizen-loop \
+  --repository s-hiraoku/topcoat-sandbox \
+  --scheduled-job kaizen-agents-org-kaizen-loop/maintenance@02:00 \
+  --scheduled-job s-hiraoku-topcoat-sandbox/maintenance@08:00 \
+  --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
+  --github-cli /usr/local/libexec/kaizen-gh/gh \
+  --node "$(command -v node)"
+```
+
+The same App ID and private key may be repeated when the App is installed on both
+accounts; the installation IDs remain distinct. A different App and key per owner is
+also supported. Every key file must be root-owned, mode `0600`, and stored below a
+root-owned non-writable directory.
+
 For compatibility, a fine-grained PAT can still be provided instead:
 
 ```sh
@@ -98,8 +121,10 @@ sudo scripts/install-macos-publication-broker.sh \
   --node "$(command -v node)"
 ```
 
-Pass exactly one authentication mode. The installer rejects a partial GitHub App
-configuration and rejects mixing GitHub App credentials with `--token-file`.
+Pass exactly one authentication mode: a static token, one legacy global App
+installation for a single repository owner, or one or more owner-scoped App
+installations. The installer rejects a partial configuration, mixed modes, duplicate
+owners, missing owners, and App owners that have no allowed repository.
 
 The installer compiles and installs three root-owned executables, an immutable copy of
 the built Kaizen runtime, a root-owned mode-`0644` broker configuration containing no
@@ -135,6 +160,13 @@ treats a client URL as authority. Add each authorized scheduler project/job pair
 `--scheduled-job project/job@HH:MM` and record its fixed executable search path with `--tool-path`.
 The root-owned registration prevents another LaunchAgent under the runtime UID from
 choosing a different job or toolchain.
+
+On upgrade, the installer compares the requested repositories, jobs, and Kaizen home
+with the existing broker configuration and prints the added, retained, and removed
+entries. It refuses to remove an existing repository or job, or to replace the Kaizen
+home, unless `--replace-all` is passed. Continue to provide the complete intended
+repository and job set on every invocation; use `--replace-all` only for a deliberate
+topology replacement.
 
 Each installer execution creates a fresh temporary build directory under
 `/private/tmp/kaizen-broker-build.*` and invokes `swiftc` once for each of the three
