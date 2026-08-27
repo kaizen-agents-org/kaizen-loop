@@ -530,7 +530,7 @@ Codex Automation は job 実行基盤であり、Issue 選択、排他制御、P
 2. 完了: `kaizen run --job <job-id>`とlaunchd / cron向けscheduler CLIを実装する
 3. 完了: canonicalな`execution.runner` / `execution.builder`、旧設定の読み取り互換、fleet migration、unsupported runnerのfail-closed境界を追加する
 4. 未実装: migrationの専用`plan` / `apply` / `verify` UIとdeprecation warningを追加する
-5. 未実装: launchd / cronの既存実装をprovider adapterへ移し、actual stateとdriftを可視化する
+5. 一部完了: launchd / cronの既存実装をlocal scheduler adapterへ移し、単一resolverから選択する。actual stateとdrift可視化は未実装
 6. 未実装: GitHub Actions caller workflowを同じdesired stateから生成・検査し、更新用ready-for-review PRを作るadapterを追加する
 7. 未実装: `kaizen setup`とschedule presetを追加し、dry-run、設定生成、canary、次回実行予定の確認までを一つの導線にする
 8. 未実装: compatible toolchain更新後に全runnerを再同期する`kaizen upgrade plan` / `apply` / `verify`とrollbackを追加する
