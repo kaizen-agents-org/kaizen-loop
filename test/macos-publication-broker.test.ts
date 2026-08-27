@@ -774,6 +774,7 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('validate_credential_file "$github_app_private_key_file" "GitHub App private key file" 65536');
     expect(installer).toContain('--github-app-installation-id <id>');
     expect(installer).toContain('--github-app-installation <owner>:<app-id>:<installation-id>:<root-only-pem>');
+    expect(installer).toContain('--npm <absolute-npm>');
     expect(installer).toContain('--replace-all');
     expect(installer).toContain('compare-publication-broker-config.mjs');
     expect(installer).not.toMatch(/cat .*token_file|echo .*token_file/);
@@ -867,6 +868,16 @@ describe('publication broker source contract', () => {
     expect(installer).toContain('swiftc -module-cache-path "$build_dir/module-cache-broker"');
     expect(installer).toContain('swiftc -module-cache-path "$build_dir/module-cache-scheduled"');
     expect(installer).toContain('swiftc -module-cache-path "$build_dir/module-cache-supervisor"');
+    expect(installer).toContain('node_sibling_npm=$(dirname "$node_executable")/npm');
+    expect(installer).toContain('PATH=/usr/bin:/bin:/usr/sbin:/sbin');
+    expect(installer).toContain('umask 022');
+    expect(installer.indexOf('umask 022')).toBeLessThan(installer.indexOf('mkdir -p "$stage/runtime"'));
+    expect(installer).toContain('scripts/macos/wait-for-unix-socket.mjs" /opt/kaizen/run/scheduler.sock 10000');
+    expect(installer).toContain('Publication broker readiness failed; the prior runtime and configuration were restored.');
+    const restoreDefinition = installer.indexOf('restore_previous_installation()');
+    const readinessCheck = installer.indexOf('scripts/macos/wait-for-unix-socket.mjs" /opt/kaizen/run/scheduler.sock 10000');
+    expect(restoreDefinition).toBeGreaterThanOrEqual(0);
+    expect(restoreDefinition).toBeLessThan(readinessCheck);
     expect(installer).toContain('Add :ProgramArguments:1 string dispatch');
     const brokerDoc = await fs.readFile(path.join(sourceRoot, 'docs/16-macos-publication-broker.md'), 'utf8');
     expect(brokerDoc).toContain('sudo /usr/local/libexec/kaizen-loop/bin/kaizen-scheduled-launcher');

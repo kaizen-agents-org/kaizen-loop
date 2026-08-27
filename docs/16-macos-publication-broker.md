@@ -71,7 +71,8 @@ sudo scripts/install-macos-publication-broker.sh \
   --scheduled-job kaizen-agents-org-kaizen-loop/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --github-cli /usr/local/libexec/kaizen-gh/gh \
-  --node "$(command -v node)"
+  --node "$(command -v node)" \
+  --npm "$(command -v npm)"
 ```
 
 The broker creates an RS256 JWT only when it needs a credential, exchanges it through
@@ -99,7 +100,8 @@ sudo scripts/install-macos-publication-broker.sh \
   --scheduled-job s-hiraoku-topcoat-sandbox/maintenance@08:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --github-cli /usr/local/libexec/kaizen-gh/gh \
-  --node "$(command -v node)"
+  --node "$(command -v node)" \
+  --npm "$(command -v npm)"
 ```
 
 The same App ID and private key may be repeated when the App is installed on both
@@ -118,7 +120,8 @@ sudo scripts/install-macos-publication-broker.sh \
   --scheduled-job kaizen-agents-org-kaizen-loop/maintenance@02:00 \
   --tool-path "/usr/local/libexec/kaizen-gh:/usr/local/bin:/usr/bin:/bin" \
   --github-cli /usr/local/libexec/kaizen-gh/gh \
-  --node "$(command -v node)"
+  --node "$(command -v node)" \
+  --npm "$(command -v npm)"
 ```
 
 Pass exactly one authentication mode: a static token, one legacy global App
@@ -133,6 +136,11 @@ token value, and
 unmarked existing installation and validates the Node, npm, GitHub CLI, and root-only
 credential ownership chains. `--github-cli` must identify an immutable, root-owned executable;
 the runtime user's interactive `gh` installation or keychain session is not used.
+Pass `--npm` to pin a root-owned npm executable. When omitted, the installer first uses
+an executable `npm` beside the configured Node binary, then falls back to `npm` on the
+caller's original `PATH`. After resolving the explicit toolchain, the installer uses only
+the macOS system command paths and a fixed `umask` so a restricted caller environment cannot
+omit administrative tools or make the installed runtime unreadable.
 Before installing the broker, the installer creates or repairs the root-owned
 `/var/db/kaizen-loop` parent with mode `0711`. This permits the runtime user to
 traverse the path to the broker's runtime-owned `publication` directory while
@@ -191,6 +199,9 @@ installer fails before replacing the runtime or launchd configuration when it do
 Both root launchd daemons write stdout and stderr to `/var/log/kaizen-loop/` so
 scheduled-dispatch and broker startup failures remain diagnosable with `tail` or
 the Console app.
+Installation reports success only after the broker answers through its scheduler socket.
+If either LaunchDaemon bootstrap or this readiness check fails, the installer restores the
+previous runtime, configuration, and daemon definitions.
 
 ## Operator canary
 
