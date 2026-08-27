@@ -1,11 +1,15 @@
 version: 1
 
-agent:
-  default: codex
-  fallback: true
-  model:
-    claude: null
-    codex: null
+execution:
+  runner:
+    provider: local
+  builder:
+    primary:
+      provider: codex
+      model: null
+    fallback:
+      provider: claude
+      model: null
 
 run:
   maxIssuesPerNight: 2

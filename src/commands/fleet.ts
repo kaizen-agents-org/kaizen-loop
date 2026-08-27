@@ -7,6 +7,7 @@ import { requiredLabels } from './doctor.js';
 import { loadConfig } from '../config/config.js';
 import { loadRegistry, loadRegistryForRecovery, registryTransaction, resolveProject, updateRegistry } from '../config/registry.js';
 import { configSchema, type KaizenConfig, type Registry, type RegistryProject } from '../config/schema.js';
+import { assertRunnerSupportedForLocalSync, executionConfig, migrateLegacyExecutionConfig, type RunnerProvider } from '../config/execution.js';
 import { GitHubClient } from '../github/client.js';
 import { RunLock } from '../orchestrator/lock.js';
 import { enableScheduler } from '../scheduler/scheduler.js';
@@ -44,6 +45,11 @@ export interface FleetProjectResult {
   repo: string;
   localPath: string;
   configMigrated: boolean;
+  execution?: {
+    runner: RunnerProvider;
+    supported: boolean;
+    legacy: boolean;
+  };
   workspaceEnsured: boolean;
   labelsEnsured: boolean;
   schedulerSynced: boolean;
@@ -136,6 +142,7 @@ export async function syncFleet(options: FleetSyncOptions): Promise<FleetSyncRes
       project,
       config: item.config!,
       migrated: item.migrated!,
+      executionLegacy: item.executionLegacy!,
       migratedContent: item.migratedContent
     });
     if (options.syncScheduler && !options.dryRun) {
@@ -255,13 +262,20 @@ async function syncFleetProject(options: FleetSyncOptions & {
   project: DiscoveredFleetProject;
   config: KaizenConfig;
   migrated: boolean;
+  executionLegacy: boolean;
   migratedContent?: string;
 }): Promise<FleetProjectResult> {
+  const execution = executionConfig(options.config);
   const result: FleetProjectResult = {
     slug: options.project.slug,
     repo: options.project.repo,
     localPath: options.project.localPath,
     configMigrated: false,
+    execution: {
+      runner: execution.runner.provider,
+      supported: execution.runner.provider === 'local',
+      legacy: options.executionLegacy
+    },
     workspaceEnsured: false,
     labelsEnsured: false,
     schedulerSynced: false,
@@ -272,6 +286,7 @@ async function syncFleetProject(options: FleetSyncOptions & {
 
   try {
     const config = options.config;
+    if (options.syncScheduler) assertRunnerSupportedForLocalSync(config);
     result.configMigrated = options.migrated;
     if (options.migrated && options.migrateConfig && !options.dryRun) {
       await fs.writeFile(path.join(options.project.localPath, '.kaizen', 'config.yml'), options.migratedContent!);
@@ -508,6 +523,7 @@ interface PreparedFleetProject {
   project: DiscoveredFleetProject;
   config?: KaizenConfig;
   migrated?: boolean;
+  executionLegacy?: boolean;
   migratedContent?: string;
   error?: string;
 }
@@ -626,13 +642,21 @@ function chooseCanonicalCheckouts(candidates: DiscoveredFleetProject[]): Discove
   });
 }
 
-async function loadFleetConfig(repoDir: string): Promise<{ config: KaizenConfig; migrated: boolean; migratedContent?: string }> {
+async function loadFleetConfig(repoDir: string): Promise<{
+  config: KaizenConfig;
+  migrated: boolean;
+  executionLegacy: boolean;
+  migratedContent?: string;
+}> {
   const configPath = path.join(repoDir, '.kaizen', 'config.yml');
   const raw = await fs.readFile(configPath, 'utf8');
   const parsed = parse(raw) as Record<string, unknown>;
-  const migrated = migrateLegacySchedulerConfig(parsed);
+  const executionLegacy = Boolean(parsed.agent || record(parsed.scheduler)?.provider);
+  const migratedScheduler = migrateLegacySchedulerConfig(parsed);
+  const migratedExecution = migrateLegacyExecutionConfig(parsed);
   const config = configSchema.parse(parsed);
-  return { config, migrated, migratedContent: migrated ? stringify(parsed) : undefined };
+  const migrated = migratedScheduler || migratedExecution;
+  return { config, migrated, executionLegacy, migratedContent: migrated ? stringify(parsed) : undefined };
 }
 
 export function migrateLegacySchedulerConfig(config: Record<string, unknown>): boolean {

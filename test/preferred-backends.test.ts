@@ -43,5 +43,24 @@ describe('selectPreferredBackends', () => {
     });
 
     expect(selectPreferredBackends(config, issueWithLabels([]), undefined)).toEqual(['codex']);
+    expect(selectPreferredBackends(config, issueWithLabels([]), 'claude')).toEqual(['claude']);
+  });
+
+  it('uses canonical provider-specific fallback order', () => {
+    const config = configSchema.parse({
+      version: 1,
+      execution: {
+        builder: {
+          primary: { provider: 'codex', model: 'gpt-test' },
+          fallback: { provider: 'claude', model: 'claude-test' }
+        }
+      }
+    });
+
+    expect(selectPreferredBackends(config, issueWithLabels([]), undefined)).toEqual(['codex', 'claude']);
+    expect(selectPreferredBackends(config, issueWithLabels(['kaizen:agent:claude']), undefined)).toEqual([
+      'claude',
+      'codex'
+    ]);
   });
 });

@@ -4,6 +4,15 @@ import { isProjectSlug } from '../utils/slug.js';
 const nullableString = z.string().nullable().optional();
 const timeString = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const jobIdString = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+const builderProviderSchema = z.enum(['claude', 'codex']);
+const runnerProviderSchema = z.enum([
+    'local',
+    'github-actions',
+    'codex-automation',
+    'claude-routine',
+    'cursor',
+    'external'
+]);
 export const DEFAULT_PROTECTED_PATHS = [
     '.github/**',
     '.gitlab-ci.yml',
@@ -92,7 +101,7 @@ export const configSchema = z
     version: z.literal(1),
     agent: z
         .object({
-        default: z.enum(['claude', 'codex']).default('claude'),
+        default: builderProviderSchema.default('claude'),
         fallback: z.boolean().default(true),
         model: z
             .object({
@@ -103,7 +112,36 @@ export const configSchema = z
             .default({ claude: null, codex: null })
     })
         .strict()
-        .default({ default: 'claude', fallback: true, model: { claude: null, codex: null } }),
+        .optional(),
+    execution: z
+        .object({
+        runner: z.object({ provider: runnerProviderSchema.default('local') }).strict().optional(),
+        builder: z
+            .object({
+            primary: z.object({ provider: builderProviderSchema.default('claude'), model: nullableString }).strict()
+                .default({ provider: 'claude', model: null }),
+            fallback: z.object({ provider: builderProviderSchema, model: nullableString }).strict().nullable()
+                .default({ provider: 'codex', model: null })
+        })
+            .strict()
+            .superRefine((builder, context) => {
+            if (builder.fallback?.provider === builder.primary.provider) {
+                context.addIssue({
+                    code: 'custom',
+                    path: ['fallback'],
+                    message: 'execution.builder.fallback must not repeat the primary provider'
+                });
+            }
+        })
+            .optional()
+    })
+        .strict()
+        .superRefine((execution, context) => {
+        if (!execution.runner && !execution.builder) {
+            context.addIssue({ code: 'custom', message: 'execution must configure runner or builder' });
+        }
+    })
+        .optional(),
     run: z
         .object({
         maxIssuesPerNight: z.number().int().positive().default(3),
@@ -338,6 +376,20 @@ export const configSchema = z
 })
     .strict()
     .superRefine((config, context) => {
+    if (config.agent && config.execution?.builder) {
+        context.addIssue({
+            code: 'custom',
+            path: ['execution'],
+            message: 'execution and legacy agent settings cannot be configured together'
+        });
+    }
+    if (config.execution?.runner && config.scheduler.provider) {
+        context.addIssue({
+            code: 'custom',
+            path: ['scheduler', 'provider'],
+            message: 'execution.runner and legacy scheduler.provider cannot be configured together'
+        });
+    }
     if (config.safety.operationMode === 'external' && !config.verifier.enabled) {
         context.addIssue({
             code: 'custom',

@@ -77,7 +77,7 @@ interface AgentResult {
 }
 ```
 
-Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `agent.default` は、builder-agent へ渡す希望バックエンドとして扱う。
+Issue のラベル指定(`kaizen:agent:claude` / `kaizen:agent:codex`)と `execution.builder.primary.provider` は、builder-agent へ渡す希望バックエンドとして扱う。
 
 ### 2.4 GitHub クライアント
 

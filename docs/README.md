@@ -18,7 +18,7 @@ Kaizen Loop は、対象プロジェクトに「日中ドッグフーディン�
 | [09-instant-run.md](./09-instant-run.md) | 即時改善実行(`kaizen fix` / `report --now` / `watch`) |
 | [10-skills.md](./10-skills.md) | bundled skills の一覧、責務、Issue 登録時のラベル運用 |
 | [11-goals.md](./11-goals.md) | Goal 機能、反復 Issue 生成、評価、利用側エージェント契約 |
-| [12-scheduler-providers.md](./12-scheduler-providers.md) | Codex Automations / Claude Code routines / launchd / cron などの scheduler provider 同期仕様 |
+| [12-scheduler-providers.md](./12-scheduler-providers.md) | GitHub Actions / Codex Automations / Claude Code routines / Cursor / local runnerの同期、builder分離、setup・upgrade設計 |
 | [13-sandbox-smoke.md](./13-sandbox-smoke.md) | sandbox issue-to-PR smoke run と readiness review 用 artifact |
 | [14-github-actions.md](./14-github-actions.md) | ephemeral reusable workflow、provider secret、publish trust boundary |
 | [15-third-party-adopter-guide.md](./15-third-party-adopter-guide.md) | 第三者リポジトリへの安全な導入、運用、トラブルシューティング、削除手順 |
@@ -30,7 +30,7 @@ Kaizen Loop は、対象プロジェクトに「日中ドッグフーディン�
 | 項目 | 決定 |
 |---|---|
 | Issue 管理 | GitHub Issues(`kaizen` ラベルで管理対象を識別。実行許可は設定により `kaizen:ready` などで分離可能) |
-| 実行基盤 | 現行はローカルマシン(macOS: launchd / Linux: cron)。Codex Automations などへの provider 同期は [12-scheduler-providers.md](./12-scheduler-providers.md) で設計 |
+| 実行基盤 | 現行はlocal runner(macOS: launchd / Linux: cron)と独立したGitHub Actions reusable workflow。runner統合とsetup・upgradeは[12-scheduler-providers.md](./12-scheduler-providers.md)で設計 |
 | AI エージェント | builder-agent 経由で修正し、verifier で追加レビュー |
 | 改善の反映 | PR-first — 既定は ready-for-review PR。`hybrid` / `direct-only` は明示 opt-in |
 | ツール形態 | Node.js (TypeScript) 製 CLI。`npx kaizen-loop` で利用 |

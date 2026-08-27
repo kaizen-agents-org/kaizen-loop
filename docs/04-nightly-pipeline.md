@@ -42,7 +42,7 @@ flowchart TB
 
 1. **ロック取得**: `~/.kaizen/projects/<slug>/run.lock` を作成(内容: PID + 開始時刻)。既存ロックがあり PID が生存していればスキップ終了。PID が死んでいれば stale として奪取
 2. **一時停止チェック**: `~/.kaizen/projects/<slug>/PAUSE` ファイルが存在すれば即終了(キルスイッチ、→ [07-safety.md](./07-safety.md))
-3. **環境検査**: `gh auth status`、設定ファイルのスキーマ検証、エージェント CLI の存在確認(`agent.fallback: true` なら他方で代替)
+3. **環境検査**: `gh auth status`、設定ファイルのスキーマ検証、builder CLI の存在確認（`execution.builder.fallback` が設定されていれば代替）
 4. **ワークスペース検査**: 存在しなければ再クローン。`git fetch origin` が通ること
 5. **実行ディレクトリ作成**: `runs/<timestamp>/` とログファイル
 

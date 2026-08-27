@@ -6,6 +6,7 @@ import { resolveExpectedVerifierCommit } from '../agents/verifierFreshness.js';
 import type { AgentAdapter, AgentResult, DiscoveredIssue } from '../agents/types.js';
 import { buildFixPrompt, buildVerifierPrompt } from '../agents/prompt.js';
 import { loadConfig } from '../config/config.js';
+import { executionConfig } from '../config/execution.js';
 import { loadOperationalConfig } from '../config/operational.js';
 import { loadRegistry, resolveProject } from '../config/registry.js';
 import type { KaizenConfig, Registry } from '../config/schema.js';
@@ -2011,14 +2012,16 @@ export function selectPreferredBackends(
   requested: 'claude' | 'codex' | undefined
 ): Array<'claude' | 'codex'> {
   const labels = labelNames(issue);
+  const execution = executionConfig(config).builder;
   const primary = labels.includes('kaizen:agent:codex')
     ? 'codex'
     : labels.includes('kaizen:agent:claude')
       ? 'claude'
-      : requested ?? config.agent.default;
-  if (!config.agent.fallback) return [primary];
-  const fallback = primary === 'codex' ? 'claude' : 'codex';
-  return [primary, fallback];
+      : requested ?? execution.primary.provider;
+  if (!execution.fallback) return [primary];
+  const configured = [execution.primary.provider, execution.fallback?.provider]
+    .filter((provider): provider is 'claude' | 'codex' => Boolean(provider));
+  return [primary, ...configured.filter((provider) => provider !== primary)];
 }
 
 async function commitLeftovers(
@@ -3125,7 +3128,10 @@ function labelsForDiscoveredIssue(issue: DiscoveredIssue, requiredLabels: string
 }
 
 function modelFor(config: KaizenConfig, agent: 'claude' | 'codex'): string | null | undefined {
-  return config.agent.model[agent];
+  const builder = executionConfig(config).builder;
+  if (builder.primary.provider === agent) return builder.primary.model;
+  if (builder.fallback?.provider === agent) return builder.fallback.model;
+  return null;
 }
 
 function shortSummary(summary: string): string {

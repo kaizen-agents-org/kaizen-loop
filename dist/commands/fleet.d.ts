@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { type RunnerProvider } from '../config/execution.js';
 import type { CommandRunner } from '../utils/command.js';
 import { type RuntimeIdentity } from '../utils/runtime.js';
 export interface FleetSyncOptions {
@@ -25,6 +26,11 @@ export interface FleetProjectResult {
     repo: string;
     localPath: string;
     configMigrated: boolean;
+    execution?: {
+        runner: RunnerProvider;
+        supported: boolean;
+        legacy: boolean;
+    };
     workspaceEnsured: boolean;
     labelsEnsured: boolean;
     schedulerSynced: boolean;

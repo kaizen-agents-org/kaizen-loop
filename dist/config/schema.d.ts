@@ -82,7 +82,7 @@ declare const schedulerJobSchema: z.ZodObject<{
 }, z.core.$strict>;
 export declare const configSchema: z.ZodObject<{
     version: z.ZodLiteral<1>;
-    agent: z.ZodDefault<z.ZodObject<{
+    agent: z.ZodOptional<z.ZodObject<{
         default: z.ZodDefault<z.ZodEnum<{
             claude: "claude";
             codex: "codex";
@@ -91,6 +91,34 @@ export declare const configSchema: z.ZodObject<{
         model: z.ZodDefault<z.ZodObject<{
             claude: z.ZodOptional<z.ZodNullable<z.ZodString>>;
             codex: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+        }, z.core.$strict>>;
+    }, z.core.$strict>>;
+    execution: z.ZodOptional<z.ZodObject<{
+        runner: z.ZodOptional<z.ZodObject<{
+            provider: z.ZodDefault<z.ZodEnum<{
+                local: "local";
+                "github-actions": "github-actions";
+                "codex-automation": "codex-automation";
+                "claude-routine": "claude-routine";
+                cursor: "cursor";
+                external: "external";
+            }>>;
+        }, z.core.$strict>>;
+        builder: z.ZodOptional<z.ZodObject<{
+            primary: z.ZodDefault<z.ZodObject<{
+                provider: z.ZodDefault<z.ZodEnum<{
+                    claude: "claude";
+                    codex: "codex";
+                }>>;
+                model: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+            }, z.core.$strict>>;
+            fallback: z.ZodDefault<z.ZodNullable<z.ZodObject<{
+                provider: z.ZodEnum<{
+                    claude: "claude";
+                    codex: "codex";
+                }>;
+                model: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+            }, z.core.$strict>>>;
         }, z.core.$strict>>;
     }, z.core.$strict>>;
     run: z.ZodDefault<z.ZodObject<{
@@ -113,11 +141,11 @@ export declare const configSchema: z.ZodObject<{
     }, z.core.$strict>>;
     scheduler: z.ZodDefault<z.ZodObject<{
         provider: z.ZodOptional<z.ZodEnum<{
+            "codex-automation": "codex-automation";
+            "claude-routine": "claude-routine";
             external: "external";
             launchd: "launchd";
             cron: "cron";
-            "codex-automation": "codex-automation";
-            "claude-routine": "claude-routine";
         }>>;
         jobs: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodObject<{
             enabled: z.ZodDefault<z.ZodBoolean>;

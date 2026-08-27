@@ -8,7 +8,7 @@
 
 1. Issue ラベル `kaizen:agent:claude` / `kaizen:agent:codex`
 2. `kaizen run --agent` オプション
-3. 設定 `agent.default`
+3. 設定 `execution.builder.primary.provider`
 
 この選択は `KAIZEN_PREFERRED_AGENT` として builder-agent に渡す。実際のフォールバック可否やモデル選択は builder-agent 側の責務。
 
