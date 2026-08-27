@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> (--token-file <root-only-file> | --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-file <root-only-pem>) --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--kaizen-home <absolute-kaizen-home>] [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
+  echo "usage: sudo install-macos-publication-broker.sh --runtime-user <user> (--token-file <root-only-file> | --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-file <root-only-pem> | --github-app-installation <owner>:<app-id>:<installation-id>:<root-only-pem> [...]) --repository <owner/repo> --scheduled-job <project/job@HH:MM> --tool-path <absolute-path-list> [--replace-all] [--kaizen-home <absolute-kaizen-home>] [--publication-timeout-ms <10000-3600000>] [--repository <owner/repo> ...] [--scheduled-job <project/job@HH:MM> ...] [--node <absolute-node>] [--github-cli <absolute-gh>] [--source <kaizen-loop-checkout>]" >&2
   exit 2
 }
 
@@ -14,6 +14,7 @@ token_file=
 github_app_id=
 github_app_installation_id=
 github_app_private_key_file=
+github_app_installations=
 node_executable=
 github_cli_executable=
 source_root=
@@ -22,6 +23,7 @@ repositories=
 scheduled_jobs=
 tool_path=
 publication_timeout_ms=1800000
+replace_all=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runtime-user) [ "$#" -ge 2 ] || usage; runtime_user=$2; shift 2 ;;
@@ -29,12 +31,15 @@ while [ "$#" -gt 0 ]; do
     --github-app-id) [ "$#" -ge 2 ] || usage; github_app_id=$2; shift 2 ;;
     --github-app-installation-id) [ "$#" -ge 2 ] || usage; github_app_installation_id=$2; shift 2 ;;
     --github-app-private-key-file) [ "$#" -ge 2 ] || usage; github_app_private_key_file=$2; shift 2 ;;
+    --github-app-installation) [ "$#" -ge 2 ] || usage; github_app_installations="${github_app_installations}${github_app_installations:+
+}$2"; shift 2 ;;
     --repository) [ "$#" -ge 2 ] || usage; repositories="${repositories}${repositories:+
 }$2"; shift 2 ;;
     --scheduled-job) [ "$#" -ge 2 ] || usage; scheduled_jobs="${scheduled_jobs}${scheduled_jobs:+
 }$2"; shift 2 ;;
     --tool-path) [ "$#" -ge 2 ] || usage; tool_path=$2; shift 2 ;;
     --publication-timeout-ms) [ "$#" -ge 2 ] || usage; publication_timeout_ms=$2; shift 2 ;;
+    --replace-all) replace_all=true; shift ;;
     --node) [ "$#" -ge 2 ] || usage; node_executable=$2; shift 2 ;;
     --github-cli) [ "$#" -ge 2 ] || usage; github_cli_executable=$2; shift 2 ;;
     --kaizen-home) [ "$#" -ge 2 ] || usage; kaizen_home=$2; shift 2 ;;
@@ -45,8 +50,10 @@ done
 [ -n "$runtime_user" ] && [ -n "$repositories" ] && [ -n "$scheduled_jobs" ] && [ -n "$tool_path" ] || usage
 
 if [ -n "$token_file" ]; then
-  [ -z "$github_app_id" ] && [ -z "$github_app_installation_id" ] && [ -z "$github_app_private_key_file" ] || usage
+  [ -z "$github_app_id" ] && [ -z "$github_app_installation_id" ] && [ -z "$github_app_private_key_file" ] && [ -z "$github_app_installations" ] || usage
   case "$token_file" in /*) ;; *) echo "--token-file must be absolute." >&2; exit 2 ;; esac
+elif [ -n "$github_app_installations" ]; then
+  [ -z "$github_app_id" ] && [ -z "$github_app_installation_id" ] && [ -z "$github_app_private_key_file" ] || usage
 else
   [ -n "$github_app_id" ] && [ -n "$github_app_installation_id" ] && [ -n "$github_app_private_key_file" ] || usage
   echo "$github_app_id" | grep -Eq '^[1-9][0-9]{0,17}$' || usage
@@ -113,32 +120,91 @@ trusted_root_path "$npm_executable" || {
   echo "npm and every ancestor must be root-owned and group/other non-writable." >&2
   exit 1
 }
-credential_file=$token_file
-credential_label="token file"
-if [ -z "$credential_file" ]; then
-  credential_file=$github_app_private_key_file
-  credential_label="GitHub App private key file"
-fi
-[ -f "$credential_file" ] && [ ! -L "$credential_file" ] && trusted_root_path "$credential_file" || {
-  echo "The $credential_label must be a root-owned, non-symlink file in root-owned non-writable directories." >&2
-  exit 1
+validate_credential_file() {
+  credential_file=$1
+  credential_label=$2
+  credential_max_size=$3
+  [ -f "$credential_file" ] && [ ! -L "$credential_file" ] && trusted_root_path "$credential_file" || {
+    echo "The $credential_label must be a root-owned, non-symlink file in root-owned non-writable directories." >&2
+    exit 1
+  }
+  [ "$(stat -f %Lp "$credential_file")" -eq 600 ] || { echo "The $credential_label mode must be 0600." >&2; exit 1; }
+  [ -s "$credential_file" ] || { echo "The $credential_label is empty." >&2; exit 1; }
+  [ "$(stat -f %z "$credential_file")" -le "$credential_max_size" ] || { echo "The $credential_label is too large." >&2; exit 1; }
 }
-[ "$(stat -f %Lp "$credential_file")" -eq 600 ] || { echo "The $credential_label mode must be 0600." >&2; exit 1; }
-[ -s "$credential_file" ] || { echo "The $credential_label is empty." >&2; exit 1; }
-credential_size=$(stat -f %z "$credential_file")
 if [ -n "$token_file" ]; then
-  [ "$credential_size" -le 1025 ] || { echo "The token file is too large." >&2; exit 1; }
+  validate_credential_file "$token_file" "token file" 1025
+elif [ -n "$github_app_installations" ]; then
+  seen_github_app_owners=
+  old_ifs=$IFS
+  IFS='
+'
+  for github_app_installation in $github_app_installations; do
+    github_app_owner=${github_app_installation%%:*}
+    github_app_remainder=${github_app_installation#*:}
+    github_app_entry_id=${github_app_remainder%%:*}
+    github_app_remainder=${github_app_remainder#*:}
+    github_app_entry_installation_id=${github_app_remainder%%:*}
+    github_app_entry_private_key_file=${github_app_remainder#*:}
+    [ "$github_app_owner" != "$github_app_installation" ] &&
+      [ "$github_app_entry_id" != "$github_app_remainder" ] &&
+      [ "$github_app_entry_installation_id" != "$github_app_entry_private_key_file" ] || usage
+    echo "$github_app_owner" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$' || usage
+    echo "$github_app_entry_id" | grep -Eq '^[1-9][0-9]{0,17}$' || usage
+    echo "$github_app_entry_installation_id" | grep -Eq '^[1-9][0-9]{0,17}$' || usage
+    case "$github_app_entry_private_key_file" in /*) ;; *) echo "GitHub App private key paths must be absolute." >&2; exit 2 ;; esac
+    printf '%s\n' "$seen_github_app_owners" | grep -Fqx "$github_app_owner" && { echo "Duplicate GitHub App owner: $github_app_owner" >&2; exit 2; }
+    seen_github_app_owners="${seen_github_app_owners}${seen_github_app_owners:+
+}${github_app_owner}"
+    validate_credential_file "$github_app_entry_private_key_file" "GitHub App private key file for $github_app_owner" 65536
+  done
+  IFS=$old_ifs
 else
-  [ "$credential_size" -le 65536 ] || { echo "The GitHub App private key file is too large." >&2; exit 1; }
+  validate_credential_file "$github_app_private_key_file" "GitHub App private key file" 65536
 fi
 
 old_ifs=$IFS
 IFS='
 '
+legacy_github_app_owner=
 for repository in $repositories; do
   echo "$repository" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || { echo "Invalid repository: $repository" >&2; exit 2; }
+  if [ -z "$token_file" ] && [ -z "$github_app_installations" ]; then
+    repository_owner=${repository%%/*}
+    [ -z "$legacy_github_app_owner" ] || [ "$legacy_github_app_owner" = "$repository_owner" ] || {
+      echo "The legacy GitHub App flags support one repository owner; use --github-app-installation for each owner." >&2
+      exit 2
+    }
+    legacy_github_app_owner=$repository_owner
+  fi
 done
 IFS=$old_ifs
+
+if [ -n "$github_app_installations" ]; then
+  repository_owners=
+  IFS='
+'
+  for repository in $repositories; do
+    repository_owner=${repository%%/*}
+    if ! printf '%s\n' "$repository_owners" | grep -Fqx "$repository_owner"; then
+      repository_owners="${repository_owners}${repository_owners:+
+}${repository_owner}"
+    fi
+  done
+  for repository_owner in $repository_owners; do
+    printf '%s\n' "$seen_github_app_owners" | grep -Fqx "$repository_owner" || {
+      echo "Missing GitHub App installation for repository owner: $repository_owner" >&2
+      exit 2
+    }
+  done
+  for github_app_owner in $seen_github_app_owners; do
+    printf '%s\n' "$repository_owners" | grep -Fqx "$github_app_owner" || {
+      echo "GitHub App installation has no allowed repository owner: $github_app_owner" >&2
+      exit 2
+    }
+  done
+  IFS=$old_ifs
+fi
 
 printf '%s\n' "$tool_path" | awk -F: '
   length($0) > 16384 || NF > 128 { exit 1 }
@@ -254,6 +320,23 @@ scheduled_err_log="$log_dir/scheduled-publication.err.log"
 config_path="$config_dir/publication-broker.plist"
 daemon_path=/Library/LaunchDaemons/org.kaizen-agents.publication-broker.plist
 schedule_daemon_path=/Library/LaunchDaemons/org.kaizen-agents.scheduled-publication.plist
+if [ -f "$config_path" ]; then
+  old_ifs=$IFS
+  IFS='
+'
+  set +e
+  config_diff=$(/usr/bin/plutil -convert json -o - "$config_path" |
+    "$node_executable" "$source_root/scripts/macos/compare-publication-broker-config.mjs" \
+      "$replace_all" "$kaizen_home" --repositories $repositories --scheduled-jobs $scheduled_jobs)
+  config_diff_status=$?
+  set -e
+  IFS=$old_ifs
+  [ -z "$config_diff" ] || printf '%s\n' "$config_diff" >&2
+  [ "$config_diff_status" -eq 0 ] || {
+    [ "$config_diff_status" -eq 3 ] || echo "Could not compare the existing publication broker configuration." >&2
+    exit 1
+  }
+fi
 install -d -o root -g wheel -m 0755 /usr/local/libexec
 trusted_root_path /usr/local/libexec || { echo "/usr/local/libexec must be root-owned and group/other non-writable." >&2; exit 1; }
 validate_existing_private_directory() {
@@ -367,6 +450,23 @@ config_stage="$build_dir/publication-broker.plist"
 /usr/libexec/PlistBuddy -c "Add :cliPath string $install_root/runtime/dist/cli.js" "$config_stage"
 if [ -n "$token_file" ]; then
   /usr/bin/plutil -insert tokenFile -string "$token_file" "$config_stage"
+elif [ -n "$github_app_installations" ]; then
+  /usr/libexec/PlistBuddy -c 'Add :githubAppInstallations dict' "$config_stage"
+  IFS='
+'
+  for github_app_installation in $github_app_installations; do
+    github_app_owner=${github_app_installation%%:*}
+    github_app_remainder=${github_app_installation#*:}
+    github_app_entry_id=${github_app_remainder%%:*}
+    github_app_remainder=${github_app_remainder#*:}
+    github_app_entry_installation_id=${github_app_remainder%%:*}
+    github_app_entry_private_key_file=${github_app_remainder#*:}
+    /usr/libexec/PlistBuddy -c "Add :githubAppInstallations:$github_app_owner dict" "$config_stage"
+    /usr/libexec/PlistBuddy -c "Add :githubAppInstallations:$github_app_owner:appId integer $github_app_entry_id" "$config_stage"
+    /usr/libexec/PlistBuddy -c "Add :githubAppInstallations:$github_app_owner:installationId integer $github_app_entry_installation_id" "$config_stage"
+    /usr/bin/plutil -insert "githubAppInstallations.$github_app_owner.privateKeyFile" -string "$github_app_entry_private_key_file" "$config_stage"
+  done
+  IFS=$old_ifs
 else
   /usr/bin/plutil -insert githubAppId -integer "$github_app_id" "$config_stage"
   /usr/bin/plutil -insert githubAppInstallationId -integer "$github_app_installation_id" "$config_stage"

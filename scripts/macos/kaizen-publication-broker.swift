@@ -18,9 +18,17 @@ private struct BrokerConfig: Decodable {
     let githubAppInstallationId: UInt64?
     let githubAppPrivateKeyFile: String?
     let githubAppApiBaseUrl: String?
+    let githubAppInstallations: [String: GitHubAppInstallationConfig]?
     let privateDirectory: String
     let allowedRepositories: [String: String]
     let scheduledJobs: [ScheduledJobConfig]
+}
+
+private struct GitHubAppInstallationConfig: Decodable {
+    let appId: UInt64
+    let installationId: UInt64
+    let privateKeyFile: String
+    let apiBaseUrl: String?
 }
 
 private struct ScheduledJobConfig: Decodable {
@@ -97,19 +105,22 @@ private struct GitHubInstallationCredential {
 
 private final class GitHubCredentialProvider: @unchecked Sendable {
     private let lock = NSLock()
-    private var cached: GitHubInstallationCredential?
+    private var cached: [String: GitHubInstallationCredential] = [:]
 
-    func token(for config: BrokerConfig, forceRefresh: Bool = false) throws -> String {
+    func token(for config: BrokerConfig, repository: String, forceRefresh: Bool = false) throws -> String {
         if let tokenFile = config.tokenFile {
             guard let token = readTrustedToken(tokenFile) else {
                 throw NSError(domain: "KaizenPublicationBroker", code: 20)
             }
             return token
         }
+        let installation = try githubAppInstallation(config, repository: repository)
+        let apiBaseUrl = installation.apiBaseUrl ?? "https://api.github.com"
+        let cacheKey = "\(installation.appId):\(installation.installationId):\(installation.privateKeyFile):\(apiBaseUrl)"
         lock.lock(); defer { lock.unlock() }
-        if !forceRefresh, let cached, cached.expiresAt.timeIntervalSinceNow > 300 { return cached.token }
-        let credential = try mintGitHubInstallationCredential(config)
-        cached = credential
+        if !forceRefresh, let cached = cached[cacheKey], cached.expiresAt.timeIntervalSinceNow > 300 { return cached.token }
+        let credential = try mintGitHubInstallationCredential(installation)
+        cached[cacheKey] = credential
         return credential.token
     }
 }
@@ -667,17 +678,32 @@ private func parseGitHubTimestamp(_ value: String) -> Date? {
     return formatter.date(from: value)
 }
 
-private func mintGitHubInstallationCredential(_ config: BrokerConfig) throws -> GitHubInstallationCredential {
+private func githubAppInstallation(_ config: BrokerConfig, repository: String) throws -> GitHubAppInstallationConfig {
+    if let separator = repository.firstIndex(of: "/"),
+       let installation = config.githubAppInstallations?[String(repository[..<separator])] {
+        return installation
+    }
     guard let appId = config.githubAppId,
           let installationId = config.githubAppInstallationId,
-          let privateKeyFile = config.githubAppPrivateKeyFile,
-          let privateKeyData = readTrustedPrivateKey(privateKeyFile),
+          let privateKeyFile = config.githubAppPrivateKeyFile else {
+        throw NSError(domain: "KaizenPublicationBroker", code: 22)
+    }
+    return GitHubAppInstallationConfig(
+        appId: appId,
+        installationId: installationId,
+        privateKeyFile: privateKeyFile,
+        apiBaseUrl: config.githubAppApiBaseUrl
+    )
+}
+
+private func mintGitHubInstallationCredential(_ installation: GitHubAppInstallationConfig) throws -> GitHubInstallationCredential {
+    guard let privateKeyData = readTrustedPrivateKey(installation.privateKeyFile),
           let privateKey = importGitHubAppPrivateKey(privateKeyData) else {
         throw NSError(domain: "KaizenPublicationBroker", code: 22)
     }
-    let jwt = try githubAppJWT(appId: appId, privateKey: privateKey)
-    let baseUrl = config.githubAppApiBaseUrl ?? "https://api.github.com"
-    guard let url = URL(string: "\(baseUrl)/app/installations/\(installationId)/access_tokens") else {
+    let jwt = try githubAppJWT(appId: installation.appId, privateKey: privateKey)
+    let baseUrl = installation.apiBaseUrl ?? "https://api.github.com"
+    guard let url = URL(string: "\(baseUrl)/app/installations/\(installation.installationId)/access_tokens") else {
         throw NSError(domain: "KaizenPublicationBroker", code: 23)
     }
     var request = URLRequest(url: url, timeoutInterval: 30)
@@ -724,18 +750,34 @@ private func mintGitHubInstallationCredential(_ config: BrokerConfig) throws -> 
 private func validateRootConfiguration(_ config: BrokerConfig, path: String) -> Bool {
     let testRoot = testingConfigPath().map { ($0 as NSString).deletingLastPathComponent }
     let scheduledKeys = config.scheduledJobs.map { "\($0.project)/\($0.job)" }
+    let configuredOwners = Set(config.allowedRepositories.keys.compactMap { $0.split(separator: "/", maxSplits: 1).first.map(String.init) })
     let hasStaticToken = config.tokenFile != nil && config.githubAppId == nil &&
-        config.githubAppInstallationId == nil && config.githubAppPrivateKeyFile == nil && config.githubAppApiBaseUrl == nil
+        config.githubAppInstallationId == nil && config.githubAppPrivateKeyFile == nil && config.githubAppApiBaseUrl == nil &&
+        config.githubAppInstallations == nil
     let hasGitHubApp = config.tokenFile == nil && (config.githubAppId ?? 0) > 0 &&
-        (config.githubAppInstallationId ?? 0) > 0 && config.githubAppPrivateKeyFile != nil
+        (config.githubAppInstallationId ?? 0) > 0 && config.githubAppPrivateKeyFile != nil &&
+        config.githubAppInstallations == nil && configuredOwners.count == 1
+    let hasOwnerGitHubApps = config.tokenFile == nil && config.githubAppId == nil &&
+        config.githubAppInstallationId == nil && config.githubAppPrivateKeyFile == nil && config.githubAppApiBaseUrl == nil &&
+        !(config.githubAppInstallations?.isEmpty ?? true)
     let tokenValid = config.tokenFile.map { trustedRootPath($0, exactMode: 0o600) && readTrustedToken($0) != nil } ?? false
     let appKeyValid = config.githubAppPrivateKeyFile.map {
         trustedRootPath($0, exactMode: 0o600) && readTrustedPrivateKey($0).flatMap(importGitHubAppPrivateKey) != nil
     } ?? false
     let apiBaseValid = config.githubAppApiBaseUrl == nil || config.githubAppApiBaseUrl == "https://api.github.com" ||
         (testRoot != nil && config.githubAppApiBaseUrl?.range(of: #"^http://127\.0\.0\.1:[1-9][0-9]{0,4}$"#, options: .regularExpression) != nil)
+    let ownerAppsValid = config.githubAppInstallations.map { installations in
+        Set(installations.keys) == configuredOwners && installations.allSatisfy { owner, installation in
+            owner.range(of: #"^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"#, options: .regularExpression) != nil &&
+            installation.appId > 0 && installation.installationId > 0 &&
+            trustedRootPath(installation.privateKeyFile, exactMode: 0o600) &&
+            readTrustedPrivateKey(installation.privateKeyFile).flatMap(importGitHubAppPrivateKey) != nil &&
+            (installation.apiBaseUrl == nil || installation.apiBaseUrl == "https://api.github.com" ||
+                (testRoot != nil && installation.apiBaseUrl?.range(of: #"^http://127\.0\.0\.1:[1-9][0-9]{0,4}$"#, options: .regularExpression) != nil))
+        }
+    } ?? false
     guard trustedRootPath(path, exactMode: 0o644),
-          ((hasStaticToken && tokenValid) || (hasGitHubApp && appKeyValid)),
+          ((hasStaticToken && tokenValid) || (hasGitHubApp && appKeyValid) || (hasOwnerGitHubApps && ownerAppsValid)),
           apiBaseValid,
           trustedRootPath(config.scheduledLauncherExecutable),
           trustedRootPath(config.supervisorLauncherExecutable),
@@ -1122,7 +1164,7 @@ private func handleGitHubCli(
         stderrHandle.closeFile()
     }
     let token: String
-    do { token = try githubCredentials.token(for: config) }
+    do { token = try githubCredentials.token(for: config, repository: repository) }
     catch { return .failure("github-cli-token-unavailable") }
     guard connected(descriptor) else { return .failure("github-cli-client-disconnected") }
     let process = try spawnProcess(
@@ -1267,7 +1309,7 @@ private func publish(_ descriptor: Int32, config: BrokerConfig, request: [String
         ) != nil { return false }
     }
 
-    let token = try githubCredentials.token(for: config, forceRefresh: true)
+    let token = try githubCredentials.token(for: config, repository: expectedRepo, forceRefresh: true)
     guard connected(descriptor) else { return false }
     let credentialPath = (operationRoot as NSString).appendingPathComponent("github-credential")
     guard manager.createFile(atPath: credentialPath, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600]) else {

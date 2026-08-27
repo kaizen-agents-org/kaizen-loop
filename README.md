@@ -186,7 +186,12 @@ kaizen goal run <goal-id> --yes --json
 
 After upgrading from a user LaunchAgent installation, remove the duplicate user job and
 install the root broker/dispatcher registration above. Re-run the installer whenever a
-registered time, job, tool path, or publication timeout changes.
+registered time, job, tool path, or publication timeout changes. Each run must include
+the complete intended repository and job set. The installer prints the topology diff
+and requires `--replace-all` before removing entries or changing the Kaizen home. For
+repositories under multiple owners, repeat
+`--github-app-installation owner:app-id:installation-id:/absolute/key.pem`; the broker
+selects the installation from the registered repository owner.
 
 For a third-party installation, start with the [third-party adopter guide](./docs/15-third-party-adopter-guide.md). Its recommended GitHub Actions path adds `.kaizen/config.yml` and one caller workflow; provider generation, credential-free verification, and publish-only permissions run in separate jobs. The lower-level workflow contract is documented in [docs/14-github-actions.md](./docs/14-github-actions.md).
 
