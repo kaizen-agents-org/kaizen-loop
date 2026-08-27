@@ -343,7 +343,7 @@ describe('GitHubClient', () => {
 
     expect(pr).toEqual({ url: 'https://github.com/o/r/pull/7', number: 7 });
     expect(runner.mock.calls[0][1]).not.toContain('--draft');
-    expect(runner.mock.calls[1][1]).toEqual(['repo', 'view', 'o/r', '--repo', 'o/r', '--json', 'defaultBranchRef']);
+    expect(runner.mock.calls[1][1]).toEqual(['repo', 'view', 'o/r', '--json', 'defaultBranchRef']);
     expect(runner.mock.calls[2][1]).toEqual([
       'pr',
       'view',
@@ -560,7 +560,12 @@ describe('GitHubClient', () => {
     expect(viewCalls.length).toBeGreaterThan(0);
     for (const args of viewCalls) {
       expect(hasRepositoryScope(args)).toBe(true);
-      expect(args).toEqual(expect.arrayContaining(['--repo', 'o/r']));
+      if (args[0] === 'repo') {
+        expect(args[2]).toBe('o/r');
+        expect(args).not.toContain('--repo');
+      } else {
+        expect(args).toEqual(expect.arrayContaining(['--repo', 'o/r']));
+      }
     }
   });
 
@@ -602,7 +607,13 @@ describe('GitHubClient', () => {
 
     expect(githubCliRunner.mock.calls[0][0]).toEqual(expect.arrayContaining(['pr', 'create', '--repo', 's-hiraoku/topcoat-sandbox']));
     for (const [args] of githubCliRunner.mock.calls.filter(([callArgs]) => callArgs[1] === 'view')) {
-      expect(args).toEqual(expect.arrayContaining(['--repo', 's-hiraoku/topcoat-sandbox']));
+      expect(hasRepositoryScope(args)).toBe(true);
+      if (args[0] === 'repo') {
+        expect(args[2]).toBe('s-hiraoku/topcoat-sandbox');
+        expect(args).not.toContain('--repo');
+      } else {
+        expect(args).toEqual(expect.arrayContaining(['--repo', 's-hiraoku/topcoat-sandbox']));
+      }
     }
   });
 

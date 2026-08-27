@@ -3102,7 +3102,12 @@ describe('runKaizen PR flow', () => {
     expect(viewCalls.length).toBeGreaterThan(0);
     for (const args of viewCalls) {
       expect(hasRepositoryScope(args)).toBe(true);
-      expect(args).toEqual(expect.arrayContaining(['--repo', 'o/r']));
+      if (args[0] === 'repo') {
+        expect(args[2]).toBe('o/r');
+        expect(args).not.toContain('--repo');
+      } else {
+        expect(args).toEqual(expect.arrayContaining(['--repo', 'o/r']));
+      }
     }
     const addedLabels = runner.mock.calls
       .filter(([command, args]) => command === 'gh' && args[0] === 'issue' && args.includes('--add-label'))

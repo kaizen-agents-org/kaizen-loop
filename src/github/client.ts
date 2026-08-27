@@ -964,7 +964,8 @@ function shouldScopeWithRepository(args: string[]): boolean {
 export function withRepositoryScope(args: string[], repo: string | undefined): string[] {
   if (!repo || hasRepositoryScope(args)) return args;
   if (args[0] === 'repo' && args[1] === 'view') {
-    return ['repo', 'view', repo, '--repo', repo, ...args.slice(2)];
+    // `gh repo view` takes the repository as a positional argument and rejects `--repo`.
+    return ['repo', 'view', repo, ...args.slice(2)];
   }
   if (args[0] === 'pr' && args[1] === 'create') {
     return ['pr', 'create', '--repo', repo, ...args.slice(2)];
