@@ -28,6 +28,26 @@ afterEach(() => {
 });
 
 describe('enableScheduler', () => {
+  it('rejects a non-local runner before inspecting launchers or mutating scheduler state', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
+    vi.stubEnv('KAIZEN_HOME', home);
+    const runner = vi.fn<CommandRunner>();
+    const project: RegistryProject = {
+      repo: 'owner/repo', localPath: '/repo', workspacePath: '/workspace',
+      schedule: '02:00', enabled: false, createdAt: '2026-06-13T00:00:00Z'
+    };
+
+    await expect(enableSchedulerImpl({
+      slug: 'owner-repo',
+      project,
+      config: configSchema.parse({ version: 1, execution: { runner: { provider: 'github-actions' } } }),
+      runCommand: runner,
+      platform: 'linux'
+    })).rejects.toThrow('scheduler sync does not support execution.runner.provider=github-actions yet');
+    expect(runner).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(home, 'projects'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('executes the native publication launcher directly after clearing inherited broker state', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-home-'));
     const launcherDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kaizen-native-launcher-'));

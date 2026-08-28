@@ -11,6 +11,43 @@ import {
 } from '../utils/command.js';
 import { ConfigError } from '../utils/errors.js';
 import { getKaizenHome } from '../utils/paths.js';
+import { resolveLocalSchedulerProvider, type LocalSchedulerProviderName } from './provider.js';
+
+export interface SchedulerSyncResult {
+  type: LocalSchedulerProviderName;
+  path?: string;
+  paths?: string[];
+  jobs: SchedulerJob[];
+  kaizenHome: string;
+}
+
+export interface SchedulerDisableResult {
+  type: LocalSchedulerProviderName;
+  path?: string;
+  paths?: string[];
+}
+
+interface LocalSchedulerAdapter {
+  readonly type: LocalSchedulerProviderName;
+  enable(context: SchedulerEnableContext): Promise<SchedulerSyncResult>;
+  disable(context: SchedulerDisableContext): Promise<SchedulerDisableResult>;
+}
+
+interface SchedulerEnableContext {
+  slug: string;
+  jobs: SchedulerJob[];
+  runCommand: CommandRunner;
+  kaizenHome: string;
+  stateDir: string;
+  scheduledLauncher?: string;
+  schedulerPath?: string;
+}
+
+interface SchedulerDisableContext {
+  slug: string;
+  runCommand: CommandRunner;
+  terminateRunning?: boolean;
+}
 
 export async function enableScheduler(options: {
   slug: string;
@@ -19,9 +56,10 @@ export async function enableScheduler(options: {
   runCommand: CommandRunner;
   platform?: NodeJS.Platform;
   launcherTrust?: (launcher: string) => boolean;
-}): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[]; jobs: SchedulerJob[]; kaizenHome: string }> {
+}): Promise<SchedulerSyncResult> {
   const jobs = schedulerJobs(options.config);
   const platform = options.platform ?? process.platform;
+  const adapter = localSchedulerAdapter(resolveLocalSchedulerProvider(options.config, platform));
   const kaizenHome = schedulerKaizenHome();
   const stateDir = path.join(kaizenHome, 'projects', options.slug);
   const scheduledLauncher = jobs.length === 0 ? undefined : requiredScheduledLauncher(options.launcherTrust);
@@ -31,32 +69,15 @@ export async function enableScheduler(options: {
   if (scheduledLauncher && path.basename(scheduledLauncher) === 'run-scheduled.sh') {
     await installOperatorLauncher(kaizenHome);
   }
-  if (platform === 'darwin') {
-    await fs.mkdir(stateDir, { recursive: true });
-    await removeLaunchdPlists(options.slug, options.runCommand);
-    const paths: string[] = [];
-    for (const job of jobs) {
-      const plistPath = launchdPlistPath(options.slug, job.name);
-      paths.push(plistPath);
-      await fs.mkdir(path.dirname(plistPath), { recursive: true });
-      await fs.writeFile(plistPath, launchdPlist(options.slug, job, scheduledLauncher!, schedulerPath!, kaizenHome));
-      await options.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath]);
-    }
-    return { type: 'launchd', path: paths[0], paths, jobs, kaizenHome };
-  }
-
-  await fs.mkdir(stateDir, { recursive: true });
-  const current = await options.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
-  const marker = cronMarker(options.slug);
-  const lines = removeManagedCronLines(current.stdout, options.slug).filter((line) => line.trim());
-  for (const job of jobs) {
-    lines.push(`# ${marker} ${job.name}`);
-    for (const cronTime of cronTimes(job.config.schedule)) {
-      lines.push(`${cronTime} ${commandLine(options.slug, job, scheduledLauncher!, schedulerPath!, kaizenHome)} >> ${shQuote(path.join(stateDir, `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
-    }
-  }
-  await options.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
-  return { type: 'cron', jobs, kaizenHome };
+  return adapter.enable({
+    slug: options.slug,
+    jobs,
+    runCommand: options.runCommand,
+    kaizenHome,
+    stateDir,
+    scheduledLauncher,
+    schedulerPath
+  });
 }
 
 export async function disableScheduler(options: {
@@ -64,22 +85,64 @@ export async function disableScheduler(options: {
   runCommand: CommandRunner;
   terminateRunning?: boolean;
   platform?: NodeJS.Platform;
-}): Promise<{ type: 'launchd' | 'cron'; path?: string; paths?: string[] }> {
-  if ((options.platform ?? process.platform) === 'darwin') {
-    if (options.terminateRunning) {
-      await terminateLockPid(options.slug, await installedLaunchdKaizenHome(options.slug) ?? schedulerKaizenHome());
-    }
-    const paths = await removeLaunchdPlists(options.slug, options.runCommand);
-    return { type: 'launchd', path: paths[0], paths };
-  }
+}): Promise<SchedulerDisableResult> {
+  const provider = (options.platform ?? process.platform) === 'darwin' ? 'launchd' : 'cron';
+  return localSchedulerAdapter(provider).disable(options);
+}
 
-  const current = await options.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
-  if (options.terminateRunning) {
-    await terminateLockPid(options.slug, installedCronKaizenHome(current.stdout, options.slug) ?? schedulerKaizenHome());
+const launchdAdapter: LocalSchedulerAdapter = {
+  type: 'launchd',
+  async enable(context) {
+    await fs.mkdir(context.stateDir, { recursive: true });
+    await removeLaunchdPlists(context.slug, context.runCommand);
+    const paths: string[] = [];
+    for (const job of context.jobs) {
+      const plistPath = launchdPlistPath(context.slug, job.name);
+      paths.push(plistPath);
+      await fs.mkdir(path.dirname(plistPath), { recursive: true });
+      await fs.writeFile(plistPath, launchdPlist(context.slug, job, context.scheduledLauncher!, context.schedulerPath!, context.kaizenHome));
+      await context.runCommand('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? ''}`, plistPath]);
+    }
+    return { type: this.type, path: paths[0], paths, jobs: context.jobs, kaizenHome: context.kaizenHome };
+  },
+  async disable(context) {
+    if (context.terminateRunning) {
+      await terminateLockPid(context.slug, await installedLaunchdKaizenHome(context.slug) ?? schedulerKaizenHome());
+    }
+    const paths = await removeLaunchdPlists(context.slug, context.runCommand);
+    return { type: this.type, path: paths[0], paths };
   }
-  const lines = removeManagedCronLines(current.stdout, options.slug);
-  await options.runCommand('crontab', ['-'], { input: `${lines.filter(Boolean).join('\n')}\n` });
-  return { type: 'cron' };
+};
+
+const cronAdapter: LocalSchedulerAdapter = {
+  type: 'cron',
+  async enable(context) {
+    await fs.mkdir(context.stateDir, { recursive: true });
+    const current = await context.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
+    const marker = cronMarker(context.slug);
+    const lines = removeManagedCronLines(current.stdout, context.slug).filter((line) => line.trim());
+    for (const job of context.jobs) {
+      lines.push(`# ${marker} ${job.name}`);
+      for (const cronTime of cronTimes(job.config.schedule)) {
+        lines.push(`${cronTime} ${commandLine(context.slug, job, context.scheduledLauncher!, context.schedulerPath!, context.kaizenHome)} >> ${shQuote(path.join(context.stateDir, `${job.name}.cron.log`))} 2>&1 # ${marker} ${job.name}`);
+      }
+    }
+    await context.runCommand('crontab', ['-'], { input: `${lines.join('\n')}\n` });
+    return { type: this.type, jobs: context.jobs, kaizenHome: context.kaizenHome };
+  },
+  async disable(context) {
+    const current = await context.runCommand('crontab', ['-l'], { rejectOnNonZero: false });
+    if (context.terminateRunning) {
+      await terminateLockPid(context.slug, installedCronKaizenHome(current.stdout, context.slug) ?? schedulerKaizenHome());
+    }
+    const lines = removeManagedCronLines(current.stdout, context.slug);
+    await context.runCommand('crontab', ['-'], { input: `${lines.filter(Boolean).join('\n')}\n` });
+    return { type: this.type };
+  }
+};
+
+function localSchedulerAdapter(provider: LocalSchedulerProviderName): LocalSchedulerAdapter {
+  return provider === 'launchd' ? launchdAdapter : cronAdapter;
 }
 
 export interface SchedulerJob {
