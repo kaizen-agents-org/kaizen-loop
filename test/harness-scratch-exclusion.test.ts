@@ -55,6 +55,40 @@ describe('harness scratch is kept out of the work branch', () => {
     expect(await stagedPaths(directory)).toEqual(['README.md', 'src/lib.rs']);
   });
 
+  it('does not ask git to add an ignored verifier directory', async () => {
+    const directory = await repositoryWithScratch();
+    await fs.writeFile(path.join(directory, '.gitignore'), '.kaizen/*\n');
+    const git = new GitClient(runCommand, directory);
+
+    await expect(git.addAll(['.kaizen/verifier'])).resolves.toBe(true);
+    expect(await stagedPaths(directory)).toEqual(['.gitignore', 'README.md', 'src/lib.rs']);
+  });
+
+  it('does not run clean filters for excluded verifier artifacts', async () => {
+    const directory = await repositoryWithScratch();
+    await fs.writeFile(path.join(directory, '.gitattributes'), '.kaizen/verifier/** filter=reject\n');
+    await run('git', ['config', 'filter.reject.clean', 'false'], { cwd: directory });
+    await run('git', ['config', 'filter.reject.required', 'true'], { cwd: directory });
+    const git = new GitClient(runCommand, directory);
+
+    await expect(git.addAll(['.kaizen/verifier'])).resolves.toBe(true);
+
+    expect(await stagedPaths(directory)).toEqual(['.gitattributes', 'README.md', 'src/lib.rs']);
+  });
+
+  it('keeps the exclusion anchored to the repository root', async () => {
+    const directory = await repositoryWithScratch();
+    const nestedArtifact = path.join(directory, 'packages/app/.kaizen/verifier/result.json');
+    await fs.mkdir(path.dirname(nestedArtifact), { recursive: true });
+    await fs.writeFile(nestedArtifact, '{}\n');
+    const git = new GitClient(runCommand, directory);
+
+    await git.addAll(['.kaizen/verifier']);
+
+    expect(await stagedPaths(directory)).toContain('packages/app/.kaizen/verifier/result.json');
+    expect(await stagedPaths(directory)).not.toContain('.kaizen/verifier/verify-result.json');
+  });
+
   it('stages everything when no exclusion is configured', async () => {
     const directory = await repositoryWithScratch();
     const git = new GitClient(runCommand, directory);

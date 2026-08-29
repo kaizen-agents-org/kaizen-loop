@@ -140,14 +140,21 @@ export class GitClient {
   // Returns true when an exclusion was actually applied, so the caller knows
   // the index may be empty even though the tree was dirty.
   async addAll(excludePaths: string[] = []): Promise<boolean> {
-    const exclusions = excludePaths
+    const excludedDirectories = excludePaths
       .map((entry) => this.repositoryRelativePath(entry))
-      .filter((entry): entry is string => Boolean(entry))
-      .map((entry) => `:(exclude,glob)${entry}/**`);
-    if (exclusions.length === 0) {
+      .filter((entry): entry is string => Boolean(entry));
+    if (excludedDirectories.length === 0) {
       await this.git(['add', '-A']);
       return false;
     }
+    const exclusions = excludedDirectories.map((entry) => {
+      const maskIndex = entry.search(/[A-Za-z0-9.]/);
+      const maskedEntry =
+        maskIndex === -1
+          ? entry
+          : `${entry.slice(0, maskIndex)}[${entry[maskIndex]}]${entry.slice(maskIndex + 1)}`;
+      return `:(exclude,top,glob)${maskedEntry}/**`;
+    });
     await this.git(['add', '-A', '--', '.', ...exclusions]);
     return true;
   }
