@@ -147,7 +147,14 @@ export class GitClient {
       await this.git(['add', '-A']);
       return false;
     }
-    const exclusions = excludedDirectories.map((entry) => `:(exclude,glob)**/${entry}/**`);
+    const exclusions = excludedDirectories.map((entry) => {
+      const maskIndex = entry.search(/[A-Za-z0-9.]/);
+      const maskedEntry =
+        maskIndex === -1
+          ? entry
+          : `${entry.slice(0, maskIndex)}[${entry[maskIndex]}]${entry.slice(maskIndex + 1)}`;
+      return `:(exclude,top,glob)${maskedEntry}/**`;
+    });
     await this.git(['add', '-A', '--', '.', ...exclusions]);
     return true;
   }

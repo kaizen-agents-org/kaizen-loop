@@ -76,6 +76,19 @@ describe('harness scratch is kept out of the work branch', () => {
     expect(await stagedPaths(directory)).toEqual(['.gitattributes', 'README.md', 'src/lib.rs']);
   });
 
+  it('keeps the exclusion anchored to the repository root', async () => {
+    const directory = await repositoryWithScratch();
+    const nestedArtifact = path.join(directory, 'packages/app/.kaizen/verifier/result.json');
+    await fs.mkdir(path.dirname(nestedArtifact), { recursive: true });
+    await fs.writeFile(nestedArtifact, '{}\n');
+    const git = new GitClient(runCommand, directory);
+
+    await git.addAll(['.kaizen/verifier']);
+
+    expect(await stagedPaths(directory)).toContain('packages/app/.kaizen/verifier/result.json');
+    expect(await stagedPaths(directory)).not.toContain('.kaizen/verifier/verify-result.json');
+  });
+
   it('stages everything when no exclusion is configured', async () => {
     const directory = await repositoryWithScratch();
     const git = new GitClient(runCommand, directory);
