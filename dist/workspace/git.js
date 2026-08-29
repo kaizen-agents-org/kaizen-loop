@@ -106,15 +106,23 @@ export class GitClient {
     // Returns true when an exclusion was actually applied, so the caller knows
     // the index may be empty even though the tree was dirty.
     async addAll(excludePaths = []) {
-        const exclusions = excludePaths
+        const excludedDirectories = excludePaths
             .map((entry) => this.repositoryRelativePath(entry))
-            .filter((entry) => Boolean(entry))
-            .map((entry) => `:(exclude,glob)${entry}/**`);
-        if (exclusions.length === 0) {
+            .filter((entry) => Boolean(entry));
+        if (excludedDirectories.length === 0) {
             await this.git(['add', '-A']);
             return false;
         }
-        await this.git(['add', '-A', '--', '.', ...exclusions]);
+        await this.git(['add', '-A', '--', '.']);
+        const head = await this.git(['rev-parse', '--verify', 'HEAD'], { rejectOnNonZero: false });
+        if (head.exitCode === 0) {
+            await this.git(['reset', '--quiet', 'HEAD', '--', ...excludedDirectories]);
+        }
+        else {
+            await this.git(['rm', '--cached', '-r', '--ignore-unmatch', '--', ...excludedDirectories], {
+                rejectOnNonZero: false
+            });
+        }
         return true;
     }
     // Git rejects a pathspec that leaves the repository, which would abort the
