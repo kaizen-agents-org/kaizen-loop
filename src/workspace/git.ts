@@ -147,15 +147,8 @@ export class GitClient {
       await this.git(['add', '-A']);
       return false;
     }
-    await this.git(['add', '-A', '--', '.']);
-    const head = await this.git(['rev-parse', '--verify', 'HEAD'], { rejectOnNonZero: false });
-    if (head.exitCode === 0) {
-      await this.git(['reset', '--quiet', 'HEAD', '--', ...excludedDirectories]);
-    } else {
-      await this.git(['rm', '--cached', '-r', '--ignore-unmatch', '--', ...excludedDirectories], {
-        rejectOnNonZero: false
-      });
-    }
+    const exclusions = excludedDirectories.map((entry) => `:(exclude,glob)**/${entry}/**`);
+    await this.git(['add', '-A', '--', '.', ...exclusions]);
     return true;
   }
 

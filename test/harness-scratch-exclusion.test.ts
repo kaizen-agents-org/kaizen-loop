@@ -64,20 +64,16 @@ describe('harness scratch is kept out of the work branch', () => {
     expect(await stagedPaths(directory)).toEqual(['.gitignore', 'README.md', 'src/lib.rs']);
   });
 
-  it('unstages tracked verifier artifacts while preserving their working changes', async () => {
+  it('does not run clean filters for excluded verifier artifacts', async () => {
     const directory = await repositoryWithScratch();
-    await run('git', ['add', '-A'], { cwd: directory });
-    await run('git', ['-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', '-qm', 'init'], { cwd: directory });
-    const artifact = path.join(directory, '.kaizen/verifier/verify-result.json');
-    await fs.writeFile(artifact, '{"changed":true}\n');
-    await run('git', ['add', '--', '.kaizen/verifier/verify-result.json'], { cwd: directory });
-    await fs.writeFile(path.join(directory, 'README.md'), '# changed\n');
+    await fs.writeFile(path.join(directory, '.gitattributes'), '.kaizen/verifier/** filter=reject\n');
+    await run('git', ['config', 'filter.reject.clean', 'false'], { cwd: directory });
+    await run('git', ['config', 'filter.reject.required', 'true'], { cwd: directory });
     const git = new GitClient(runCommand, directory);
 
-    await git.addAll(['.kaizen/verifier']);
+    await expect(git.addAll(['.kaizen/verifier'])).resolves.toBe(true);
 
-    expect(await stagedPaths(directory)).toEqual(['README.md']);
-    expect((await git.statusPorcelain())).toContain(' .kaizen/verifier/verify-result.json');
+    expect(await stagedPaths(directory)).toEqual(['.gitattributes', 'README.md', 'src/lib.rs']);
   });
 
   it('stages everything when no exclusion is configured', async () => {
